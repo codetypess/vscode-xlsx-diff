@@ -1,0 +1,54 @@
+import { context, type BuildResult, type Plugin, type PluginBuild } from 'esbuild';
+
+const production = process.argv.includes('--production');
+const watch = process.argv.includes('--watch');
+
+const esbuildProblemMatcherPlugin: Plugin = {
+	name: 'esbuild-problem-matcher',
+
+	setup(build: PluginBuild) {
+		build.onStart(() => {
+			console.log('[watch] build started');
+		});
+		build.onEnd((result: BuildResult) => {
+			for (const { text, location } of result.errors) {
+				console.error(`✘ [ERROR] ${text}`);
+				if (location) {
+					console.error(
+						`    ${location.file}:${location.line}:${location.column}:`,
+					);
+				}
+			}
+			console.log('[watch] build finished');
+		});
+	},
+};
+
+async function main() {
+	const ctx = await context({
+		entryPoints: ['src/extension.ts'],
+		bundle: true,
+		format: 'cjs',
+		minify: production,
+		sourcemap: !production,
+		sourcesContent: false,
+		platform: 'node',
+		outfile: 'dist/extension.js',
+		external: ['vscode'],
+		logLevel: 'silent',
+		plugins: [esbuildProblemMatcherPlugin],
+	});
+
+	if (watch) {
+		await ctx.watch();
+		return;
+	}
+
+	await ctx.rebuild();
+	await ctx.dispose();
+}
+
+main().catch((error) => {
+	console.error(error);
+	process.exit(1);
+});
