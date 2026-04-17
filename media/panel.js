@@ -107,14 +107,11 @@ function renderTable(side) {
 	`;
 }
 
-function renderPane(title, sideName, side) {
+function renderPane(title, side) {
 	return `
 		<section class="pane">
 			<div class="pane__header">
-				<div>
-					<div class="pane__title">${escapeHtml(title)}</div>
-					<div class="pane__subtitle">${escapeHtml(sideName ?? 'No matching sheet')}</div>
-				</div>
+				<div class="pane__title">${escapeHtml(title)}</div>
 				${model.activeSheet.mergedRangesChanged ? '<span class="badge badge--warn">Merged ranges changed</span>' : ''}
 			</div>
 			<div class="pane__table">${renderTable(side)}</div>
@@ -126,7 +123,6 @@ function renderSummary() {
 	return `
 		<section class="summary">
 			<span class="badge"><strong>${model.summary.totalSheets}</strong> sheets</span>
-			<span class="badge"><strong>${model.summary.diffSheets}</strong> changed sheets</span>
 			<span class="badge"><strong>${model.summary.diffRows}</strong> changed rows</span>
 			<span class="badge"><strong>${model.summary.diffCells}</strong> changed cells</span>
 		</section>
@@ -157,7 +153,6 @@ function renderFiles() {
 	return `
 		<section class="files">
 			<div class="file-card">
-				<div class="file-card__label">Left workbook</div>
 				<div class="file-card__name" title="${escapeHtml(model.leftFile.filePath)}">${escapeHtml(model.leftFile.fileName)}</div>
 				<div class="file-card__meta">
 					<div class="file-card__path" title="${escapeHtml(model.leftFile.filePath)}">${escapeHtml(model.leftFile.filePath)}</div>
@@ -168,7 +163,6 @@ function renderFiles() {
 				</div>
 			</div>
 			<div class="file-card">
-				<div class="file-card__label">Right workbook</div>
 				<div class="file-card__name" title="${escapeHtml(model.rightFile.filePath)}">${escapeHtml(model.rightFile.fileName)}</div>
 				<div class="file-card__meta">
 					<div class="file-card__path" title="${escapeHtml(model.rightFile.filePath)}">${escapeHtml(model.rightFile.filePath)}</div>
@@ -228,8 +222,8 @@ function renderApp() {
 			${renderSummary()}
 			${renderFiles()}
 			<section class="panes">
-				${renderPane('Left', model.activeSheet.leftName, 'left')}
-				${renderPane('Right', model.activeSheet.rightName, 'right')}
+				${renderPane('Left', 'left')}
+				${renderPane('Right', 'right')}
 			</section>
 			${renderStatus()}
 		</div>
