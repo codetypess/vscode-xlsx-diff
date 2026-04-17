@@ -1,6 +1,7 @@
 import { DEFAULT_PAGE_SIZE } from '../constants';
 import { createPageSlice } from '../core/paging/createPageSlice';
 import {
+	type CellDiffStatus,
 	type PanelState,
 	type RenderModel,
 	type RowFilterMode,
@@ -47,6 +48,18 @@ function getSheetHasDiff(sheet: SheetDiffModel): boolean {
 		sheet.diffCellCount > 0 ||
 		sheet.mergedRangesChanged
 	);
+}
+
+function getSheetDiffTone(sheet: SheetDiffModel): CellDiffStatus {
+	if (sheet.kind === 'added') {
+		return 'added';
+	}
+
+	if (sheet.kind === 'removed') {
+		return 'removed';
+	}
+
+	return getSheetHasDiff(sheet) ? 'modified' : 'equal';
 }
 
 function getFilteredRowCount(
@@ -230,6 +243,7 @@ export function createRenderModel(
 		diffCellCount: sheet.diffCellCount,
 		mergedRangesChanged: sheet.mergedRangesChanged,
 		hasDiff: getSheetHasDiff(sheet),
+		diffTone: getSheetDiffTone(sheet),
 		isActive: sheet.key === activeSheet.key,
 	}));
 
@@ -239,15 +253,17 @@ export function createRenderModel(
 			fileName: diff.left.fileName,
 			filePath: diff.left.filePath,
 			fileSizeLabel: formatFileSize(diff.left.fileSize),
-			modifiedTimeLabel:
-				diff.left.modifiedTimeLabel ?? formatModifiedTime(diff.left.modifiedTime),
+			detailLabel: diff.left.detailLabel,
+			detailValue: diff.left.modifiedTimeLabel,
+			modifiedTimeLabel: formatModifiedTime(diff.left.modifiedTime),
 		},
 		rightFile: {
 			fileName: diff.right.fileName,
 			filePath: diff.right.filePath,
 			fileSizeLabel: formatFileSize(diff.right.fileSize),
-			modifiedTimeLabel:
-				diff.right.modifiedTimeLabel ?? formatModifiedTime(diff.right.modifiedTime),
+			detailLabel: diff.right.detailLabel,
+			detailValue: diff.right.modifiedTimeLabel,
+			modifiedTimeLabel: formatModifiedTime(diff.right.modifiedTime),
 		},
 		summary: {
 			totalSheets: diff.sheets.length,

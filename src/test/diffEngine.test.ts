@@ -93,6 +93,8 @@ suite('Diff engine', () => {
 			diffPage.rows.map((row) => row.rowNumber),
 			[2, 4],
 		);
+		assert.strictEqual(diffPage.rows[0].diffTone, 'modified');
+		assert.strictEqual(diffPage.rows[1].diffTone, 'added');
 		assert.strictEqual(diffPage.sameRowCount, 203);
 
 		const secondAllPage = createPageSlice(sheet, 'all', 2, null);

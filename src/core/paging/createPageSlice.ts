@@ -117,6 +117,22 @@ function resolveCellStatus(
 	return 'equal';
 }
 
+function resolveRowDiffTone(cells: { status: CellDiffStatus }[]): CellDiffStatus {
+	if (cells.some((cell) => cell.status === 'modified')) {
+		return 'modified';
+	}
+
+	if (cells.some((cell) => cell.status === 'removed')) {
+		return 'removed';
+	}
+
+	if (cells.some((cell) => cell.status === 'added')) {
+		return 'added';
+	}
+
+	return 'equal';
+}
+
 export function createPageSlice(
 	sheet: SheetDiffModel,
 	filter: RowFilterMode,
@@ -170,6 +186,7 @@ export function createPageSlice(
 			hasDiff: diffRows.has(rowNumber),
 			isHighlighted:
 				highlightedDiffRow !== null && rowNumber === highlightedDiffRow,
+			diffTone: resolveRowDiffTone(cells),
 			cells,
 		};
 	});

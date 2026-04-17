@@ -65,7 +65,7 @@
         {
           "command": "xlsx-diff.compareActiveWith",
           "when": "resourceScheme == file && resourceExtname == .xlsx",
-          "group": "inline"
+          "group": "navigation@10"
         }
       ]
     }

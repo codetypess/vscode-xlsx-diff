@@ -35,7 +35,7 @@ body {
 
 .app {
 	display: grid;
-	grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+	grid-template-rows: auto auto minmax(0, 1fr) auto;
 	height: 100vh;
 }
 
@@ -58,6 +58,9 @@ body {
 }
 
 .toolbar__button {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
 	border: 1px solid var(--vscode-button-border, transparent);
 	background: var(
 		--vscode-button-secondaryBackground,
@@ -69,6 +72,15 @@ body {
 	font-size: 12px;
 	line-height: 18px;
 	cursor: pointer;
+}
+
+.toolbar__button-icon {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-width: 12px;
+	font-size: 12px;
+	opacity: 0.9;
 }
 
 .toolbar__button:hover:enabled {
@@ -256,6 +268,18 @@ body {
 	font-variant-numeric: tabular-nums;
 }
 
+.grid__row-label,
+.grid__column-label {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.grid__row-label {
+	width: 100%;
+	justify-content: flex-end;
+}
+
 .grid__column {
 	min-width: 108px;
 	max-width: 240px;
@@ -270,15 +294,21 @@ body {
 }
 
 .cell--modified {
-	background: color-mix(in srgb, #a56d1f 30%, var(--vscode-editor-background) 70%);
+	--cell-accent: var(--vscode-editorError-foreground, #f14c4c);
+	background: color-mix(in srgb, #f14c4c 24%, var(--vscode-editor-background) 76%);
+	box-shadow: inset 0 0 0 1px color-mix(in srgb, #f14c4c 82%, transparent 18%);
 }
 
 .cell--added {
-	background: color-mix(in srgb, #107c41 32%, var(--vscode-editor-background) 68%);
+	--cell-accent: var(--vscode-gitDecoration-addedResourceForeground, #2ea043);
+	background: color-mix(in srgb, #2ea043 24%, var(--vscode-editor-background) 76%);
+	box-shadow: inset 0 0 0 1px color-mix(in srgb, #2ea043 82%, transparent 18%);
 }
 
 .cell--removed {
-	background: color-mix(in srgb, #a1260d 32%, var(--vscode-editor-background) 68%);
+	--cell-accent: var(--vscode-editorError-foreground, #f14c4c);
+	background: color-mix(in srgb, #f14c4c 18%, var(--vscode-editor-background) 82%);
+	box-shadow: inset 0 0 0 1px color-mix(in srgb, #f14c4c 72%, transparent 28%);
 }
 
 .cell--ghost {
@@ -301,15 +331,47 @@ body {
 	color: var(--vscode-editorInfo-foreground, #3794ff);
 }
 
-.row--highlight td,
-.row--highlight th {
-	outline: 1px solid var(--vscode-focusBorder);
-	outline-offset: -1px;
+.row--diff-modified,
+.row--diff-removed {
+	--diff-accent: var(--vscode-editorError-foreground, #f14c4c);
+}
+
+.row--diff-added {
+	--diff-accent: var(--vscode-gitDecoration-addedResourceForeground, #2ea043);
+}
+
+.grid__row-number--modified,
+.grid__column--modified,
+.grid__row-number--removed,
+.grid__column--removed {
+	--diff-accent: var(--vscode-editorError-foreground, #f14c4c);
+}
+
+.grid__row-number--added,
+.grid__column--added {
+	--diff-accent: var(--vscode-gitDecoration-addedResourceForeground, #2ea043);
 }
 
 .row--diff .grid__row-number {
-	color: var(--vscode-editorWarning-foreground, #cca700);
+	color: var(--diff-accent, var(--vscode-editorError-foreground, #f14c4c));
 	font-weight: 600;
+}
+
+.grid__column--diff {
+	color: var(--diff-accent, var(--vscode-editorError-foreground, #f14c4c));
+}
+
+.grid__diff-marker {
+	width: 6px;
+	height: 6px;
+	border-radius: 1px;
+	background: currentColor;
+	flex: 0 0 auto;
+}
+
+.cell--highlighted {
+	outline: 1px solid var(--cell-accent, var(--vscode-focusBorder));
+	outline-offset: -1px;
 }
 
 .empty-table {
@@ -382,8 +444,12 @@ body {
 	height: 6px;
 	margin-left: 6px;
 	border-radius: 999px;
-	background: var(--vscode-editorWarning-foreground, #cca700);
+	background: var(--vscode-editorError-foreground, #f14c4c);
 	vertical-align: middle;
+}
+
+.tab.has-diff.tab--added:not(.is-active) .tab__label::after {
+	background: var(--vscode-gitDecoration-addedResourceForeground, #2ea043);
 }
 
 .tab__label {

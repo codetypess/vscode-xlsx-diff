@@ -1,6 +1,7 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
 import {
+	describeGitResourceRef,
 	getScmWorkbookDiffUrisFromTabInput,
 	getWorkbookDiffUrisFromTabInput,
 	getWorkbookResourcePathLabel,
@@ -65,5 +66,26 @@ suite('Workbook resource URIs', () => {
 
 		assert.ok(getScmWorkbookDiffUrisFromTabInput(scmInput));
 		assert.strictEqual(getScmWorkbookDiffUrisFromTabInput(fileDiffInput), undefined);
+	});
+
+	test('describes git refs for commit and index-backed resources', () => {
+		assert.deepStrictEqual(describeGitResourceRef('HEAD', { resolvedCommit: 'd44224e' }), {
+			label: 'Commit',
+			value: 'd44224e',
+		});
+		assert.deepStrictEqual(
+			describeGitResourceRef('~', {
+				resolvedCommit: 'd44224e',
+				hasStagedChanges: true,
+			}),
+			{
+				label: 'Source',
+				value: 'Index · base d44224e',
+			},
+		);
+		assert.deepStrictEqual(describeGitResourceRef('~2'), {
+			label: 'Source',
+			value: 'Stage 2',
+		});
 	});
 });

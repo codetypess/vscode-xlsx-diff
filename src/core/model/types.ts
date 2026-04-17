@@ -27,6 +27,7 @@ export interface WorkbookSnapshot {
 	fileSize: number;
 	modifiedTime: string;
 	modifiedTimeLabel?: string;
+	detailLabel?: string;
 	sheets: SheetSnapshot[];
 }
 
@@ -69,6 +70,7 @@ export interface GridRowView {
 	rowNumber: number;
 	hasDiff: boolean;
 	isHighlighted: boolean;
+	diffTone: CellDiffStatus;
 	cells: GridCellView[];
 }
 
@@ -103,6 +105,7 @@ export interface SheetTabView {
 	diffCellCount: number;
 	mergedRangesChanged: boolean;
 	hasDiff: boolean;
+	diffTone: CellDiffStatus;
 	isActive: boolean;
 }
 
@@ -110,6 +113,8 @@ export interface WorkbookFileView {
 	fileName: string;
 	filePath: string;
 	fileSizeLabel: string;
+	detailLabel?: string;
+	detailValue?: string;
 	modifiedTimeLabel: string;
 }
 

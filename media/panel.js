@@ -1,6 +1,7 @@
 const vscode = acquireVsCodeApi();
 
 let model = null;
+let isSyncingScroll = false;
 
 function escapeHtml(value) {
 	return String(value)
@@ -27,17 +28,69 @@ function renderError(message) {
 	`;
 }
 
-function getSideCellClass(cell, side) {
+function getColumnDiffTones(rows) {
+	const tones = new Map();
+
+	for (const row of rows) {
+		row.cells.forEach((cell, index) => {
+			if (cell.status === 'equal') {
+				return;
+			}
+
+			const currentTone = tones.get(index);
+			if (currentTone === 'modified' || currentTone === 'removed') {
+				return;
+			}
+
+			if (cell.status === 'modified' || cell.status === 'removed') {
+				tones.set(index, cell.status);
+				return;
+			}
+
+			if (!currentTone) {
+				tones.set(index, cell.status);
+			}
+		});
+	}
+
+	return tones;
+}
+
+function shouldHighlightCell(cell, side, isHighlighted) {
+	if (!isHighlighted) {
+		return false;
+	}
+
 	if (cell.status === 'modified') {
-		return 'cell cell--modified';
+		return true;
 	}
 
 	if (cell.status === 'added') {
-		return side === 'right' ? 'cell cell--added' : 'cell cell--ghost';
+		return side === 'right';
 	}
 
 	if (cell.status === 'removed') {
-		return side === 'left' ? 'cell cell--removed' : 'cell cell--ghost';
+		return side === 'left';
+	}
+
+	return false;
+}
+
+function getSideCellClass(cell, side, isHighlighted) {
+	if (cell.status === 'modified') {
+		return `cell cell--modified ${isHighlighted ? 'cell--highlighted' : ''}`.trim();
+	}
+
+	if (cell.status === 'added') {
+		return side === 'right'
+			? `cell cell--added ${isHighlighted ? 'cell--highlighted' : ''}`.trim()
+			: 'cell cell--ghost';
+	}
+
+	if (cell.status === 'removed') {
+		return side === 'left'
+			? `cell cell--removed ${isHighlighted ? 'cell--highlighted' : ''}`.trim()
+			: 'cell cell--ghost';
 	}
 
 	return 'cell';
@@ -60,14 +113,25 @@ function renderTable(side) {
 		return '<div class="empty-table">No rows available for this filter.</div>';
 	}
 
+	const diffColumnTones = getColumnDiffTones(model.page.rows);
 	const headerColumns = model.page.columns
-		.map((column) => `<th class="grid__column">${escapeHtml(column)}</th>`)
+		.map((column, index) => {
+			const diffTone = diffColumnTones.get(index);
+
+			return `<th class="grid__column ${diffTone ? `grid__column--diff grid__column--${diffTone}` : ''}">
+				<span class="grid__column-label">
+					${diffTone ? '<span class="grid__diff-marker" aria-hidden="true"></span>' : ''}
+					<span>${escapeHtml(column)}</span>
+				</span>
+			</th>`;
+		})
 		.join('');
 
 	const bodyRows = model.page.rows
 		.map((row) => {
 			const rowClasses = [
 				row.hasDiff ? 'row--diff' : '',
+				row.hasDiff ? `row--diff-${row.diffTone}` : '',
 				row.isHighlighted ? 'row--highlight' : '',
 			]
 				.filter(Boolean)
@@ -77,17 +141,28 @@ function renderTable(side) {
 				.map((cell) => {
 					const value = side === 'left' ? cell.leftValue : cell.rightValue;
 					const formula = side === 'left' ? cell.leftFormula : cell.rightFormula;
+					const highlightCell = shouldHighlightCell(
+						cell,
+						side,
+						row.isHighlighted,
+					);
 
 					return `<td title="${escapeHtml(cell.address)}"><div class="${getSideCellClass(
 						cell,
 						side,
+						highlightCell,
 					)}">${renderCellValue(value, formula)}</div></td>`;
 				})
 				.join('');
 
 			return `
 				<tr class="${rowClasses}">
-					<th class="grid__row-number">${row.rowNumber}</th>
+					<th class="grid__row-number ${row.hasDiff ? `grid__row-number--diff grid__row-number--${row.diffTone}` : ''}">
+						<span class="grid__row-label">
+							${row.hasDiff ? '<span class="grid__diff-marker" aria-hidden="true"></span>' : ''}
+							<span>${row.rowNumber}</span>
+						</span>
+					</th>
 					${cells}
 				</tr>
 			`;
@@ -119,31 +194,21 @@ function renderPane(title, side) {
 	`;
 }
 
-function renderSummary() {
-	return `
-		<section class="summary">
-			<span class="badge"><strong>${model.summary.totalSheets}</strong> sheets</span>
-			<span class="badge"><strong>${model.summary.diffRows}</strong> changed rows</span>
-			<span class="badge"><strong>${model.summary.diffCells}</strong> changed cells</span>
-		</section>
-	`;
-}
-
 function renderToolbar() {
 	return `
 		<header class="toolbar">
 			<div class="toolbar__group">
-				<button class="toolbar__button ${model.filter === 'all' ? 'is-active' : ''}" data-action="set-filter" data-filter="all">All</button>
-				<button class="toolbar__button ${model.filter === 'diffs' ? 'is-active' : ''}" data-action="set-filter" data-filter="diffs">Diffs</button>
-				<button class="toolbar__button ${model.filter === 'same' ? 'is-active' : ''}" data-action="set-filter" data-filter="same">Same</button>
+				<button class="toolbar__button ${model.filter === 'all' ? 'is-active' : ''}" data-action="set-filter" data-filter="all"><span class="toolbar__button-icon" aria-hidden="true">#</span><span>All</span></button>
+				<button class="toolbar__button ${model.filter === 'diffs' ? 'is-active' : ''}" data-action="set-filter" data-filter="diffs"><span class="toolbar__button-icon" aria-hidden="true">≠</span><span>Diffs</span></button>
+				<button class="toolbar__button ${model.filter === 'same' ? 'is-active' : ''}" data-action="set-filter" data-filter="same"><span class="toolbar__button-icon" aria-hidden="true">=</span><span>Same</span></button>
 			</div>
 			<div class="toolbar__group">
-				<button class="toolbar__button" data-action="prev-diff" ${model.canPrevDiff ? '' : 'disabled'}>Prev Diff</button>
-				<button class="toolbar__button" data-action="next-diff" ${model.canNextDiff ? '' : 'disabled'}>Next Diff</button>
-				<button class="toolbar__button" data-action="prev-page" ${model.canPrevPage ? '' : 'disabled'}>Prev Page</button>
-				<button class="toolbar__button" data-action="next-page" ${model.canNextPage ? '' : 'disabled'}>Next Page</button>
-				<button class="toolbar__button" data-action="swap">Swap</button>
-				<button class="toolbar__button" data-action="reload">Reload</button>
+				<button class="toolbar__button" data-action="prev-diff" ${model.canPrevDiff ? '' : 'disabled'}><span class="toolbar__button-icon" aria-hidden="true">↑</span><span>Prev Diff</span></button>
+				<button class="toolbar__button" data-action="next-diff" ${model.canNextDiff ? '' : 'disabled'}><span class="toolbar__button-icon" aria-hidden="true">↓</span><span>Next Diff</span></button>
+				<button class="toolbar__button" data-action="prev-page" ${model.canPrevPage ? '' : 'disabled'}><span class="toolbar__button-icon" aria-hidden="true">←</span><span>Prev Page</span></button>
+				<button class="toolbar__button" data-action="next-page" ${model.canNextPage ? '' : 'disabled'}><span class="toolbar__button-icon" aria-hidden="true">→</span><span>Next Page</span></button>
+				<button class="toolbar__button" data-action="swap"><span class="toolbar__button-icon" aria-hidden="true">⇄</span><span>Swap</span></button>
+				<button class="toolbar__button" data-action="reload"><span class="toolbar__button-icon" aria-hidden="true">↻</span><span>Reload</span></button>
 			</div>
 		</header>
 	`;
@@ -158,6 +223,7 @@ function renderFiles() {
 					<div class="file-card__path" title="${escapeHtml(model.leftFile.filePath)}">${escapeHtml(model.leftFile.filePath)}</div>
 					<div class="file-card__facts">
 						<span>Size: ${escapeHtml(model.leftFile.fileSizeLabel)}</span>
+						${model.leftFile.detailLabel && model.leftFile.detailValue ? `<span>${escapeHtml(model.leftFile.detailLabel)}: ${escapeHtml(model.leftFile.detailValue)}</span>` : ''}
 						<span>Modified: ${escapeHtml(model.leftFile.modifiedTimeLabel)}</span>
 					</div>
 				</div>
@@ -168,6 +234,7 @@ function renderFiles() {
 					<div class="file-card__path" title="${escapeHtml(model.rightFile.filePath)}">${escapeHtml(model.rightFile.filePath)}</div>
 					<div class="file-card__facts">
 						<span>Size: ${escapeHtml(model.rightFile.fileSizeLabel)}</span>
+						${model.rightFile.detailLabel && model.rightFile.detailValue ? `<span>${escapeHtml(model.rightFile.detailLabel)}: ${escapeHtml(model.rightFile.detailValue)}</span>` : ''}
 						<span>Modified: ${escapeHtml(model.rightFile.modifiedTimeLabel)}</span>
 					</div>
 				</div>
@@ -181,7 +248,7 @@ function renderTabs() {
 		.map(
 			(sheet) => `
 				<button
-					class="tab ${sheet.isActive ? 'is-active' : ''} ${sheet.hasDiff ? 'has-diff' : ''}"
+					class="tab tab--${sheet.diffTone} ${sheet.isActive ? 'is-active' : ''} ${sheet.hasDiff ? 'has-diff' : ''}"
 					data-action="set-sheet"
 					data-sheet-key="${escapeHtml(sheet.key)}"
 					title="${escapeHtml(`${sheet.label} · ${sheet.diffCellCount} changed cells · ${sheet.diffRowCount} changed rows`)}"
@@ -219,7 +286,6 @@ function renderApp() {
 	document.body.innerHTML = `
 		<div id="app" class="app">
 			${renderToolbar()}
-			${renderSummary()}
 			${renderFiles()}
 			<section class="panes">
 				${renderPane('Left', 'left')}
@@ -228,6 +294,46 @@ function renderApp() {
 			${renderStatus()}
 		</div>
 	`;
+
+	attachPaneScrollSync();
+}
+
+function syncPaneScroll(sourcePane) {
+	if (isSyncingScroll) {
+		return;
+	}
+
+	const panes = Array.from(document.querySelectorAll('.pane__table'));
+	if (panes.length < 2) {
+		return;
+	}
+
+	isSyncingScroll = true;
+	for (const pane of panes) {
+		if (pane === sourcePane) {
+			continue;
+		}
+
+		pane.scrollTop = sourcePane.scrollTop;
+		pane.scrollLeft = sourcePane.scrollLeft;
+	}
+
+	requestAnimationFrame(() => {
+		isSyncingScroll = false;
+	});
+}
+
+function attachPaneScrollSync() {
+	const panes = Array.from(document.querySelectorAll('.pane__table'));
+	for (const pane of panes) {
+		pane.addEventListener(
+			'scroll',
+			() => {
+				syncPaneScroll(pane);
+			},
+			{ passive: true },
+		);
+	}
 }
 
 window.addEventListener('message', (event) => {

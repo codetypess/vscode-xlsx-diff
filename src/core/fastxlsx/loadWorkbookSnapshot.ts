@@ -9,6 +9,7 @@ import {
 	type WorkbookSnapshot,
 } from '../model/types';
 import {
+	getWorkbookResourceDetail,
 	getWorkbookResourceName,
 	getWorkbookResourcePathLabel,
 	getWorkbookResourceTimeLabel,
@@ -35,6 +36,7 @@ interface WorkbookSnapshotMetadata {
 	fileSize: number;
 	modifiedTime: string;
 	modifiedTimeLabel?: string;
+	detailLabel?: string;
 }
 
 function createSheetSignature(sheet: SheetSnapshot): string {
@@ -139,6 +141,9 @@ export async function loadWorkbookSnapshot(
 	const workbook = Workbook.fromUint8Array(archiveData);
 	const resourceName = getWorkbookResourceName(filePathOrUri);
 	const resourcePath = getWorkbookResourcePathLabel(filePathOrUri);
+	const resourceDetail = await getWorkbookResourceDetail(filePathOrUri);
+	const resourceFilePath =
+		filePathOrUri.scheme === 'git' ? decodeURIComponent(filePathOrUri.path) : undefined;
 
 	if (filePathOrUri.scheme === 'file') {
 		const fileStats = await stat(filePathOrUri.fsPath);
@@ -150,12 +155,16 @@ export async function loadWorkbookSnapshot(
 		});
 	}
 
+	const resourceStats = resourceFilePath ? await stat(resourceFilePath).catch(() => undefined) : undefined;
+
 	return createWorkbookSnapshot(workbook, {
 		filePath: resourcePath,
 		fileName: resourceName,
 		fileSize: archiveData.byteLength,
-		modifiedTime: new Date(0).toISOString(),
+		modifiedTime: resourceStats?.mtime.toISOString() ?? new Date().toISOString(),
+		detailLabel: resourceDetail?.label,
 		modifiedTimeLabel:
+			resourceDetail?.value ??
 			getWorkbookResourceTimeLabel(filePathOrUri) ??
 			`${filePathOrUri.scheme.toUpperCase()} resource`,
 	});
