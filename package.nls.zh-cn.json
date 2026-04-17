@@ -1,0 +1,8 @@
+{
+  "extension.displayName": "XLSX 对比",
+  "extension.description": "在 VS Code 和 Git 中对比 XLSX 文件",
+  "command.category": "XLSX 对比",
+  "command.compareTwoFiles.title": "比较两个 XLSX 文件",
+  "command.compareActiveWith.title": "与当前 XLSX 进行比较...",
+  "command.compareActiveWith.shortTitle": "比较 XLSX"
+}

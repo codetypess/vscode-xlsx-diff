@@ -2,6 +2,43 @@ import * as vscode from 'vscode';
 import { XlsxDiffPanel } from '../webview/diffPanel';
 import { getScmWorkbookDiffUrisFromTabInput } from '../workbook/resourceUri';
 
+function getTabResourceUri(input: vscode.Tab['input']): vscode.Uri | undefined {
+	if (input instanceof vscode.TabInputText) {
+		return input.uri;
+	}
+
+	if (input instanceof vscode.TabInputCustom) {
+		return input.uri;
+	}
+
+	if (input instanceof vscode.TabInputNotebook) {
+		return input.uri;
+	}
+
+	return undefined;
+}
+
+async function closePreviewWorkbookTabs(resourceUri: vscode.Uri): Promise<void> {
+	const tabsToClose = vscode.window.tabGroups.all.flatMap((group) =>
+		group.tabs.filter((tab) => {
+			if (tab.isDirty) {
+				return false;
+			}
+
+			const tabResourceUri = getTabResourceUri(tab.input);
+			if (tabResourceUri?.toString() !== resourceUri.toString()) {
+				return false;
+			}
+
+			return tab.isPreview || tab.input instanceof vscode.TabInputText;
+		}),
+	);
+
+	if (tabsToClose.length > 0) {
+		await vscode.window.tabGroups.close(tabsToClose, true);
+	}
+}
+
 export function registerScmWorkbookDiffInterceptor(
 	extensionUri: vscode.Uri,
 ): vscode.Disposable {
@@ -31,6 +68,7 @@ export function registerScmWorkbookDiffInterceptor(
 				tab.group.viewColumn,
 			);
 			await vscode.window.tabGroups.close(tab, true);
+			await closePreviewWorkbookTabs(diffUris.modified);
 		} finally {
 			inFlight.delete(requestKey);
 		}

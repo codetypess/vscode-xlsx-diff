@@ -1,0 +1,8 @@
+{
+  "extension.displayName": "XLSX Diff",
+  "extension.description": "Compare XLSX files in VS Code and Git",
+  "command.category": "XLSX Diff",
+  "command.compareTwoFiles.title": "Compare Two XLSX Files",
+  "command.compareActiveWith.title": "Compare Active XLSX With...",
+  "command.compareActiveWith.shortTitle": "Compare XLSX"
+}

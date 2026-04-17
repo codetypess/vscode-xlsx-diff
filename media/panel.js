@@ -2,6 +2,31 @@ const vscode = acquireVsCodeApi();
 
 let model = null;
 let isSyncingScroll = false;
+const STRINGS = globalThis.__XLSX_DIFF_STRINGS__ ?? {
+	loading: 'Loading XLSX diff...',
+	all: 'All',
+	diffs: 'Diffs',
+	same: 'Same',
+	prevDiff: 'Prev Diff',
+	nextDiff: 'Next Diff',
+	prevPage: 'Prev Page',
+	nextPage: 'Next Page',
+	swap: 'Swap',
+	reload: 'Reload',
+	left: 'Left',
+	right: 'Right',
+	mergedRangesChanged: 'Merged ranges changed',
+	noRowsAvailable: 'No rows available for this filter.',
+	size: 'Size',
+	modified: 'Modified',
+	sheet: 'Sheet',
+	rows: 'Rows',
+	page: 'Page',
+	filter: 'Filter',
+	diffRows: 'Diff rows',
+	sameRows: 'Same rows',
+	visibleRows: 'Visible rows',
+};
 
 function escapeHtml(value) {
 	return String(value)
@@ -56,6 +81,10 @@ function getColumnDiffTones(rows) {
 	return tones;
 }
 
+function getDiffToneClass(diffTone) {
+	return diffTone ? `diff-marker--${diffTone}` : '';
+}
+
 function shouldHighlightCell(cell, side, isHighlighted) {
 	if (!isHighlighted) {
 		return false;
@@ -77,23 +106,23 @@ function shouldHighlightCell(cell, side, isHighlighted) {
 }
 
 function getSideCellClass(cell, side, isHighlighted) {
+	const classes = ['grid__cell'];
+
 	if (cell.status === 'modified') {
-		return `cell cell--modified ${isHighlighted ? 'cell--highlighted' : ''}`.trim();
+		classes.push('grid__cell--modified');
+	} else if (cell.status === 'added') {
+		classes.push(side === 'right' ? 'grid__cell--added' : 'grid__cell--ghost');
+	} else if (cell.status === 'removed') {
+		classes.push(side === 'left' ? 'grid__cell--removed' : 'grid__cell--ghost');
+	} else {
+		classes.push('grid__cell--equal');
 	}
 
-	if (cell.status === 'added') {
-		return side === 'right'
-			? `cell cell--added ${isHighlighted ? 'cell--highlighted' : ''}`.trim()
-			: 'cell cell--ghost';
+	if (isHighlighted) {
+		classes.push('grid__cell--highlighted');
 	}
 
-	if (cell.status === 'removed') {
-		return side === 'left'
-			? `cell cell--removed ${isHighlighted ? 'cell--highlighted' : ''}`.trim()
-			: 'cell cell--ghost';
-	}
-
-	return 'cell';
+	return classes.join(' ');
 }
 
 function renderCellValue(value, formula) {
@@ -110,7 +139,7 @@ function renderCellValue(value, formula) {
 
 function renderTable(side) {
 	if (!model || model.page.rows.length === 0) {
-		return '<div class="empty-table">No rows available for this filter.</div>';
+		return `<div class="empty-table">${escapeHtml(STRINGS.noRowsAvailable)}</div>`;
 	}
 
 	const diffColumnTones = getColumnDiffTones(model.page.rows);
@@ -120,7 +149,7 @@ function renderTable(side) {
 
 			return `<th class="grid__column ${diffTone ? `grid__column--diff grid__column--${diffTone}` : ''}">
 				<span class="grid__column-label">
-					${diffTone ? '<span class="grid__diff-marker" aria-hidden="true"></span>' : ''}
+					${diffTone ? `<span class="diff-marker ${getDiffToneClass(diffTone)}" aria-hidden="true"></span>` : ''}
 					<span>${escapeHtml(column)}</span>
 				</span>
 			</th>`;
@@ -147,11 +176,11 @@ function renderTable(side) {
 						row.isHighlighted,
 					);
 
-					return `<td title="${escapeHtml(cell.address)}"><div class="${getSideCellClass(
-						cell,
-						side,
-						highlightCell,
-					)}">${renderCellValue(value, formula)}</div></td>`;
+					const cellClass = getSideCellClass(cell, side, highlightCell);
+
+					return `<td title="${escapeHtml(cell.address)}" class="${cellClass}">
+						<div class="grid__cell-content">${renderCellValue(value, formula)}</div>
+					</td>`;
 				})
 				.join('');
 
@@ -159,7 +188,7 @@ function renderTable(side) {
 				<tr class="${rowClasses}">
 					<th class="grid__row-number ${row.hasDiff ? `grid__row-number--diff grid__row-number--${row.diffTone}` : ''}">
 						<span class="grid__row-label">
-							${row.hasDiff ? '<span class="grid__diff-marker" aria-hidden="true"></span>' : ''}
+							${row.hasDiff ? `<span class="diff-marker ${getDiffToneClass(row.diffTone)}" aria-hidden="true"></span>` : ''}
 							<span>${row.rowNumber}</span>
 						</span>
 					</th>
@@ -187,28 +216,42 @@ function renderPane(title, side) {
 		<section class="pane">
 			<div class="pane__header">
 				<div class="pane__title">${escapeHtml(title)}</div>
-				${model.activeSheet.mergedRangesChanged ? '<span class="badge badge--warn">Merged ranges changed</span>' : ''}
+				${model.activeSheet.mergedRangesChanged ? `<span class="badge badge--warn">${escapeHtml(STRINGS.mergedRangesChanged)}</span>` : ''}
 			</div>
 			<div class="pane__table">${renderTable(side)}</div>
 		</section>
 	`;
 }
 
+function renderToolbarButton({
+	action,
+	icon,
+	label,
+	active = false,
+	disabled = false,
+	filter,
+}) {
+	return `<button class="toolbar__button ${active ? 'is-active' : ''}" data-action="${action}" ${filter ? `data-filter="${filter}"` : ''} ${disabled ? 'disabled' : ''}>
+		<span class="codicon ${icon} toolbar__button-icon" aria-hidden="true"></span>
+		<span>${escapeHtml(label)}</span>
+	</button>`;
+}
+
 function renderToolbar() {
 	return `
 		<header class="toolbar">
 			<div class="toolbar__group">
-				<button class="toolbar__button ${model.filter === 'all' ? 'is-active' : ''}" data-action="set-filter" data-filter="all"><span class="toolbar__button-icon" aria-hidden="true">#</span><span>All</span></button>
-				<button class="toolbar__button ${model.filter === 'diffs' ? 'is-active' : ''}" data-action="set-filter" data-filter="diffs"><span class="toolbar__button-icon" aria-hidden="true">≠</span><span>Diffs</span></button>
-				<button class="toolbar__button ${model.filter === 'same' ? 'is-active' : ''}" data-action="set-filter" data-filter="same"><span class="toolbar__button-icon" aria-hidden="true">=</span><span>Same</span></button>
+				${renderToolbarButton({ action: 'set-filter', filter: 'all', icon: 'codicon-list-flat', label: STRINGS.all, active: model.filter === 'all' })}
+				${renderToolbarButton({ action: 'set-filter', filter: 'diffs', icon: 'codicon-diff-multiple', label: STRINGS.diffs, active: model.filter === 'diffs' })}
+				${renderToolbarButton({ action: 'set-filter', filter: 'same', icon: 'codicon-check-all', label: STRINGS.same, active: model.filter === 'same' })}
 			</div>
 			<div class="toolbar__group">
-				<button class="toolbar__button" data-action="prev-diff" ${model.canPrevDiff ? '' : 'disabled'}><span class="toolbar__button-icon" aria-hidden="true">↑</span><span>Prev Diff</span></button>
-				<button class="toolbar__button" data-action="next-diff" ${model.canNextDiff ? '' : 'disabled'}><span class="toolbar__button-icon" aria-hidden="true">↓</span><span>Next Diff</span></button>
-				<button class="toolbar__button" data-action="prev-page" ${model.canPrevPage ? '' : 'disabled'}><span class="toolbar__button-icon" aria-hidden="true">←</span><span>Prev Page</span></button>
-				<button class="toolbar__button" data-action="next-page" ${model.canNextPage ? '' : 'disabled'}><span class="toolbar__button-icon" aria-hidden="true">→</span><span>Next Page</span></button>
-				<button class="toolbar__button" data-action="swap"><span class="toolbar__button-icon" aria-hidden="true">⇄</span><span>Swap</span></button>
-				<button class="toolbar__button" data-action="reload"><span class="toolbar__button-icon" aria-hidden="true">↻</span><span>Reload</span></button>
+				${renderToolbarButton({ action: 'prev-diff', icon: 'codicon-arrow-up', label: STRINGS.prevDiff, disabled: !model.canPrevDiff })}
+				${renderToolbarButton({ action: 'next-diff', icon: 'codicon-arrow-down', label: STRINGS.nextDiff, disabled: !model.canNextDiff })}
+				${renderToolbarButton({ action: 'prev-page', icon: 'codicon-arrow-left', label: STRINGS.prevPage, disabled: !model.canPrevPage })}
+				${renderToolbarButton({ action: 'next-page', icon: 'codicon-arrow-right', label: STRINGS.nextPage, disabled: !model.canNextPage })}
+				${renderToolbarButton({ action: 'swap', icon: 'codicon-arrow-swap', label: STRINGS.swap })}
+				${renderToolbarButton({ action: 'reload', icon: 'codicon-refresh', label: STRINGS.reload })}
 			</div>
 		</header>
 	`;
@@ -222,9 +265,9 @@ function renderFiles() {
 				<div class="file-card__meta">
 					<div class="file-card__path" title="${escapeHtml(model.leftFile.filePath)}">${escapeHtml(model.leftFile.filePath)}</div>
 					<div class="file-card__facts">
-						<span>Size: ${escapeHtml(model.leftFile.fileSizeLabel)}</span>
+						<span>${escapeHtml(STRINGS.size)}: ${escapeHtml(model.leftFile.fileSizeLabel)}</span>
 						${model.leftFile.detailLabel && model.leftFile.detailValue ? `<span>${escapeHtml(model.leftFile.detailLabel)}: ${escapeHtml(model.leftFile.detailValue)}</span>` : ''}
-						<span>Modified: ${escapeHtml(model.leftFile.modifiedTimeLabel)}</span>
+						<span>${escapeHtml(STRINGS.modified)}: ${escapeHtml(model.leftFile.modifiedTimeLabel)}</span>
 					</div>
 				</div>
 			</div>
@@ -233,9 +276,9 @@ function renderFiles() {
 				<div class="file-card__meta">
 					<div class="file-card__path" title="${escapeHtml(model.rightFile.filePath)}">${escapeHtml(model.rightFile.filePath)}</div>
 					<div class="file-card__facts">
-						<span>Size: ${escapeHtml(model.rightFile.fileSizeLabel)}</span>
+						<span>${escapeHtml(STRINGS.size)}: ${escapeHtml(model.rightFile.fileSizeLabel)}</span>
 						${model.rightFile.detailLabel && model.rightFile.detailValue ? `<span>${escapeHtml(model.rightFile.detailLabel)}: ${escapeHtml(model.rightFile.detailValue)}</span>` : ''}
-						<span>Modified: ${escapeHtml(model.rightFile.modifiedTimeLabel)}</span>
+						<span>${escapeHtml(STRINGS.modified)}: ${escapeHtml(model.rightFile.modifiedTimeLabel)}</span>
 					</div>
 				</div>
 			</div>
@@ -253,6 +296,7 @@ function renderTabs() {
 					data-sheet-key="${escapeHtml(sheet.key)}"
 					title="${escapeHtml(`${sheet.label} · ${sheet.diffCellCount} changed cells · ${sheet.diffRowCount} changed rows`)}"
 				>
+					${sheet.hasDiff ? `<span class="diff-marker ${getDiffToneClass(sheet.diffTone)} tab__marker" aria-hidden="true"></span>` : ''}
 					<span class="tab__label">${escapeHtml(sheet.label)}</span>
 				</button>
 			`,
@@ -265,13 +309,13 @@ function renderStatus() {
 		<footer class="footer">
 			<div class="tabs">${renderTabs()}</div>
 			<div class="status">
-				<span><strong>Sheet:</strong> ${escapeHtml(model.activeSheet.label)}</span>
-				<span><strong>Rows:</strong> ${model.page.rangeLabel}</span>
-				<span><strong>Page:</strong> ${model.page.currentPage} / ${model.page.totalPages}</span>
-				<span><strong>Filter:</strong> ${escapeHtml(model.filter)}</span>
-				<span><strong>Diff rows:</strong> ${model.page.diffRowCount}</span>
-				<span><strong>Same rows:</strong> ${model.page.sameRowCount}</span>
-				<span><strong>Visible rows:</strong> ${model.page.visibleRowCount}</span>
+				<span><strong>${escapeHtml(STRINGS.sheet)}:</strong> ${escapeHtml(model.activeSheet.label)}</span>
+				<span><strong>${escapeHtml(STRINGS.rows)}:</strong> ${model.page.rangeLabel}</span>
+				<span><strong>${escapeHtml(STRINGS.page)}:</strong> ${model.page.currentPage} / ${model.page.totalPages}</span>
+				<span><strong>${escapeHtml(STRINGS.filter)}:</strong> ${escapeHtml(model.filter)}</span>
+				<span><strong>${escapeHtml(STRINGS.diffRows)}:</strong> ${model.page.diffRowCount}</span>
+				<span><strong>${escapeHtml(STRINGS.sameRows)}:</strong> ${model.page.sameRowCount}</span>
+				<span><strong>${escapeHtml(STRINGS.visibleRows)}:</strong> ${model.page.visibleRowCount}</span>
 			</div>
 		</footer>
 	`;
@@ -279,7 +323,7 @@ function renderStatus() {
 
 function renderApp() {
 	if (!model) {
-		renderLoading('Loading XLSX diff...');
+		renderLoading(STRINGS.loading);
 		return;
 	}
 
@@ -288,8 +332,8 @@ function renderApp() {
 			${renderToolbar()}
 			${renderFiles()}
 			<section class="panes">
-				${renderPane('Left', 'left')}
-				${renderPane('Right', 'right')}
+				${renderPane(STRINGS.left, 'left')}
+				${renderPane(STRINGS.right, 'right')}
 			</section>
 			${renderStatus()}
 		</div>
@@ -396,5 +440,5 @@ document.addEventListener('click', (event) => {
 	}
 });
 
-renderLoading('Loading XLSX diff...');
+renderLoading(STRINGS.loading);
 vscode.postMessage({ type: 'ready' });

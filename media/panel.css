@@ -78,9 +78,10 @@ body {
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	min-width: 12px;
-	font-size: 12px;
-	opacity: 0.9;
+	min-width: 14px;
+	font-size: 16px;
+	line-height: 1;
+	opacity: 1;
 }
 
 .toolbar__button:hover:enabled {
@@ -245,7 +246,6 @@ body {
 .grid td {
 	border-right: 1px solid var(--vscode-panel-border);
 	border-bottom: 1px solid var(--vscode-panel-border);
-	padding: 4px 7px;
 	vertical-align: top;
 }
 
@@ -286,32 +286,36 @@ body {
 	text-align: left;
 }
 
-.cell {
-	min-height: 24px;
+.grid__cell {
+	padding: 4px 7px;
 	line-height: 1.35;
 	white-space: pre-wrap;
 	word-break: break-word;
 }
 
-.cell--modified {
+.grid__cell-content {
+	display: block;
+}
+
+.grid__cell--modified {
 	--cell-accent: var(--vscode-editorError-foreground, #f14c4c);
 	background: color-mix(in srgb, #f14c4c 24%, var(--vscode-editor-background) 76%);
 	box-shadow: inset 0 0 0 1px color-mix(in srgb, #f14c4c 82%, transparent 18%);
 }
 
-.cell--added {
+.grid__cell--added {
 	--cell-accent: var(--vscode-gitDecoration-addedResourceForeground, #2ea043);
 	background: color-mix(in srgb, #2ea043 24%, var(--vscode-editor-background) 76%);
 	box-shadow: inset 0 0 0 1px color-mix(in srgb, #2ea043 82%, transparent 18%);
 }
 
-.cell--removed {
+.grid__cell--removed {
 	--cell-accent: var(--vscode-editorError-foreground, #f14c4c);
 	background: color-mix(in srgb, #f14c4c 18%, var(--vscode-editor-background) 82%);
 	box-shadow: inset 0 0 0 1px color-mix(in srgb, #f14c4c 72%, transparent 28%);
 }
 
-.cell--ghost {
+.grid__cell--ghost {
 	background: color-mix(in srgb, var(--vscode-editor-background) 92%, white 8%);
 	color: var(--vscode-descriptionForeground);
 }
@@ -361,15 +365,25 @@ body {
 	color: var(--diff-accent, var(--vscode-editorError-foreground, #f14c4c));
 }
 
-.grid__diff-marker {
-	width: 6px;
-	height: 6px;
-	border-radius: 1px;
-	background: currentColor;
+.diff-marker {
+	width: 9px;
+	height: 9px;
+	border-radius: 2px;
 	flex: 0 0 auto;
+	background: var(--vscode-editorError-foreground, #f14c4c);
+	box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 60%, transparent 40%);
 }
 
-.cell--highlighted {
+.diff-marker--added {
+	background: var(--vscode-gitDecoration-addedResourceForeground, #2ea043);
+}
+
+.diff-marker--modified,
+.diff-marker--removed {
+	background: var(--vscode-editorError-foreground, #f14c4c);
+}
+
+.grid__cell--highlighted {
 	outline: 1px solid var(--cell-accent, var(--vscode-focusBorder));
 	outline-offset: -1px;
 }
@@ -437,19 +451,8 @@ body {
 		var(--vscode-tab-activeBorderTop, var(--vscode-focusBorder));
 }
 
-.tab.has-diff:not(.is-active) .tab__label::after {
-	content: '';
-	display: inline-block;
-	width: 6px;
-	height: 6px;
-	margin-left: 6px;
-	border-radius: 999px;
-	background: var(--vscode-editorError-foreground, #f14c4c);
-	vertical-align: middle;
-}
-
-.tab.has-diff.tab--added:not(.is-active) .tab__label::after {
-	background: var(--vscode-gitDecoration-addedResourceForeground, #2ea043);
+.tab__marker {
+	margin-right: 2px;
 }
 
 .tab__label {

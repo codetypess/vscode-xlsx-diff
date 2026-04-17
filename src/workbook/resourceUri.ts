@@ -10,6 +10,10 @@ interface GitUriQuery {
 
 const execFile = promisify(execFileCallback);
 
+function isChineseLocale(): boolean {
+	return vscode.env.language.toLowerCase().startsWith('zh');
+}
+
 function getUriPathForExtension(uri: vscode.Uri): string {
 	return uri.scheme === 'file' ? uri.fsPath : decodeURIComponent(uri.path);
 }
@@ -70,40 +74,50 @@ export function describeGitResourceRef(
 		hasStagedChanges?: boolean;
 	} = {},
 ): { label: string; value: string } {
+	const isChinese = isChineseLocale();
+	const sourceLabel = isChinese ? '来源' : 'Source';
+	const commitLabel = isChinese ? '提交' : 'Commit';
+	const indexLabel = isChinese ? '暂存区' : 'Index';
+
 	if (ref === '') {
-		return { label: 'Source', value: 'Index' };
+		return { label: sourceLabel, value: indexLabel };
 	}
 
 	if (/^~\d$/.test(ref)) {
-		return { label: 'Source', value: `Stage ${ref[1]}` };
+		return {
+			label: sourceLabel,
+			value: isChinese ? `阶段 ${ref[1]}` : `Stage ${ref[1]}`,
+		};
 	}
 
 	if (ref === '~') {
 		if (options.hasStagedChanges) {
 			return {
-				label: 'Source',
+				label: sourceLabel,
 				value: options.resolvedCommit
-					? `Index · base ${options.resolvedCommit}`
-					: 'Index',
+					? isChinese
+						? `暂存区 · 基线 ${options.resolvedCommit}`
+						: `Index · base ${options.resolvedCommit}`
+					: indexLabel,
 			};
 		}
 
 		return {
-			label: 'Commit',
+			label: commitLabel,
 			value: options.resolvedCommit ?? 'HEAD',
 		};
 	}
 
 	if (options.resolvedCommit) {
 		return {
-			label: 'Commit',
+			label: commitLabel,
 			value: options.resolvedCommit,
 		};
 	}
 
 	return {
-		label: 'Source',
-		value: `Git ref: ${ref}`,
+		label: sourceLabel,
+		value: isChinese ? `Git 引用: ${ref}` : `Git ref: ${ref}`,
 	};
 }
 
