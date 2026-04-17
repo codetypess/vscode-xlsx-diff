@@ -17,6 +17,7 @@ import {
 	setCurrentPage,
 	setFilterMode,
 } from './renderModel';
+import { getWorkbookResourceName } from '../workbook/resourceUri';
 
 type WebviewMessage =
 	| { type: 'ready' }
@@ -81,11 +82,12 @@ export class XlsxDiffPanel {
 		extensionUri: vscode.Uri,
 		leftFileUri: vscode.Uri,
 		rightFileUri: vscode.Uri,
+		viewColumn: vscode.ViewColumn = vscode.ViewColumn.Active,
 	): Promise<void> {
 		const panel = vscode.window.createWebviewPanel(
 			WEBVIEW_TYPE_DIFF_PANEL,
-			`${path.basename(leftFileUri.fsPath)} ↔ ${path.basename(rightFileUri.fsPath)}`,
-			vscode.ViewColumn.Active,
+			`${getWorkbookResourceName(leftFileUri)} ↔ ${getWorkbookResourceName(rightFileUri)}`,
+			viewColumn,
 			{
 				enableScripts: true,
 				retainContextWhenHidden: true,
@@ -237,8 +239,8 @@ export class XlsxDiffPanel {
 		}
 
 		const [leftWorkbook, rightWorkbook] = await Promise.all([
-			loadWorkbookSnapshot(this.leftFileUri.fsPath),
-			loadWorkbookSnapshot(this.rightFileUri.fsPath),
+			loadWorkbookSnapshot(this.leftFileUri),
+			loadWorkbookSnapshot(this.rightFileUri),
 		]);
 
 		this.diffModel = buildWorkbookDiff(leftWorkbook, rightWorkbook);

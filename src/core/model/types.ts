@@ -26,6 +26,7 @@ export interface WorkbookSnapshot {
 	fileName: string;
 	fileSize: number;
 	modifiedTime: string;
+	modifiedTimeLabel?: string;
 	sheets: SheetSnapshot[];
 }
 

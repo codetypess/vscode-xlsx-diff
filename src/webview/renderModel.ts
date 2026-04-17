@@ -239,13 +239,15 @@ export function createRenderModel(
 			fileName: diff.left.fileName,
 			filePath: diff.left.filePath,
 			fileSizeLabel: formatFileSize(diff.left.fileSize),
-			modifiedTimeLabel: formatModifiedTime(diff.left.modifiedTime),
+			modifiedTimeLabel:
+				diff.left.modifiedTimeLabel ?? formatModifiedTime(diff.left.modifiedTime),
 		},
 		rightFile: {
 			fileName: diff.right.fileName,
 			filePath: diff.right.filePath,
 			fileSizeLabel: formatFileSize(diff.right.fileSize),
-			modifiedTimeLabel: formatModifiedTime(diff.right.modifiedTime),
+			modifiedTimeLabel:
+				diff.right.modifiedTimeLabel ?? formatModifiedTime(diff.right.modifiedTime),
 		},
 		summary: {
 			totalSheets: diff.sheets.length,

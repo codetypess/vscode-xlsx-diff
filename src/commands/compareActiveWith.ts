@@ -2,16 +2,15 @@ import * as vscode from 'vscode';
 import { XlsxDiffPanel } from '../webview/diffPanel';
 import {
 	getActiveWorkbookUri,
-	isWorkbookUri,
+	getWorkbookUriFromCommandArg,
 	pickWorkbook,
 } from './workbookPicker';
 
 export async function compareActiveWith(
 	extensionUri: vscode.Uri,
-	resource?: vscode.Uri,
+	resource?: unknown,
 ): Promise<void> {
-	const leftUri =
-		(isWorkbookUri(resource) ? resource : undefined) ?? getActiveWorkbookUri();
+	const leftUri = getWorkbookUriFromCommandArg(resource) ?? getActiveWorkbookUri();
 
 	if (!leftUri) {
 		await vscode.window.showErrorMessage(

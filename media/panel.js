@@ -158,20 +158,24 @@ function renderFiles() {
 		<section class="files">
 			<div class="file-card">
 				<div class="file-card__label">Left workbook</div>
-				<div class="file-card__name">${escapeHtml(model.leftFile.fileName)}</div>
+				<div class="file-card__name" title="${escapeHtml(model.leftFile.filePath)}">${escapeHtml(model.leftFile.fileName)}</div>
 				<div class="file-card__meta">
-					<div>${escapeHtml(model.leftFile.filePath)}</div>
-					<div>Size: ${escapeHtml(model.leftFile.fileSizeLabel)}</div>
-					<div>Modified: ${escapeHtml(model.leftFile.modifiedTimeLabel)}</div>
+					<div class="file-card__path" title="${escapeHtml(model.leftFile.filePath)}">${escapeHtml(model.leftFile.filePath)}</div>
+					<div class="file-card__facts">
+						<span>Size: ${escapeHtml(model.leftFile.fileSizeLabel)}</span>
+						<span>Modified: ${escapeHtml(model.leftFile.modifiedTimeLabel)}</span>
+					</div>
 				</div>
 			</div>
 			<div class="file-card">
 				<div class="file-card__label">Right workbook</div>
-				<div class="file-card__name">${escapeHtml(model.rightFile.fileName)}</div>
+				<div class="file-card__name" title="${escapeHtml(model.rightFile.filePath)}">${escapeHtml(model.rightFile.fileName)}</div>
 				<div class="file-card__meta">
-					<div>${escapeHtml(model.rightFile.filePath)}</div>
-					<div>Size: ${escapeHtml(model.rightFile.fileSizeLabel)}</div>
-					<div>Modified: ${escapeHtml(model.rightFile.modifiedTimeLabel)}</div>
+					<div class="file-card__path" title="${escapeHtml(model.rightFile.filePath)}">${escapeHtml(model.rightFile.filePath)}</div>
+					<div class="file-card__facts">
+						<span>Size: ${escapeHtml(model.rightFile.fileSizeLabel)}</span>
+						<span>Modified: ${escapeHtml(model.rightFile.modifiedTimeLabel)}</span>
+					</div>
 				</div>
 			</div>
 		</section>
@@ -182,9 +186,13 @@ function renderTabs() {
 	return model.sheets
 		.map(
 			(sheet) => `
-				<button class="tab ${sheet.isActive ? 'is-active' : ''}" data-action="set-sheet" data-sheet-key="${escapeHtml(sheet.key)}">
-					<span>${escapeHtml(sheet.label)}</span>
-					<span class="tab__meta">${sheet.diffCellCount} cells / ${sheet.diffRowCount} rows</span>
+				<button
+					class="tab ${sheet.isActive ? 'is-active' : ''} ${sheet.hasDiff ? 'has-diff' : ''}"
+					data-action="set-sheet"
+					data-sheet-key="${escapeHtml(sheet.key)}"
+					title="${escapeHtml(`${sheet.label} · ${sheet.diffCellCount} changed cells · ${sheet.diffRowCount} changed rows`)}"
+				>
+					<span class="tab__label">${escapeHtml(sheet.label)}</span>
 				</button>
 			`,
 		)

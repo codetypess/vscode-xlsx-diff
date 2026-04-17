@@ -30,9 +30,8 @@ Current implementation includes:
 
 2. Start the extension in an Extension Development Host:
 
-   - Press `F5` in VS Code
-   - Open the Command Palette
-   - Run one of the `XLSX Diff` commands
+    - Press `F5` in VS Code
+    - Open the Command Palette and run one of the `XLSX Diff` commands, or right-click an `.xlsx` file in the Explorer / SCM view and use the `XLSX Diff` action
 
 3. Run checks:
 

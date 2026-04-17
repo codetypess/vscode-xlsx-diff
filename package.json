@@ -10,7 +10,12 @@
   "categories": [
     "Other"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:xlsx-diff.compareTwoFiles",
+    "onCommand:xlsx-diff.compareActiveWith",
+    "onUri"
+  ],
   "main": "./dist/extension.js",
   "bin": {
     "xlsx-difftool": "./scripts/xlsx-difftool.mjs"
@@ -25,9 +30,45 @@
       {
         "command": "xlsx-diff.compareActiveWith",
         "title": "Compare Active XLSX With...",
+        "shortTitle": "Compare XLSX",
         "category": "XLSX Diff"
       }
-    ]
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "xlsx-diff.compareActiveWith",
+          "when": "resourceScheme == file && resourceExtname == .xlsx",
+          "group": "navigation@10"
+        },
+        {
+          "command": "xlsx-diff.compareTwoFiles",
+          "when": "resourceScheme == file && resourceExtname == .xlsx",
+          "group": "navigation@11"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "xlsx-diff.compareActiveWith",
+          "when": "resourceScheme == file && resourceExtname == .xlsx",
+          "group": "navigation@10"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "xlsx-diff.compareActiveWith",
+          "when": "resourceScheme == file && resourceExtname == .xlsx",
+          "group": "navigation@10"
+        }
+      ],
+      "scm/resourceState/context": [
+        {
+          "command": "xlsx-diff.compareActiveWith",
+          "when": "resourceScheme == file && resourceExtname == .xlsx",
+          "group": "inline"
+        }
+      ]
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run package",

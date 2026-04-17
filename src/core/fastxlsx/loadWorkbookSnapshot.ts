@@ -1,12 +1,18 @@
 import { createHash } from 'node:crypto';
 import { stat } from 'node:fs/promises';
 import * as path from 'node:path';
+import * as vscode from 'vscode';
 import { createCellKey, getCellAddress } from '../model/cells';
 import {
 	type CellSnapshot,
 	type SheetSnapshot,
 	type WorkbookSnapshot,
 } from '../model/types';
+import {
+	getWorkbookResourceName,
+	getWorkbookResourcePathLabel,
+	getWorkbookResourceTimeLabel,
+} from '../../workbook/resourceUri';
 
 interface SheetReader {
 	name: string;
@@ -21,6 +27,14 @@ interface SheetReader {
 interface WorkbookReader {
 	getSheet(sheetName: string): SheetReader;
 	getSheetNames(): string[];
+}
+
+interface WorkbookSnapshotMetadata {
+	filePath: string;
+	fileName: string;
+	fileSize: number;
+	modifiedTime: string;
+	modifiedTimeLabel?: string;
 }
 
 function createSheetSignature(sheet: SheetSnapshot): string {
@@ -88,23 +102,61 @@ function loadSheetSnapshot(workbook: WorkbookReader, sheetName: string): SheetSn
 	return snapshot;
 }
 
-export async function loadWorkbookSnapshot(
-	filePath: string,
-): Promise<WorkbookSnapshot> {
-	const { Workbook } = await import('fastxlsx');
-	const [workbook, fileStats] = await Promise.all([
-		Workbook.open(filePath),
-		stat(filePath),
-	]);
+function createWorkbookSnapshot(
+	workbook: WorkbookReader,
+	metadata: WorkbookSnapshotMetadata,
+): WorkbookSnapshot {
 	const sheets = workbook
 		.getSheetNames()
 		.map((sheetName) => loadSheetSnapshot(workbook, sheetName));
 
 	return {
-		filePath,
-		fileName: path.basename(filePath),
-		fileSize: fileStats.size,
-		modifiedTime: fileStats.mtime.toISOString(),
+		...metadata,
 		sheets,
 	};
+}
+
+export async function loadWorkbookSnapshot(
+	filePathOrUri: string | vscode.Uri,
+): Promise<WorkbookSnapshot> {
+	const { Workbook } = await import('fastxlsx');
+
+	if (typeof filePathOrUri === 'string') {
+		const [workbook, fileStats] = await Promise.all([
+			Workbook.open(filePathOrUri),
+			stat(filePathOrUri),
+		]);
+
+		return createWorkbookSnapshot(workbook, {
+			filePath: filePathOrUri,
+			fileName: path.basename(filePathOrUri),
+			fileSize: fileStats.size,
+			modifiedTime: fileStats.mtime.toISOString(),
+		});
+	}
+
+	const archiveData = await vscode.workspace.fs.readFile(filePathOrUri);
+	const workbook = Workbook.fromUint8Array(archiveData);
+	const resourceName = getWorkbookResourceName(filePathOrUri);
+	const resourcePath = getWorkbookResourcePathLabel(filePathOrUri);
+
+	if (filePathOrUri.scheme === 'file') {
+		const fileStats = await stat(filePathOrUri.fsPath);
+		return createWorkbookSnapshot(workbook, {
+			filePath: resourcePath,
+			fileName: resourceName,
+			fileSize: fileStats.size,
+			modifiedTime: fileStats.mtime.toISOString(),
+		});
+	}
+
+	return createWorkbookSnapshot(workbook, {
+		filePath: resourcePath,
+		fileName: resourceName,
+		fileSize: archiveData.byteLength,
+		modifiedTime: new Date(0).toISOString(),
+		modifiedTimeLabel:
+			getWorkbookResourceTimeLabel(filePathOrUri) ??
+			`${filePathOrUri.scheme.toUpperCase()} resource`,
+	});
 }
