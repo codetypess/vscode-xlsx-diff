@@ -8,6 +8,8 @@
   "configuration.displayLanguage.zhCn": "始终使用简体中文。",
   "command.category": "XLSX 对比",
   "command.compareTwoFiles.title": "比较两个 XLSX 文件",
+  "command.openEditor.title": "打开 XLSX 编辑器",
+  "command.openEditor.shortTitle": "打开编辑器",
   "command.compareActiveWith.title": "与当前 XLSX 进行比较...",
   "command.compareActiveWith.shortTitle": "比较 XLSX"
 }

@@ -59,6 +59,12 @@
         "category": "%command.category%"
       },
       {
+        "command": "xlsx-diff.openEditor",
+        "title": "%command.openEditor.title%",
+        "shortTitle": "%command.openEditor.shortTitle%",
+        "category": "%command.category%"
+      },
+      {
         "command": "xlsx-diff.compareActiveWith",
         "title": "%command.compareActiveWith.title%",
         "shortTitle": "%command.compareActiveWith.shortTitle%",
@@ -67,6 +73,11 @@
     ],
     "menus": {
       "explorer/context": [
+        {
+          "command": "xlsx-diff.openEditor",
+          "when": "resourceScheme == file && resourceExtname == .xlsx",
+          "group": "navigation@10"
+        },
         {
           "command": "xlsx-diff.compareActiveWith",
           "when": "resourceScheme == file && resourceExtname == .xlsx",
@@ -79,6 +90,11 @@
         }
       ],
       "editor/context": [
+        {
+          "command": "xlsx-diff.openEditor",
+          "when": "resourceScheme == file && resourceExtname == .xlsx",
+          "group": "navigation@10"
+        },
         {
           "command": "xlsx-diff.compareActiveWith",
           "when": "resourceScheme == file && resourceExtname == .xlsx",

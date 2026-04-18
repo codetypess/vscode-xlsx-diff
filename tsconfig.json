@@ -17,6 +17,7 @@
 		"src/**/*.ts"
 	],
 	"exclude": [
-		"src/webview/panel.ts"
+		"src/webview/panel.ts",
+		"src/webview/editorPanel.ts"
 	]
 }

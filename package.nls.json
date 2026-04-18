@@ -8,6 +8,8 @@
   "configuration.displayLanguage.zhCn": "Always use Simplified Chinese.",
   "command.category": "XLSX Diff",
   "command.compareTwoFiles.title": "Compare Two XLSX Files",
+  "command.openEditor.title": "Open XLSX Editor",
+  "command.openEditor.shortTitle": "Open Editor",
   "command.compareActiveWith.title": "Compare Active XLSX With...",
   "command.compareActiveWith.shortTitle": "Compare XLSX"
 }

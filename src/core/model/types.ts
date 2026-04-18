@@ -41,6 +41,90 @@ export interface WorkbookSnapshot {
 	sheets: SheetSnapshot[];
 }
 
+export interface EditorSelectedCell {
+	rowNumber: number;
+	columnNumber: number;
+}
+
+export interface EditorSelectionView extends EditorSelectedCell {
+	key: string;
+	address: string;
+	value: string;
+	formula: string | null;
+	isPresent: boolean;
+}
+
+export interface EditorGridCellView {
+	key: string;
+	address: string;
+	value: string;
+	formula: string | null;
+	isPresent: boolean;
+	isSelected: boolean;
+}
+
+export interface EditorGridRowView {
+	rowNumber: number;
+	isSelected: boolean;
+	cells: EditorGridCellView[];
+}
+
+export interface EditorPageSlice {
+	currentPage: number;
+	totalPages: number;
+	totalRows: number;
+	visibleRowCount: number;
+	rangeLabel: string;
+	columns: string[];
+	rows: EditorGridRowView[];
+}
+
+export interface EditorPanelState {
+	activeSheetKey: string | null;
+	currentPage: number;
+	selectedCell: EditorSelectedCell | null;
+}
+
+export interface EditorSheetTabView {
+	key: string;
+	label: string;
+	rowCount: number;
+	columnCount: number;
+	hasData: boolean;
+	isActive: boolean;
+}
+
+export interface EditorActiveSheetView {
+	key: string;
+	label: string;
+	rowCount: number;
+	columnCount: number;
+	hasData: boolean;
+	mergedRangeCount: number;
+	hasMergedRanges: boolean;
+}
+
+export interface EditorWorkbookSummary {
+	totalSheets: number;
+	totalRows: number;
+	totalNonEmptyCells: number;
+}
+
+export interface EditorRenderModel {
+	title: string;
+	file: WorkbookFileView;
+	summary: EditorWorkbookSummary;
+	activeSheet: EditorActiveSheetView;
+	selection: EditorSelectionView | null;
+	hasPendingEdits: boolean;
+	canSave: boolean;
+	canEdit: boolean;
+	page: EditorPageSlice;
+	sheets: EditorSheetTabView[];
+	canPrevPage: boolean;
+	canNextPage: boolean;
+}
+
 export interface SheetDiffModel {
 	key: string;
 	kind: SheetComparisonKind;

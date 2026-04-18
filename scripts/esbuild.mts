@@ -52,9 +52,23 @@ async function main() {
 		plugins: [esbuildProblemMatcherPlugin],
 	});
 
+	const editorWebviewCtx = await context({
+		entryPoints: ['src/webview/editorPanel.ts'],
+		bundle: true,
+		format: 'iife',
+		minify: production,
+		sourcemap: !production,
+		sourcesContent: false,
+		platform: 'browser',
+		outfile: 'media/editorPanel.js',
+		logLevel: 'silent',
+		plugins: [esbuildProblemMatcherPlugin],
+	});
+
 	if (watch) {
 		await extensionCtx.watch();
 		await webviewCtx.watch();
+		await editorWebviewCtx.watch();
 		return;
 	}
 
@@ -62,6 +76,8 @@ async function main() {
 	await extensionCtx.dispose();
 	await webviewCtx.rebuild();
 	await webviewCtx.dispose();
+	await editorWebviewCtx.rebuild();
+	await editorWebviewCtx.dispose();
 }
 
 main().catch((error) => {

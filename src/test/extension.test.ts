@@ -3,6 +3,7 @@ import * as vscode from 'vscode';
 import {
 	COMMAND_COMPARE_ACTIVE_WITH,
 	COMMAND_COMPARE_TWO_FILES,
+	COMMAND_OPEN_EDITOR,
 } from '../constants';
 
 suite('Extension Test Suite', () => {
@@ -16,5 +17,6 @@ suite('Extension Test Suite', () => {
 		const commands = await vscode.commands.getCommands(true);
 		assert.ok(commands.includes(COMMAND_COMPARE_TWO_FILES));
 		assert.ok(commands.includes(COMMAND_COMPARE_ACTIVE_WITH));
+		assert.ok(commands.includes(COMMAND_OPEN_EDITOR));
 	});
 });

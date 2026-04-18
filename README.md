@@ -25,6 +25,21 @@ A VS Code extension for visually comparing and editing `.xlsx` workbooks — dir
 
 ## Usage
 
+### Open the single-file editor
+
+Run **XLSX Diff: Open XLSX Editor** from the Explorer, editor context menu, or Command Palette to open a local workbook in a single-file spreadsheet editor.
+
+In the editor view you can:
+
+- browse sheets with tabs
+- move between cells with the arrow keys, `Enter`, and `Tab`
+- page through large used ranges with `PageUp` and `PageDown`
+- double-click a cell to edit it inline
+- paste tab-separated spreadsheet data into the current selection rectangle
+- press **Backspace** or **Delete** to clear the selected cell
+- press **⌘S** / **Ctrl+S** or click **Save** to write staged edits back to the workbook
+- keep a workbook open in read-only mode when the file system is not writable
+
 ### Compare two files
 
 1. Right-click an `.xlsx` file in the **Explorer** and choose **XLSX Diff: Compare Active XLSX With…** — then pick the second file.
