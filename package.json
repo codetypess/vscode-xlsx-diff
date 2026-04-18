@@ -52,6 +52,18 @@
     }
   },
   "contributes": {
+    "customEditors": [
+      {
+        "viewType": "xlsx-diff.editorPanel",
+        "displayName": "%customEditor.xlsx.displayName%",
+        "selector": [
+          {
+            "filenamePattern": "*.xlsx"
+          }
+        ],
+        "priority": "default"
+      }
+    ],
     "commands": [
       {
         "command": "xlsx-diff.compareTwoFiles",

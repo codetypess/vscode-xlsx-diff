@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { isChineseDisplayLanguage } from '../displayLanguage';
-import { XlsxEditorPanel } from '../webview/xlsxEditorPanel';
+import { WEBVIEW_TYPE_EDITOR_PANEL } from '../constants';
 import {
 	getActiveWorkbookUri,
 	getWorkbookUriFromCommandArg,
@@ -14,7 +14,6 @@ export function resolveWorkbookUriForOpenEditor(
 }
 
 export async function openEditor(
-	extensionUri: vscode.Uri,
 	resource?: unknown,
 ): Promise<void> {
 	const isChinese = isChineseDisplayLanguage();
@@ -32,5 +31,9 @@ export async function openEditor(
 		return;
 	}
 
-	await XlsxEditorPanel.create(extensionUri, workbookUri);
+	await vscode.commands.executeCommand(
+		'vscode.openWith',
+		workbookUri,
+		WEBVIEW_TYPE_EDITOR_PANEL,
+	);
 }

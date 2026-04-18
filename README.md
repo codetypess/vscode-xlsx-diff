@@ -27,18 +27,23 @@ A VS Code extension for visually comparing and editing `.xlsx` workbooks — dir
 
 ### Open the single-file editor
 
-Run **XLSX Diff: Open XLSX Editor** from the Explorer, editor context menu, or Command Palette to open a local workbook in a single-file spreadsheet editor.
+Opening a local `.xlsx` file now uses the XLSX editor automatically. You can still run **XLSX Diff: Open XLSX Editor** from the Explorer, editor context menu, or Command Palette if you want to open it explicitly.
 
 In the editor view you can:
 
 - browse sheets with tabs
 - move between cells with the arrow keys, `Enter`, and `Tab`
 - page through large used ranges with `PageUp` and `PageDown`
+- press `Cmd/Ctrl+F` to search workbook values and formulas, then step through matches
+- press `Cmd/Ctrl+G` to jump to a cell such as `A1` or `Sheet1!B2`
 - double-click a cell to edit it inline
 - paste tab-separated spreadsheet data into the current selection rectangle
 - press **Backspace** or **Delete** to clear the selected cell
+- press **Cmd/Ctrl+Z** and **Shift+Cmd/Ctrl+Z** or **Ctrl+Y** for session undo / redo
 - press **⌘S** / **Ctrl+S** or click **Save** to write staged edits back to the workbook
+- use the toolbar **Undo**, **Redo**, **Search**, and **Go** controls for mouse-driven editing
 - keep a workbook open in read-only mode when the file system is not writable
+- leave formula cells read-only; formula cells are visible but cannot be edited or overwritten from the editor
 
 ### Compare two files
 
@@ -61,12 +66,13 @@ Open the **Source Control** panel, then click any `.xlsx` file listed under *Cha
 ### Editing a cell
 
 1. Make sure the target file is a local `.xlsx` file (not a Git history version or read-only file).
-2. **Double-click** the cell you want to edit.
+2. **Double-click** a non-formula cell you want to edit.
 3. Type the new value.
-4. Press **Enter** or **Tab** to save — the file is written immediately and the diff view reloads.
-5. Press **Escape** to cancel without saving.
+4. Press **Enter** or **Tab** to stage the change in the current session.
+5. Press **⌘S** / **Ctrl+S** or click **Save** to write all staged edits to disk.
+6. Press **Escape** to cancel without saving.
 
-> Ghost cells (e.g. the placeholder on the left side of a row that only exists on the right) are not editable.
+> Formula cells stay read-only. Session undo / redo only affects staged edits that have not been saved yet.
 
 ---
 

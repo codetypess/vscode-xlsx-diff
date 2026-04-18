@@ -7,6 +7,7 @@
   "configuration.displayLanguage.en": "Always use English.",
   "configuration.displayLanguage.zhCn": "Always use Simplified Chinese.",
   "command.category": "XLSX Diff",
+  "customEditor.xlsx.displayName": "XLSX Editor",
   "command.compareTwoFiles.title": "Compare Two XLSX Files",
   "command.openEditor.title": "Open XLSX Editor",
   "command.openEditor.shortTitle": "Open Editor",

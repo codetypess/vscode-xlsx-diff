@@ -1,6 +1,6 @@
 import * as path from 'node:path';
 import * as vscode from 'vscode';
-import { WEBVIEW_TYPE_EDITOR_PANEL } from '../constants';
+import { getColumnNumber } from '../core/model/cells';
 import { loadWorkbookSnapshot } from '../core/fastxlsx/loadWorkbookSnapshot';
 import { writeCellValues, type CellEdit } from '../core/fastxlsx/writeCellValue';
 import type {
@@ -27,6 +27,8 @@ type WebviewMessage =
 	| { type: 'setPage'; page: number }
 	| { type: 'prevPage' }
 	| { type: 'nextPage' }
+	| { type: 'search'; query: string; direction: 'next' | 'prev' }
+	| { type: 'gotoCell'; reference: string }
 	| { type: 'selectCell'; rowNumber: number; columnNumber: number }
 	| { type: 'saveEdits'; edits: Array<{ sheetKey: string; rowNumber: number; columnNumber: number; value: string }> }
 	| { type: 'pendingEditStateChanged'; hasPendingEdits: boolean }
@@ -46,6 +48,13 @@ interface WebviewStrings {
 	visibleRows: string;
 	readOnly: string;
 	save: string;
+	undo: string;
+	redo: string;
+	searchPlaceholder: string;
+	findPrev: string;
+	findNext: string;
+	gotoPlaceholder: string;
+	goto: string;
 	totalSheets: string;
 	totalRows: string;
 	nonEmptyCells: string;
@@ -60,6 +69,8 @@ interface WebviewStrings {
 	discardChangesAndReload: string;
 	keepEditing: string;
 	displayLanguageRefreshBlocked: string;
+	noSearchMatches: string;
+	invalidCellReference: string;
 }
 
 function getNonce(): string {
@@ -79,6 +90,13 @@ function getWebviewStrings(): WebviewStrings {
 		return {
 			loading: '正在加载 XLSX 编辑器...',
 			reload: '刷新',
+			undo: '撤销',
+			redo: '重做',
+			searchPlaceholder: '搜索值或公式',
+			findPrev: '上一个',
+			findNext: '下一个',
+			gotoPlaceholder: 'A1 或 Sheet1!B2',
+			goto: '定位',
 			prevPage: '上一页',
 			nextPage: '下一页',
 			size: '大小',
@@ -104,12 +122,21 @@ function getWebviewStrings(): WebviewStrings {
 			discardChangesAndReload: '放弃修改并刷新',
 			keepEditing: '继续编辑',
 			displayLanguageRefreshBlocked: '当前有未保存修改，语言变更将在保存或手动刷新后生效。',
+			noSearchMatches: '没有找到匹配的单元格。',
+			invalidCellReference: '无法定位该单元格，请使用 A1 或 Sheet1!B2 格式，并确保目标在当前工作簿范围内。',
 		};
 	}
 
 	return {
 		loading: 'Loading XLSX editor...',
 		reload: 'Reload',
+		undo: 'Undo',
+		redo: 'Redo',
+		searchPlaceholder: 'Search values or formulas',
+		findPrev: 'Prev Match',
+		findNext: 'Next Match',
+		gotoPlaceholder: 'A1 or Sheet1!B2',
+		goto: 'Go',
 		prevPage: 'Prev Page',
 		nextPage: 'Next Page',
 		size: 'Size',
@@ -135,17 +162,20 @@ function getWebviewStrings(): WebviewStrings {
 		discardChangesAndReload: 'Discard Changes and Reload',
 		keepEditing: 'Keep Editing',
 		displayLanguageRefreshBlocked: 'Pending edits are open. Display language changes will apply after you save or reload the editor.',
+		noSearchMatches: 'No matching cells were found.',
+		invalidCellReference: 'Unable to locate that cell. Use A1 or Sheet1!B2 and stay within the workbook range.',
 	};
 }
 
 export class XlsxEditorPanel {
-	private static readonly panels = new Map<string, XlsxEditorPanel>();
+	private static readonly panels = new Map<number, XlsxEditorPanel>();
+	private static nextPanelId = 1;
 
 	private readonly panel: vscode.WebviewPanel;
 	private readonly extensionUri: vscode.Uri;
 	private readonly disposables: vscode.Disposable[] = [];
 	private readonly fileWatchers: vscode.Disposable[] = [];
-	private readonly panelKey: string;
+	private readonly panelId: number;
 
 	private workbookUri: vscode.Uri;
 	private workbook: WorkbookSnapshot | null = null;
@@ -167,17 +197,21 @@ export class XlsxEditorPanel {
 		panel: vscode.WebviewPanel,
 		extensionUri: vscode.Uri,
 		workbookUri: vscode.Uri,
-		panelKey: string,
+		panelId: number,
 	) {
 		this.panel = panel;
 		this.extensionUri = extensionUri;
 		this.workbookUri = workbookUri;
-		this.panelKey = panelKey;
+		this.panelId = panelId;
+		this.panel.webview.options = {
+			enableScripts: true,
+			localResourceRoots: [extensionUri],
+		};
 
 		this.panel.webview.html = this.getHtml();
 		this.panel.onDidDispose(
 			() => {
-				XlsxEditorPanel.panels.delete(this.panelKey);
+				XlsxEditorPanel.panels.delete(this.panelId);
 				this.dispose();
 			},
 			null,
@@ -193,32 +227,16 @@ export class XlsxEditorPanel {
 		this.refreshFileWatchers();
 	}
 
-	public static async create(
+	public static async resolveCustomEditor(
 		extensionUri: vscode.Uri,
 		workbookUri: vscode.Uri,
-		viewColumn: vscode.ViewColumn = vscode.ViewColumn.Active,
+		panel: vscode.WebviewPanel,
 	): Promise<void> {
-		const panelKey = workbookUri.toString();
-		const existingPanel = XlsxEditorPanel.panels.get(panelKey);
-		if (existingPanel) {
-			existingPanel.panel.reveal(viewColumn, true);
-			await existingPanel.enqueueReload();
-			return;
-		}
-
-		const panel = vscode.window.createWebviewPanel(
-			WEBVIEW_TYPE_EDITOR_PANEL,
-			getWorkbookResourceName(workbookUri),
-			viewColumn,
-			{
-				enableScripts: true,
-				retainContextWhenHidden: true,
-				localResourceRoots: [extensionUri],
-			},
-		);
-
-		const instance = new XlsxEditorPanel(panel, extensionUri, workbookUri, panelKey);
-		XlsxEditorPanel.panels.set(panelKey, instance);
+		const panelId = XlsxEditorPanel.nextPanelId;
+		XlsxEditorPanel.nextPanelId += 1;
+		panel.title = getWorkbookResourceName(workbookUri);
+		const instance = new XlsxEditorPanel(panel, extensionUri, workbookUri, panelId);
+		XlsxEditorPanel.panels.set(panelId, instance);
 		await instance.enqueueReload();
 	}
 
@@ -448,6 +466,37 @@ export class XlsxEditorPanel {
 					this.state = moveEditorPageCursor(this.workbook, this.state, 1);
 					await this.render();
 					return;
+				case 'search': {
+					if (!this.workbook) {
+						return;
+					}
+
+					const match = this.findSearchMatch(message.query, message.direction);
+					if (!match) {
+						await vscode.window.showInformationMessage(
+							getWebviewStrings().noSearchMatches,
+						);
+						return;
+					}
+
+					this.revealCell(match.sheetKey, match.rowNumber, match.columnNumber);
+					await this.render();
+					return;
+				}
+				case 'gotoCell':
+					if (!this.workbook) {
+						return;
+					}
+
+					if (!this.gotoCellReference(message.reference)) {
+						await vscode.window.showInformationMessage(
+							getWebviewStrings().invalidCellReference,
+						);
+						return;
+					}
+
+					await this.render();
+					return;
 				case 'selectCell':
 					if (!this.workbook) {
 						return;
@@ -501,6 +550,161 @@ export class XlsxEditorPanel {
 		} catch (error) {
 			await this.handleError(error);
 		}
+	}
+
+	private revealCell(
+		sheetKey: string,
+		rowNumber: number,
+		columnNumber: number,
+	): void {
+		if (!this.workbook) {
+			return;
+		}
+
+		this.state = setSelectedEditorCell(
+			this.workbook,
+			setActiveEditorSheet(this.workbook, this.state, sheetKey),
+			rowNumber,
+			columnNumber,
+		);
+	}
+
+	private getSheetEntries(): Array<{
+		key: string;
+		index: number;
+		sheet: WorkbookSnapshot['sheets'][number];
+	}> {
+		if (!this.workbook) {
+			return [];
+		}
+
+		return this.workbook.sheets.map((sheet, index) => ({
+			key: getEditorSheetKey(sheet, index),
+			index,
+			sheet,
+		}));
+	}
+
+	private findSearchMatch(
+		query: string,
+		direction: 'next' | 'prev',
+	): { sheetKey: string; rowNumber: number; columnNumber: number } | null {
+		const normalizedQuery = query.trim().toLocaleLowerCase();
+		if (!this.workbook || !normalizedQuery) {
+			return null;
+		}
+
+		const sheetEntries = this.getSheetEntries();
+		const matches = sheetEntries.flatMap((entry) =>
+			Object.values(entry.sheet.cells)
+				.filter((cell) => {
+					const value = cell.displayValue.toLocaleLowerCase();
+					const formula = cell.formula?.toLocaleLowerCase() ?? '';
+					return value.includes(normalizedQuery) || formula.includes(normalizedQuery);
+				})
+				.map((cell) => ({
+					sheetKey: entry.key,
+					sheetIndex: entry.index,
+					rowNumber: cell.rowNumber,
+					columnNumber: cell.columnNumber,
+				})),
+		);
+
+		if (matches.length === 0) {
+			return null;
+		}
+
+		matches.sort((left, right) => {
+			if (left.sheetIndex !== right.sheetIndex) {
+				return left.sheetIndex - right.sheetIndex;
+			}
+
+			if (left.rowNumber !== right.rowNumber) {
+				return left.rowNumber - right.rowNumber;
+			}
+
+			return left.columnNumber - right.columnNumber;
+		});
+
+		const activeSheetIndex = sheetEntries.findIndex(
+			(entry) => entry.key === this.state.activeSheetKey,
+		);
+		const anchor = {
+			sheetIndex: activeSheetIndex < 0 ? 0 : activeSheetIndex,
+			rowNumber: this.state.selectedCell?.rowNumber ?? 1,
+			columnNumber: this.state.selectedCell?.columnNumber ?? 1,
+		};
+		const compare = (
+			candidate: { sheetIndex: number; rowNumber: number; columnNumber: number },
+			current: { sheetIndex: number; rowNumber: number; columnNumber: number },
+		): number => {
+			if (candidate.sheetIndex !== current.sheetIndex) {
+				return candidate.sheetIndex - current.sheetIndex;
+			}
+
+			if (candidate.rowNumber !== current.rowNumber) {
+				return candidate.rowNumber - current.rowNumber;
+			}
+
+			return candidate.columnNumber - current.columnNumber;
+		};
+
+		if (direction === 'prev') {
+			for (let index = matches.length - 1; index >= 0; index -= 1) {
+				if (compare(matches[index], anchor) < 0) {
+					return matches[index];
+				}
+			}
+
+			return matches[matches.length - 1];
+		}
+
+		return matches.find((match) => compare(match, anchor) > 0) ?? matches[0];
+	}
+
+	private gotoCellReference(reference: string): boolean {
+		if (!this.workbook) {
+			return false;
+		}
+
+		const trimmedReference = reference.trim();
+		if (!trimmedReference) {
+			return false;
+		}
+
+		const separatorIndex = trimmedReference.lastIndexOf('!');
+		const sheetName = separatorIndex > 0 ? trimmedReference.slice(0, separatorIndex).trim() : null;
+		const address = separatorIndex > 0 ? trimmedReference.slice(separatorIndex + 1).trim() : trimmedReference;
+		const addressMatch = /^([A-Za-z]+)(\d+)$/.exec(address);
+		if (!addressMatch) {
+			return false;
+		}
+
+		const columnNumber = getColumnNumber(addressMatch[1]);
+		const rowNumber = Number(addressMatch[2]);
+		if (!columnNumber || rowNumber < 1) {
+			return false;
+		}
+
+		const sheetEntries = this.getSheetEntries();
+		const targetSheet = sheetName
+			? sheetEntries.find(
+				(entry) =>
+					entry.sheet.name === sheetName ||
+					entry.sheet.name.toLocaleLowerCase() === sheetName.toLocaleLowerCase(),
+			  )
+			: sheetEntries.find((entry) => entry.key === this.state.activeSheetKey) ?? sheetEntries[0];
+
+		if (
+			!targetSheet ||
+			rowNumber > targetSheet.sheet.rowCount ||
+			columnNumber > targetSheet.sheet.columnCount
+		) {
+			return false;
+		}
+
+		this.revealCell(targetSheet.key, rowNumber, columnNumber);
+		return true;
 	}
 
 	private async reloadModel({ silent = false, clearPendingEdits = false }: { silent?: boolean; clearPendingEdits?: boolean } = {}): Promise<void> {

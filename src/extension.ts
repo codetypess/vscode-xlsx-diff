@@ -11,10 +11,12 @@ import { affectsDisplayLanguage } from './displayLanguage';
 import { XlsxDiffUriHandler } from './git/uriHandler';
 import { registerScmWorkbookDiffInterceptor } from './scm/scmDiffInterceptor';
 import { XlsxDiffPanel } from './webview/diffPanel';
+import { XlsxCustomEditorProvider } from './webview/xlsxCustomEditorProvider';
 import { XlsxEditorPanel } from './webview/xlsxEditorPanel';
 
 export function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(
+		XlsxCustomEditorProvider.register(context),
 		vscode.window.registerUriHandler(
 			new XlsxDiffUriHandler(context.extensionUri),
 		),
@@ -32,7 +34,7 @@ export function activate(context: vscode.ExtensionContext) {
 		vscode.commands.registerCommand(
 			COMMAND_OPEN_EDITOR,
 			async (resource?: unknown) => {
-				await openEditor(context.extensionUri, resource);
+				await openEditor(resource);
 			},
 		),
 		vscode.commands.registerCommand(

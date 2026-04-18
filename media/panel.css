@@ -40,7 +40,7 @@ body {
 }
 
 .app--editor {
-	grid-template-rows: auto auto minmax(0, 1fr) auto;
+	grid-template-rows: auto minmax(0, 1fr) auto;
 }
 
 .toolbar {
@@ -56,13 +56,56 @@ body {
 }
 
 .toolbar--editor {
-	justify-content: flex-end;
+	justify-content: space-between;
+	align-items: center;
 }
 
 .toolbar__group {
 	display: flex;
 	flex-wrap: wrap;
 	gap: 6px;
+}
+
+.toolbar__group--grow {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+.toolbar__field {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	min-width: min(280px, 100%);
+	padding: 0 10px;
+	border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
+	border-radius: 4px;
+	background: var(--vscode-input-background, var(--vscode-editor-background));
+	color: var(--vscode-input-foreground, var(--vscode-editor-foreground));
+}
+
+.toolbar__field--goto {
+	min-width: min(220px, 100%);
+}
+
+.toolbar__field-icon {
+	color: var(--vscode-descriptionForeground);
+	font-size: 14px;
+	line-height: 1;
+}
+
+.toolbar__input {
+	width: 100%;
+	min-width: 0;
+	padding: 6px 0;
+	border: 0;
+	outline: none;
+	background: transparent;
+	color: inherit;
+	font: inherit;
+}
+
+.toolbar__input::placeholder {
+	color: var(--vscode-input-placeholderForeground, var(--vscode-descriptionForeground));
 }
 
 .toolbar__button {
@@ -332,6 +375,11 @@ body {
 	cursor: pointer;
 }
 
+.grid__cell--locked {
+	cursor: not-allowed;
+	background: color-mix(in srgb, var(--vscode-editor-background) 92%, white 8%);
+}
+
 .grid__cell-content {
 	display: flex;
 	align-items: flex-start;
@@ -585,4 +633,20 @@ body {
 
 .status strong {
 	color: var(--vscode-editor-foreground);
+}
+
+@media (max-width: 960px) {
+	.toolbar--editor {
+		align-items: stretch;
+	}
+
+	.toolbar__group--grow {
+		width: 100%;
+	}
+
+	.toolbar__field,
+	.toolbar__field--goto {
+		min-width: 0;
+		flex: 1 1 220px;
+	}
 }

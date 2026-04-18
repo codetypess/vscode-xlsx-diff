@@ -11,13 +11,24 @@
   var isSaving = false;
   var lastPendingNotification = null;
   var pendingSelectionAfterRender = null;
+  var searchQuery = "";
+  var gotoReference = "";
   var pendingEdits = /* @__PURE__ */ new Map();
+  var undoStack = [];
+  var redoStack = [];
   function getPendingEditKey(sheetKey, rowNumber, columnNumber) {
     return `${sheetKey}:${rowNumber}:${columnNumber}`;
   }
   var DEFAULT_STRINGS = {
     loading: "Loading XLSX editor...",
     reload: "Reload",
+    undo: "Undo",
+    redo: "Redo",
+    searchPlaceholder: "Search values or formulas",
+    findPrev: "Prev Match",
+    findNext: "Next Match",
+    gotoPlaceholder: "A1 or Sheet1!B2",
+    goto: "Go",
     prevPage: "Prev Page",
     nextPage: "Next Page",
     size: "Size",
@@ -86,6 +97,12 @@
   function getCellView(rowNumber, columnNumber) {
     const row = model?.page.rows.find((item) => item.rowNumber === rowNumber);
     return row?.cells[columnNumber - 1] ?? null;
+  }
+  function isGridCellEditable(cell) {
+    return Boolean(model?.canEdit && !cell?.formula);
+  }
+  function canEditCellAt(rowNumber, columnNumber) {
+    return isGridCellEditable(getCellView(rowNumber, columnNumber));
   }
   function clearSelectedCells() {
     for (const cell of document.querySelectorAll(".grid__cell--selected")) {
@@ -224,9 +241,6 @@
       syncSelectedCellToHost();
     }
   }
-  function canEditCell() {
-    return Boolean(model?.canEdit);
-  }
   function getCellModelValue(rowNumber, columnNumber) {
     return getCellView(rowNumber, columnNumber)?.value ?? "";
   }
@@ -244,16 +258,26 @@
   function updateSaveButtonState() {
     notifyPendingEditState();
     const saveBtn = document.querySelector('[data-action="save-edits"]');
-    if (!saveBtn) {
-      return;
-    }
     const hasPendingEdits = pendingEdits.size > 0;
-    saveBtn.disabled = !model?.canEdit || !hasPendingEdits || isSaving;
-    saveBtn.classList.toggle("is-dirty", hasPendingEdits);
-    if (isSaving) {
-      saveBtn.setAttribute("aria-busy", "true");
-    } else {
-      saveBtn.removeAttribute("aria-busy");
+    if (saveBtn) {
+      saveBtn.disabled = !model?.canEdit || !hasPendingEdits || isSaving;
+      saveBtn.classList.toggle("is-dirty", hasPendingEdits);
+      if (isSaving) {
+        saveBtn.setAttribute("aria-busy", "true");
+      } else {
+        saveBtn.removeAttribute("aria-busy");
+      }
+    }
+    updateHistoryButtonState();
+  }
+  function updateHistoryButtonState() {
+    const undoButton = document.querySelector('[data-action="undo"]');
+    if (undoButton) {
+      undoButton.disabled = !model?.canEdit || undoStack.length === 0 || isSaving;
+    }
+    const redoButton = document.querySelector('[data-action="redo"]');
+    if (redoButton) {
+      redoButton.disabled = !model?.canEdit || redoStack.length === 0 || isSaving;
     }
   }
   function syncCellDisplay(cellEl, sheetKey, rowNumber, columnNumber) {
@@ -287,7 +311,7 @@
     syncCellDisplay(cellEl, sheetKey, rowNumber, columnNumber);
   }
   function clearSelectedCellValue() {
-    if (!model || !selectedCell || !canEditCell()) {
+    if (!model || !selectedCell || !canEditCellAt(selectedCell.rowNumber, selectedCell.columnNumber)) {
       return;
     }
     commitEdit(
@@ -352,16 +376,80 @@
       updateLabelMarker(tabEl, hasPending, "tab__marker");
     }
   }
-  function commitEdit(sheetKey, rowNumber, columnNumber, value) {
-    const key = getPendingEditKey(sheetKey, rowNumber, columnNumber);
-    const modelValue = getCellModelValue(rowNumber, columnNumber);
-    if (value === modelValue) {
+  function setPendingCellValue(change, value) {
+    const key = getPendingEditKey(change.sheetKey, change.rowNumber, change.columnNumber);
+    if (value === change.modelValue) {
       pendingEdits.delete(key);
-    } else {
-      pendingEdits.set(key, { sheetKey, rowNumber, columnNumber, value });
+      return;
+    }
+    pendingEdits.set(key, {
+      sheetKey: change.sheetKey,
+      rowNumber: change.rowNumber,
+      columnNumber: change.columnNumber,
+      value
+    });
+  }
+  function applyEditChanges(changes, { recordHistory = true } = {}) {
+    const effectiveChanges = changes.filter(
+      (change) => change.beforeValue !== change.afterValue
+    );
+    if (effectiveChanges.length === 0) {
+      updateSaveButtonState();
+      return;
+    }
+    if (recordHistory) {
+      undoStack.push({ changes: effectiveChanges });
+      redoStack.length = 0;
+    }
+    for (const change of effectiveChanges) {
+      setPendingCellValue(change, change.afterValue);
     }
     applyPendingEditStyles();
     updateSaveButtonState();
+  }
+  function applyHistoryEntry(entry, direction) {
+    for (const change of entry.changes) {
+      setPendingCellValue(
+        change,
+        direction === "undo" ? change.beforeValue : change.afterValue
+      );
+    }
+    applyPendingEditStyles();
+    updateSaveButtonState();
+  }
+  function undoPendingEdits() {
+    const entry = undoStack.pop();
+    if (!entry) {
+      updateHistoryButtonState();
+      return;
+    }
+    applyHistoryEntry(entry, "undo");
+    redoStack.push(entry);
+    updateHistoryButtonState();
+  }
+  function redoPendingEdits() {
+    const entry = redoStack.pop();
+    if (!entry) {
+      updateHistoryButtonState();
+      return;
+    }
+    applyHistoryEntry(entry, "redo");
+    undoStack.push(entry);
+    updateHistoryButtonState();
+  }
+  function commitEdit(sheetKey, rowNumber, columnNumber, value) {
+    const modelValue = getCellModelValue(rowNumber, columnNumber);
+    const beforeValue = pendingEdits.get(getPendingEditKey(sheetKey, rowNumber, columnNumber))?.value ?? modelValue;
+    applyEditChanges([
+      {
+        sheetKey,
+        rowNumber,
+        columnNumber,
+        modelValue,
+        beforeValue,
+        afterValue: value
+      }
+    ]);
   }
   function triggerSave() {
     if (!model || pendingEdits.size === 0 || isSaving) {
@@ -383,11 +471,12 @@
     return lines.map((line) => line.split("	"));
   }
   function applyPastedGrid(grid) {
-    if (!model || !selectedCell || grid.length === 0) {
+    if (!model || !selectedCell || grid.length === 0 || !model.canEdit) {
       return;
     }
     const maxRow = model.activeSheet.rowCount;
     const maxColumn = model.activeSheet.columnCount;
+    const changes = [];
     for (let rowOffset = 0; rowOffset < grid.length; rowOffset += 1) {
       const targetRow = selectedCell.rowNumber + rowOffset;
       if (targetRow > maxRow) {
@@ -399,9 +488,23 @@
         if (targetColumn > maxColumn) {
           break;
         }
-        commitEdit(model.activeSheet.key, targetRow, targetColumn, values[columnOffset] ?? "");
+        if (!canEditCellAt(targetRow, targetColumn)) {
+          continue;
+        }
+        const modelValue = getCellModelValue(targetRow, targetColumn);
+        changes.push({
+          sheetKey: model.activeSheet.key,
+          rowNumber: targetRow,
+          columnNumber: targetColumn,
+          modelValue,
+          beforeValue: pendingEdits.get(
+            getPendingEditKey(model.activeSheet.key, targetRow, targetColumn)
+          )?.value ?? modelValue,
+          afterValue: values[columnOffset] ?? ""
+        });
       }
     }
+    applyEditChanges(changes);
     applySelectedCell({ reveal: true });
   }
   function enterEditMode(cellEl, rowNumber, columnNumber, currentValue) {
@@ -510,8 +613,12 @@
     ).join("");
     const bodyRows = model.page.rows.map((row) => {
       const cells = row.cells.map((cell, columnIndex) => {
-        const cellClass = ["grid__cell", cell.isSelected ? "grid__cell--selected" : ""].filter(Boolean).join(" ");
-        const editable = canEditCell() ? "true" : "false";
+        const cellClass = [
+          "grid__cell",
+          cell.isSelected ? "grid__cell--selected" : "",
+          isGridCellEditable(cell) ? "" : "grid__cell--locked"
+        ].filter(Boolean).join(" ");
+        const editable = isGridCellEditable(cell) ? "true" : "false";
         return `<td title="${escapeHtml(getCellTooltip(cell.address, cell.value, cell.formula))}" class="${cellClass}" data-role="grid-cell" data-row-number="${row.rowNumber}" data-column-number="${columnIndex + 1}" data-editable="${editable}" aria-selected="${cell.isSelected ? "true" : "false"}">
 						<div class="grid__cell-content">${renderCellValue(cell.value, cell.formula)}</div>
 					</td>`;
@@ -537,25 +644,6 @@
 		</table>
 	`;
   }
-  function renderFileCard(file) {
-    const readOnlyIcon = file.isReadonly ? `<span class="codicon codicon-lock file-card__lock" title="${escapeHtml(STRINGS.readOnly)}" aria-label="${escapeHtml(STRINGS.readOnly)}"></span>` : "";
-    return `
-		<div class="file-card">
-			<div class="file-card__name" title="${escapeHtml(file.filePath)}">
-				<span class="file-card__name-text">${escapeHtml(file.fileName)}</span>
-				${readOnlyIcon}
-			</div>
-			<div class="file-card__meta">
-				<div class="file-card__path" title="${escapeHtml(file.filePath)}">${escapeHtml(file.filePath)}</div>
-				<div class="file-card__facts">
-					<span>${escapeHtml(STRINGS.size)}: ${escapeHtml(file.fileSizeLabel)}</span>
-					${file.detailLabel && file.detailValue ? `<span>${escapeHtml(file.detailLabel)}: ${escapeHtml(file.detailValue)}</span>` : ""}
-					<span>${escapeHtml(STRINGS.modified)}: ${escapeHtml(file.modifiedTimeLabel)}</span>
-				</div>
-			</div>
-		</div>
-	`;
-  }
   function renderToolbarButton({
     action,
     icon,
@@ -571,7 +659,22 @@
     const currentModel = model;
     return `
 		<header class="toolbar toolbar--editor">
+			<div class="toolbar__group toolbar__group--grow">
+				<label class="toolbar__field">
+					<span class="codicon codicon-search toolbar__field-icon" aria-hidden="true"></span>
+					<input class="toolbar__input" data-role="search-input" type="text" value="${escapeHtml(searchQuery)}" placeholder="${escapeHtml(STRINGS.searchPlaceholder)}" />
+				</label>
+				${renderToolbarButton({ action: "search-prev", icon: "codicon-arrow-up", label: STRINGS.findPrev })}
+				${renderToolbarButton({ action: "search-next", icon: "codicon-arrow-down", label: STRINGS.findNext })}
+				<label class="toolbar__field toolbar__field--goto">
+					<span class="codicon codicon-target toolbar__field-icon" aria-hidden="true"></span>
+					<input class="toolbar__input" data-role="goto-input" type="text" value="${escapeHtml(gotoReference)}" placeholder="${escapeHtml(STRINGS.gotoPlaceholder)}" />
+				</label>
+				${renderToolbarButton({ action: "goto-cell", icon: "codicon-target", label: STRINGS.goto })}
+			</div>
 			<div class="toolbar__group">
+				${renderToolbarButton({ action: "undo", icon: "codicon-undo", label: STRINGS.undo, disabled: !currentModel.canEdit || undoStack.length === 0 })}
+				${renderToolbarButton({ action: "redo", icon: "codicon-redo", label: STRINGS.redo, disabled: !currentModel.canEdit || redoStack.length === 0 })}
 				${renderToolbarButton({ action: "reload", icon: "codicon-refresh", label: STRINGS.reload })}
 				${renderToolbarButton({ action: "save-edits", icon: "codicon-save", label: STRINGS.save, disabled: !currentModel.canSave })}
 			</div>
@@ -628,19 +731,68 @@
     document.body.innerHTML = `
 		<div id="app" class="app app--editor">
 			${renderToolbar()}
-			<section class="files files--single">
-				${renderFileCard(model.file)}
-			</section>
 			<section class="panes panes--single">
 				${renderPane()}
 			</section>
 			${renderStatus()}
 		</div>
 	`;
+    bindToolbarInputs();
     restorePaneScrollState(previousScrollState);
     applyPendingEditStyles();
     updateSaveButtonState();
     syncSelectedCellAfterRender({ reveal: revealSelection });
+  }
+  function bindToolbarInputs() {
+    const searchInput = document.querySelector('[data-role="search-input"]');
+    if (searchInput) {
+      searchInput.addEventListener("input", () => {
+        searchQuery = searchInput.value;
+      });
+      searchInput.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter") {
+          return;
+        }
+        event.preventDefault();
+        submitSearch(event.shiftKey ? "prev" : "next");
+      });
+    }
+    const gotoInput = document.querySelector('[data-role="goto-input"]');
+    if (gotoInput) {
+      gotoInput.addEventListener("input", () => {
+        gotoReference = gotoInput.value;
+      });
+      gotoInput.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter") {
+          return;
+        }
+        event.preventDefault();
+        submitGoto();
+      });
+    }
+  }
+  function submitSearch(direction) {
+    const query = searchQuery.trim();
+    if (!query) {
+      return;
+    }
+    vscode.postMessage({ type: "search", query, direction });
+  }
+  function submitGoto() {
+    const reference = gotoReference.trim();
+    if (!reference) {
+      return;
+    }
+    vscode.postMessage({ type: "gotoCell", reference });
+  }
+  function focusToolbarInput(role) {
+    const selector = role === "search" ? '[data-role="search-input"]' : '[data-role="goto-input"]';
+    const input = document.querySelector(selector);
+    if (!input) {
+      return;
+    }
+    input.focus();
+    input.select();
   }
   window.addEventListener("message", (event) => {
     const message = event.data;
@@ -659,6 +811,9 @@
       isSaving = false;
       if (message.clearPendingEdits) {
         pendingEdits.clear();
+        undoStack.length = 0;
+        redoStack.length = 0;
+        lastPendingNotification = null;
       }
       renderApp({ revealSelection: !message.silent });
     }
@@ -690,6 +845,21 @@
       case "set-sheet":
         vscode.postMessage({ type: "setSheet", sheetKey: target.getAttribute("data-sheet-key") });
         return;
+      case "search-prev":
+        submitSearch("prev");
+        return;
+      case "search-next":
+        submitSearch("next");
+        return;
+      case "goto-cell":
+        submitGoto();
+        return;
+      case "undo":
+        undoPendingEdits();
+        return;
+      case "redo":
+        redoPendingEdits();
+        return;
       case "reload":
         vscode.postMessage({ type: "reload" });
         return;
@@ -703,6 +873,32 @@
       event.preventDefault();
       triggerSave();
       return;
+    }
+    if (!editState && (event.ctrlKey || event.metaKey) && !event.altKey) {
+      if (event.key.toLowerCase() === "f") {
+        event.preventDefault();
+        focusToolbarInput("search");
+        return;
+      }
+      if (event.key.toLowerCase() === "g") {
+        event.preventDefault();
+        focusToolbarInput("goto");
+        return;
+      }
+      if (event.key.toLowerCase() === "z") {
+        event.preventDefault();
+        if (event.shiftKey) {
+          redoPendingEdits();
+        } else {
+          undoPendingEdits();
+        }
+        return;
+      }
+      if (event.key.toLowerCase() === "y") {
+        event.preventDefault();
+        redoPendingEdits();
+        return;
+      }
     }
     if (editState) {
       return;
@@ -751,7 +947,7 @@
     }
   });
   document.addEventListener("paste", (event) => {
-    if (editState || !model || !selectedCell || !canEditCell()) {
+    if (editState || !model || !selectedCell || !model.canEdit) {
       return;
     }
     const text = event.clipboardData?.getData("text/plain");
@@ -763,7 +959,7 @@
   });
   document.addEventListener("dblclick", (event) => {
     const eventTarget = event.target instanceof Element ? event.target : null;
-    if (!eventTarget || !model || !canEditCell()) {
+    if (!eventTarget || !model || !model.canEdit) {
       return;
     }
     const cellTarget = eventTarget.closest('[data-role="grid-cell"]');
