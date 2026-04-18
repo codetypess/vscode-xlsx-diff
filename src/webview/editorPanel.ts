@@ -3,6 +3,7 @@ import type {
 	EditorRenderModel,
 	EditorSheetTabView,
 } from '../core/model/types';
+import { getColumnLabel } from '../core/model/cells';
 import { DEFAULT_PAGE_SIZE } from '../constants';
 
 interface VsCodeApi {
@@ -16,17 +17,37 @@ type OutgoingMessage =
 	| { type: 'setSheet'; sheetKey: string }
 	| { type: 'prevPage' }
 	| { type: 'nextPage' }
-	| { type: 'search'; query: string; direction: 'next' | 'prev' }
+	| {
+			type: 'search';
+			query: string;
+			direction: 'next' | 'prev';
+			options: SearchOptions;
+	  }
 	| { type: 'gotoCell'; reference: string }
 	| { type: 'selectCell'; rowNumber: number; columnNumber: number }
-	| { type: 'saveEdits'; edits: Array<{ sheetKey: string; rowNumber: number; columnNumber: number; value: string }> }
+	| {
+			type: 'setPendingEdits';
+			edits: Array<{
+				sheetKey: string;
+				rowNumber: number;
+				columnNumber: number;
+				value: string;
+			}>;
+	  }
+	| { type: 'requestSave' }
 	| { type: 'pendingEditStateChanged'; hasPendingEdits: boolean }
 	| { type: 'reload' };
 
 type IncomingMessage =
 	| { type: 'loading'; message: string }
 	| { type: 'error'; message: string }
-	| { type: 'render'; payload: EditorRenderModel; silent?: boolean; clearPendingEdits?: boolean };
+	| {
+			type: 'render';
+			payload: EditorRenderModel;
+			silent?: boolean;
+			clearPendingEdits?: boolean;
+			useModelSelection?: boolean;
+	  };
 
 const vscode = acquireVsCodeApi();
 
@@ -46,6 +67,19 @@ let pendingSelectionAfterRender:
 	| null = null;
 let searchQuery = '';
 let gotoReference = '';
+let lastPendingEditsSyncKey: string | null = null;
+
+interface SearchOptions {
+	isRegexp: boolean;
+	matchCase: boolean;
+	wholeWord: boolean;
+}
+
+let searchOptions: SearchOptions = {
+	isRegexp: false,
+	matchCase: false,
+	wholeWord: false,
+};
 
 interface PendingEdit {
 	sheetKey: string;
@@ -86,6 +120,9 @@ const DEFAULT_STRINGS = {
 	findNext: 'Next Match',
 	gotoPlaceholder: 'A1 or Sheet1!B2',
 	goto: 'Go',
+	searchRegex: 'Use Regular Expression',
+	searchMatchCase: 'Match Case',
+	searchWholeWord: 'Match Whole Word',
 	prevPage: 'Prev Page',
 	nextPage: 'Next Page',
 	size: 'Size',
@@ -97,6 +134,8 @@ const DEFAULT_STRINGS = {
 	visibleRows: 'Visible rows',
 	readOnly: 'Read-only',
 	save: 'Save',
+	selectedCell: 'Selected cell',
+	noCellSelected: 'None',
 	totalSheets: 'Sheets',
 	totalRows: 'Rows',
 	nonEmptyCells: 'Non-empty cells',
@@ -118,6 +157,53 @@ function escapeHtml(value: string): string {
 		.replaceAll('>', '&gt;')
 		.replaceAll('"', '&quot;')
 		.replaceAll("'", '&#39;');
+}
+
+function serializePendingEdits(edits: PendingEdit[]): string {
+	return JSON.stringify(
+		[...edits]
+			.sort((left, right) => {
+				if (left.sheetKey !== right.sheetKey) {
+					return left.sheetKey.localeCompare(right.sheetKey);
+				}
+
+				if (left.rowNumber !== right.rowNumber) {
+					return left.rowNumber - right.rowNumber;
+				}
+
+				if (left.columnNumber !== right.columnNumber) {
+					return left.columnNumber - right.columnNumber;
+				}
+
+				return left.value.localeCompare(right.value);
+			})
+			.map((edit) => ({
+				sheetKey: edit.sheetKey,
+				rowNumber: edit.rowNumber,
+				columnNumber: edit.columnNumber,
+				value: edit.value,
+			})),
+	);
+}
+
+function isTextInputTarget(target: EventTarget | null): boolean {
+	if (!(target instanceof HTMLElement)) {
+		return false;
+	}
+
+	if (
+		target instanceof HTMLInputElement ||
+		target instanceof HTMLTextAreaElement ||
+		target.isContentEditable
+	) {
+		return true;
+	}
+
+	return Boolean(target.closest('input, textarea, [contenteditable="true"], [contenteditable=""]'));
+}
+
+function clearBrowserTextSelection(): void {
+	globalThis.getSelection?.()?.removeAllRanges();
 }
 
 function renderLoading(message: string): void {
@@ -212,6 +298,72 @@ function getSelectedCellElements(): HTMLElement[] {
 	);
 }
 
+function getSelectedCellAddress(): string {
+	if (!selectedCell) {
+		return STRINGS.noCellSelected;
+	}
+
+	const cell = getCellView(selectedCell.rowNumber, selectedCell.columnNumber);
+	return cell?.address ?? `${getColumnLabel(selectedCell.columnNumber)}${selectedCell.rowNumber}`;
+}
+
+function updateSelectedCellBadge(): void {
+	const badge = document.querySelector<HTMLElement>('[data-role="selected-cell-address"]');
+	if (!badge) {
+		return;
+	}
+
+	const address = getSelectedCellAddress();
+	const title = `${STRINGS.selectedCell}: ${address}`;
+	badge.textContent = address;
+	badge.title = title;
+	badge.setAttribute('aria-label', title);
+}
+
+function clearSelectionContextHighlights(): void {
+	for (const element of document.querySelectorAll(
+		'.grid__cell--active-row, .grid__cell--active-column, .grid__row-number--active, .grid__column--active',
+	)) {
+		element.classList.remove(
+			'grid__cell--active-row',
+			'grid__cell--active-column',
+			'grid__row-number--active',
+			'grid__column--active',
+		);
+	}
+}
+
+function applySelectionContextHighlights(): void {
+	clearSelectionContextHighlights();
+	updateSelectedCellBadge();
+
+	if (!selectedCell) {
+		return;
+	}
+
+	for (const element of document.querySelectorAll<HTMLElement>(
+		`[data-role="grid-cell"][data-row-number="${selectedCell.rowNumber}"]`,
+	)) {
+		element.classList.add('grid__cell--active-row');
+	}
+
+	for (const element of document.querySelectorAll<HTMLElement>(
+		`[data-role="grid-cell"][data-column-number="${selectedCell.columnNumber}"]`,
+	)) {
+		element.classList.add('grid__cell--active-column');
+	}
+
+	const rowHeader = document.querySelector<HTMLElement>(
+		`th[data-role="grid-row-header"][data-row-number="${selectedCell.rowNumber}"]`,
+	);
+	rowHeader?.classList.add('grid__row-number--active');
+
+	const columnHeader = document.querySelector<HTMLElement>(
+		`thead th[data-column-number="${selectedCell.columnNumber}"]`,
+	);
+	columnHeader?.classList.add('grid__column--active');
+}
+
 function clampScrollPosition(value: number, maxValue: number): number {
 	return Math.max(0, Math.min(value, Math.max(maxValue, 0)));
 }
@@ -283,6 +435,8 @@ function revealSelectedCells(elements: HTMLElement[]): void {
 
 function applySelectedCell({ reveal = false }: { reveal?: boolean } = {}): void {
 	clearSelectedCells();
+	clearBrowserTextSelection();
+	applySelectionContextHighlights();
 
 	if (!selectedCell) {
 		return;
@@ -327,7 +481,24 @@ function setSelectedCellLocal(
 	}
 }
 
-function syncSelectedCellAfterRender({ reveal = false }: { reveal?: boolean } = {}): void {
+function syncSelectedCellAfterRender(
+	{ reveal = false, useModelSelection = false }: { reveal?: boolean; useModelSelection?: boolean } = {},
+): void {
+	if (
+		useModelSelection &&
+		model?.selection &&
+		getCellView(model.selection.rowNumber, model.selection.columnNumber)
+	) {
+		selectedCell = {
+			rowNumber: model.selection.rowNumber,
+			columnNumber: model.selection.columnNumber,
+		};
+		pendingSelectionAfterRender = null;
+		applySelectedCell({ reveal });
+		syncSelectedCellToHost();
+		return;
+	}
+
 	if (
 		pendingSelectionAfterRender &&
 		getCellView(
@@ -390,7 +561,7 @@ function updateSaveButtonState(): void {
 	notifyPendingEditState();
 
 	const saveBtn = document.querySelector<HTMLButtonElement>('[data-action="save-edits"]');
-	const hasPendingEdits = pendingEdits.size > 0;
+	const hasPendingEdits = pendingEdits.size > 0 || Boolean(model?.hasPendingEdits);
 	if (saveBtn) {
 		saveBtn.disabled = !model?.canEdit || !hasPendingEdits || isSaving;
 		saveBtn.classList.toggle('is-dirty', hasPendingEdits);
@@ -402,6 +573,21 @@ function updateSaveButtonState(): void {
 	}
 
 	updateHistoryButtonState();
+}
+
+function syncPendingEditsToHost(): void {
+	if (!model) {
+		return;
+	}
+
+	const edits = Array.from(pendingEdits.values());
+	const serializedEdits = serializePendingEdits(edits);
+	if (serializedEdits === lastPendingEditsSyncKey) {
+		return;
+	}
+
+	lastPendingEditsSyncKey = serializedEdits;
+	vscode.postMessage({ type: 'setPendingEdits', edits });
 }
 
 function updateHistoryButtonState(): void {
@@ -451,8 +637,7 @@ function finishEdit(
 	if (mode === 'commit') {
 		commitEdit(sheetKey, rowNumber, columnNumber, input.value);
 		if (clearSelection) {
-			selectedCell = null;
-			clearSelectedCells();
+			setSelectedCellLocal(null, { syncHost: false });
 		}
 		return;
 	}
@@ -586,6 +771,7 @@ function applyEditChanges(
 
 	applyPendingEditStyles();
 	updateSaveButtonState();
+	syncPendingEditsToHost();
 }
 
 function applyHistoryEntry(entry: HistoryEntry, direction: 'undo' | 'redo'): void {
@@ -598,6 +784,7 @@ function applyHistoryEntry(entry: HistoryEntry, direction: 'undo' | 'redo'): voi
 
 	applyPendingEditStyles();
 	updateSaveButtonState();
+	syncPendingEditsToHost();
 }
 
 function undoPendingEdits(): void {
@@ -648,17 +835,14 @@ function commitEdit(
 }
 
 function triggerSave(): void {
-	if (!model || pendingEdits.size === 0 || isSaving) {
+	if (!model || (!model.hasPendingEdits && pendingEdits.size === 0) || isSaving) {
 		return;
 	}
 
 	finishEdit({ mode: 'commit', clearSelection: true });
 	isSaving = true;
 	updateSaveButtonState();
-	vscode.postMessage({
-		type: 'saveEdits',
-		edits: Array.from(pendingEdits.values()),
-	});
+	vscode.postMessage({ type: 'requestSave' });
 }
 
 function normalizePastedRows(text: string): string[][] {
@@ -723,6 +907,7 @@ function enterEditMode(
 	currentValue: string,
 ): void {
 	finishEdit({ mode: 'commit' });
+	clearBrowserTextSelection();
 
 	const capturedSheetKey = model?.activeSheet.key;
 	const content = cellEl.querySelector<HTMLElement>('.grid__cell-content');
@@ -901,16 +1086,34 @@ function renderToolbarButton({
 	icon,
 	label,
 	disabled = false,
+	isActive = false,
+	iconOnly = false,
 }: {
 	action: string;
 	icon: string;
 	label: string;
 	disabled?: boolean;
+	isActive?: boolean;
+	iconOnly?: boolean;
 }): string {
-	return `<button class="toolbar__button" data-action="${action}" ${disabled ? 'disabled' : ''}>
+	return `<button class="toolbar__button${isActive ? ' is-active' : ''}${iconOnly ? ' toolbar__button--icon' : ''}" data-action="${action}" ${disabled ? 'disabled' : ''} title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}" type="button">
 		<span class="codicon ${icon} toolbar__button-icon" aria-hidden="true"></span>
-		<span>${escapeHtml(label)}</span>
+		${iconOnly ? '' : `<span>${escapeHtml(label)}</span>`}
 	</button>`;
+}
+
+function renderEmbeddedSearchToggle({
+	action,
+	text,
+	label,
+	isActive,
+}: {
+	action: string;
+	text: string;
+	label: string;
+	isActive: boolean;
+}): string {
+	return `<button class="toolbar__toggle${isActive ? ' is-active' : ''}" data-action="${action}" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}" type="button">${escapeHtml(text)}</button>`;
 }
 
 function renderToolbar(): string {
@@ -922,9 +1125,14 @@ function renderToolbar(): string {
 				<label class="toolbar__field">
 					<span class="codicon codicon-search toolbar__field-icon" aria-hidden="true"></span>
 					<input class="toolbar__input" data-role="search-input" type="text" value="${escapeHtml(searchQuery)}" placeholder="${escapeHtml(STRINGS.searchPlaceholder)}" />
+					<span class="toolbar__field-actions">
+						${renderEmbeddedSearchToggle({ action: 'toggle-search-regex', text: '.*', label: STRINGS.searchRegex, isActive: searchOptions.isRegexp })}
+						${renderEmbeddedSearchToggle({ action: 'toggle-search-match-case', text: 'Aa', label: STRINGS.searchMatchCase, isActive: searchOptions.matchCase })}
+						${renderEmbeddedSearchToggle({ action: 'toggle-search-whole-word', text: 'ab', label: STRINGS.searchWholeWord, isActive: searchOptions.wholeWord })}
+					</span>
 				</label>
-				${renderToolbarButton({ action: 'search-prev', icon: 'codicon-arrow-up', label: STRINGS.findPrev })}
-				${renderToolbarButton({ action: 'search-next', icon: 'codicon-arrow-down', label: STRINGS.findNext })}
+				${renderToolbarButton({ action: 'search-prev', icon: 'codicon-arrow-up', label: STRINGS.findPrev, iconOnly: true })}
+				${renderToolbarButton({ action: 'search-next', icon: 'codicon-arrow-down', label: STRINGS.findNext, iconOnly: true })}
 				<label class="toolbar__field toolbar__field--goto">
 					<span class="codicon codicon-target toolbar__field-icon" aria-hidden="true"></span>
 					<input class="toolbar__input" data-role="goto-input" type="text" value="${escapeHtml(gotoReference)}" placeholder="${escapeHtml(STRINGS.gotoPlaceholder)}" />
@@ -932,8 +1140,8 @@ function renderToolbar(): string {
 				${renderToolbarButton({ action: 'goto-cell', icon: 'codicon-target', label: STRINGS.goto })}
 			</div>
 			<div class="toolbar__group">
-				${renderToolbarButton({ action: 'undo', icon: 'codicon-undo', label: STRINGS.undo, disabled: !currentModel.canEdit || undoStack.length === 0 })}
-				${renderToolbarButton({ action: 'redo', icon: 'codicon-redo', label: STRINGS.redo, disabled: !currentModel.canEdit || redoStack.length === 0 })}
+				${renderToolbarButton({ action: 'undo', icon: 'codicon-undo', label: STRINGS.undo, disabled: !currentModel.canEdit || undoStack.length === 0, iconOnly: true })}
+				${renderToolbarButton({ action: 'redo', icon: 'codicon-redo', label: STRINGS.redo, disabled: !currentModel.canEdit || redoStack.length === 0, iconOnly: true })}
 				${renderToolbarButton({ action: 'reload', icon: 'codicon-refresh', label: STRINGS.reload })}
 				${renderToolbarButton({ action: 'save-edits', icon: 'codicon-save', label: STRINGS.save, disabled: !currentModel.canSave })}
 			</div>
@@ -942,10 +1150,16 @@ function renderToolbar(): string {
 }
 
 function renderPane(): string {
+	const selectedAddress = model!.selection?.address ?? STRINGS.noCellSelected;
+	const selectedCellTitle = `${STRINGS.selectedCell}: ${selectedAddress}`;
+
 	return `
 		<section class="pane pane--single">
 			<div class="pane__header">
-				<div class="pane__title">${escapeHtml(model!.activeSheet.label)}</div>
+				<div class="pane__header-group">
+					<div class="pane__title">${escapeHtml(model!.activeSheet.label)}</div>
+					<span class="badge badge--selection" data-role="selected-cell-address" title="${escapeHtml(selectedCellTitle)}">${escapeHtml(selectedAddress)}</span>
+				</div>
 				${model!.activeSheet.hasMergedRanges ? `<span class="badge badge--warn">${escapeHtml(STRINGS.mergedRanges)}: ${model!.activeSheet.mergedRangeCount}</span>` : ''}
 			</div>
 			<div class="pane__table">${renderTable()}</div>
@@ -987,7 +1201,9 @@ function renderStatus(): string {
 	`;
 }
 
-function renderApp({ revealSelection = false }: { revealSelection?: boolean } = {}): void {
+function renderApp(
+	{ revealSelection = false, useModelSelection = false }: { revealSelection?: boolean; useModelSelection?: boolean } = {},
+): void {
 	if (!model) {
 		renderLoading(STRINGS.loading);
 		return;
@@ -1010,7 +1226,7 @@ function renderApp({ revealSelection = false }: { revealSelection?: boolean } = 
 	restorePaneScrollState(previousScrollState);
 	applyPendingEditStyles();
 	updateSaveButtonState();
-	syncSelectedCellAfterRender({ reveal: revealSelection });
+	syncSelectedCellAfterRender({ reveal: revealSelection, useModelSelection });
 }
 
 function bindToolbarInputs(): void {
@@ -1053,7 +1269,7 @@ function submitSearch(direction: 'next' | 'prev'): void {
 		return;
 	}
 
-	vscode.postMessage({ type: 'search', query, direction });
+	vscode.postMessage({ type: 'search', query, direction, options: searchOptions });
 }
 
 function submitGoto(): void {
@@ -1099,10 +1315,31 @@ window.addEventListener('message', (event: MessageEvent<IncomingMessage>) => {
 			undoStack.length = 0;
 			redoStack.length = 0;
 			lastPendingNotification = null;
+			lastPendingEditsSyncKey = serializePendingEdits([]);
 		}
 
-		renderApp({ revealSelection: !message.silent });
+		renderApp({
+			revealSelection: !message.silent,
+			useModelSelection: message.useModelSelection,
+		});
 	}
+});
+
+document.addEventListener('pointerdown', (event: PointerEvent) => {
+	if (!editState) {
+		return;
+	}
+
+	const eventTarget = event.target instanceof Element ? event.target : null;
+	if (!eventTarget) {
+		return;
+	}
+
+	if (eventTarget === editState.input || eventTarget.closest('.grid__cell--editing')) {
+		return;
+	}
+
+	finishEdit({ mode: 'commit' });
 });
 
 document.addEventListener('click', (event: MouseEvent) => {
@@ -1137,6 +1374,18 @@ document.addEventListener('click', (event: MouseEvent) => {
 		case 'set-sheet':
 			vscode.postMessage({ type: 'setSheet', sheetKey: target.getAttribute('data-sheet-key')! });
 			return;
+		case 'toggle-search-regex':
+			searchOptions = { ...searchOptions, isRegexp: !searchOptions.isRegexp };
+			renderApp();
+			return;
+		case 'toggle-search-match-case':
+			searchOptions = { ...searchOptions, matchCase: !searchOptions.matchCase };
+			renderApp();
+			return;
+		case 'toggle-search-whole-word':
+			searchOptions = { ...searchOptions, wholeWord: !searchOptions.wholeWord };
+			renderApp();
+			return;
 		case 'search-prev':
 			submitSearch('prev');
 			return;
@@ -1162,9 +1411,15 @@ document.addEventListener('click', (event: MouseEvent) => {
 });
 
 document.addEventListener('keydown', (event: KeyboardEvent) => {
+	const isTextInputContext = isTextInputTarget(event.target);
+
 	if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
 		event.preventDefault();
 		triggerSave();
+		return;
+	}
+
+	if (isTextInputContext) {
 		return;
 	}
 
@@ -1249,7 +1504,7 @@ document.addEventListener('keydown', (event: KeyboardEvent) => {
 });
 
 document.addEventListener('paste', (event: ClipboardEvent) => {
-	if (editState || !model || !selectedCell || !model.canEdit) {
+	if (isTextInputTarget(event.target) || editState || !model || !selectedCell || !model.canEdit) {
 		return;
 	}
 
@@ -1279,6 +1534,7 @@ document.addEventListener('dblclick', (event: MouseEvent) => {
 	const pendingEdit = pendingEdits.get(pendingKey);
 	const currentValue = pendingEdit ? pendingEdit.value : getCellModelValue(rowNumber, columnNumber);
 
+	event.preventDefault();
 	setSelectedCellLocal({ rowNumber, columnNumber }, { syncHost: true });
 	enterEditMode(cellTarget, rowNumber, columnNumber, currentValue);
 });

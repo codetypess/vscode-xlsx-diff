@@ -1,3 +1,5 @@
+import { copyFile, mkdir } from 'node:fs/promises';
+import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { getCellAddress } from '../model/cells';
 
@@ -27,8 +29,22 @@ export async function writeCellValue(
  * Only local `file://` URIs are supported.
  */
 export async function writeCellValues(fileUri: vscode.Uri, edits: CellEdit[]): Promise<void> {
-	if (fileUri.scheme !== 'file') {
+	await writeCellValuesToDestination(fileUri, fileUri, edits);
+}
+
+export async function writeCellValuesToDestination(
+	sourceUri: vscode.Uri,
+	destinationUri: vscode.Uri,
+	edits: CellEdit[],
+): Promise<void> {
+	if (sourceUri.scheme !== 'file' || destinationUri.scheme !== 'file') {
 		throw new Error('Cell editing is only supported for local files.');
+	}
+
+	await mkdir(path.dirname(destinationUri.fsPath), { recursive: true });
+
+	if (sourceUri.fsPath !== destinationUri.fsPath) {
+		await copyFile(sourceUri.fsPath, destinationUri.fsPath);
 	}
 
 	if (edits.length === 0) {
@@ -36,7 +52,7 @@ export async function writeCellValues(fileUri: vscode.Uri, edits: CellEdit[]): P
 	}
 
 	const { Workbook } = await import('fastxlsx');
-	const workbook = await Workbook.open(fileUri.fsPath);
+	const workbook = await Workbook.open(destinationUri.fsPath);
 
 	for (const edit of edits) {
 		const sheet = workbook.getSheet(edit.sheetName);
@@ -44,5 +60,5 @@ export async function writeCellValues(fileUri: vscode.Uri, edits: CellEdit[]): P
 		sheet.cell(address).setValue(edit.value);
 	}
 
-	await workbook.save(fileUri.fsPath);
+	await workbook.save(destinationUri.fsPath);
 }

@@ -1,8 +1,9 @@
 import * as path from 'node:path';
 import * as vscode from 'vscode';
+import { DEFAULT_PAGE_SIZE } from '../constants';
 import { getColumnNumber } from '../core/model/cells';
 import { loadWorkbookSnapshot } from '../core/fastxlsx/loadWorkbookSnapshot';
-import { writeCellValues, type CellEdit } from '../core/fastxlsx/writeCellValue';
+import { type CellEdit } from '../core/fastxlsx/writeCellValue';
 import type {
 	EditorPanelState,
 	EditorRenderModel,
@@ -19,7 +20,14 @@ import {
 	setEditorCurrentPage,
 	setSelectedEditorCell,
 } from './editorRenderModel';
+import { XlsxEditorDocument } from './xlsxEditorDocument';
 import { getWorkbookResourceName } from '../workbook/resourceUri';
+
+interface SearchOptions {
+	isRegexp: boolean;
+	matchCase: boolean;
+	wholeWord: boolean;
+}
 
 type WebviewMessage =
 	| { type: 'ready' }
@@ -27,12 +35,32 @@ type WebviewMessage =
 	| { type: 'setPage'; page: number }
 	| { type: 'prevPage' }
 	| { type: 'nextPage' }
-	| { type: 'search'; query: string; direction: 'next' | 'prev' }
+	| {
+			type: 'search';
+			query: string;
+			direction: 'next' | 'prev';
+			options: SearchOptions;
+	  }
 	| { type: 'gotoCell'; reference: string }
 	| { type: 'selectCell'; rowNumber: number; columnNumber: number }
-	| { type: 'saveEdits'; edits: Array<{ sheetKey: string; rowNumber: number; columnNumber: number; value: string }> }
+	| {
+			type: 'setPendingEdits';
+			edits: Array<{
+				sheetKey: string;
+				rowNumber: number;
+				columnNumber: number;
+				value: string;
+			}>;
+	  }
+	| { type: 'requestSave' }
 	| { type: 'pendingEditStateChanged'; hasPendingEdits: boolean }
 	| { type: 'reload' };
+
+export interface XlsxEditorPanelController {
+	onPendingEditsChanged(edits: CellEdit[]): Promise<void> | void;
+	onRequestSave(): Promise<void> | void;
+	onRequestRevert(): Promise<void> | void;
+}
 
 interface WebviewStrings {
 	loading: string;
@@ -71,6 +99,10 @@ interface WebviewStrings {
 	displayLanguageRefreshBlocked: string;
 	noSearchMatches: string;
 	invalidCellReference: string;
+	invalidSearchPattern: string;
+	searchRegex: string;
+	searchMatchCase: string;
+	searchWholeWord: string;
 }
 
 function getNonce(): string {
@@ -83,6 +115,16 @@ function toErrorMessage(error: unknown): string {
 
 function escapeWatcherGlobSegment(value: string): string {
 	return value.replace(/[{}\[\]*?]/g, '[$&]');
+}
+
+function escapeRegex(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function createSearchPattern(query: string, options: SearchOptions): RegExp {
+	const source = options.isRegexp ? query.trim() : escapeRegex(query.trim());
+	const wrappedSource = options.wholeWord ? `\\b(?:${source})\\b` : source;
+	return new RegExp(wrappedSource, options.matchCase ? '' : 'i');
 }
 
 function getWebviewStrings(): WebviewStrings {
@@ -122,8 +164,12 @@ function getWebviewStrings(): WebviewStrings {
 			discardChangesAndReload: '放弃修改并刷新',
 			keepEditing: '继续编辑',
 			displayLanguageRefreshBlocked: '当前有未保存修改，语言变更将在保存或手动刷新后生效。',
-			noSearchMatches: '没有找到匹配的单元格。',
+			noSearchMatches: '当前页没有找到匹配的单元格。',
 			invalidCellReference: '无法定位该单元格，请使用 A1 或 Sheet1!B2 格式，并确保目标在当前工作簿范围内。',
+			invalidSearchPattern: '搜索表达式无效。',
+			searchRegex: '使用正则表达式',
+			searchMatchCase: '区分大小写',
+			searchWholeWord: '匹配整个单词',
 		};
 	}
 
@@ -162,8 +208,12 @@ function getWebviewStrings(): WebviewStrings {
 		discardChangesAndReload: 'Discard Changes and Reload',
 		keepEditing: 'Keep Editing',
 		displayLanguageRefreshBlocked: 'Pending edits are open. Display language changes will apply after you save or reload the editor.',
-		noSearchMatches: 'No matching cells were found.',
+		noSearchMatches: 'No matching cells were found on this page.',
 		invalidCellReference: 'Unable to locate that cell. Use A1 or Sheet1!B2 and stay within the workbook range.',
+		invalidSearchPattern: 'The search pattern is invalid.',
+		searchRegex: 'Use Regular Expression',
+		searchMatchCase: 'Match Case',
+		searchWholeWord: 'Match Whole Word',
 	};
 }
 
@@ -173,6 +223,8 @@ export class XlsxEditorPanel {
 
 	private readonly panel: vscode.WebviewPanel;
 	private readonly extensionUri: vscode.Uri;
+	private readonly document: XlsxEditorDocument;
+	private readonly controller: XlsxEditorPanelController;
 	private readonly disposables: vscode.Disposable[] = [];
 	private readonly fileWatchers: vscode.Disposable[] = [];
 	private readonly panelId: number;
@@ -190,17 +242,20 @@ export class XlsxEditorPanel {
 	private hasQueuedReload = false;
 	private autoRefreshTimer: ReturnType<typeof setTimeout> | undefined;
 	private suppressAutoRefreshUntil = 0;
-	private hasPendingEdits = false;
 	private hasWarnedPendingExternalChange = false;
 
 	private constructor(
 		panel: vscode.WebviewPanel,
 		extensionUri: vscode.Uri,
+		document: XlsxEditorDocument,
+		controller: XlsxEditorPanelController,
 		workbookUri: vscode.Uri,
 		panelId: number,
 	) {
 		this.panel = panel;
 		this.extensionUri = extensionUri;
+		this.document = document;
+		this.controller = controller;
 		this.workbookUri = workbookUri;
 		this.panelId = panelId;
 		this.panel.webview.options = {
@@ -229,15 +284,34 @@ export class XlsxEditorPanel {
 
 	public static async resolveCustomEditor(
 		extensionUri: vscode.Uri,
-		workbookUri: vscode.Uri,
+		document: XlsxEditorDocument,
 		panel: vscode.WebviewPanel,
+		controller: XlsxEditorPanelController,
 	): Promise<void> {
 		const panelId = XlsxEditorPanel.nextPanelId;
 		XlsxEditorPanel.nextPanelId += 1;
-		panel.title = getWorkbookResourceName(workbookUri);
-		const instance = new XlsxEditorPanel(panel, extensionUri, workbookUri, panelId);
+		panel.title = getWorkbookResourceName(document.uri);
+		const instance = new XlsxEditorPanel(
+			panel,
+			extensionUri,
+			document,
+			controller,
+			document.uri,
+			panelId,
+		);
 		XlsxEditorPanel.panels.set(panelId, instance);
 		await instance.enqueueReload();
+	}
+
+	public static async refreshDocument(
+		document: XlsxEditorDocument,
+		options: { silent?: boolean; clearPendingEdits?: boolean } = {},
+	): Promise<void> {
+		await Promise.all(
+			[...XlsxEditorPanel.panels.values()]
+				.filter((panel) => panel.document === document)
+				.map((panel) => panel.enqueueReload(options)),
+		);
 	}
 
 	public static async refreshAll(): Promise<void> {
@@ -302,7 +376,7 @@ export class XlsxEditorPanel {
 			return;
 		}
 
-		if (this.hasPendingEdits) {
+		if (this.document.hasPendingEdits()) {
 			if (!this.hasWarnedPendingExternalChange) {
 				this.hasWarnedPendingExternalChange = true;
 				void vscode.window.showWarningMessage(
@@ -365,7 +439,7 @@ export class XlsxEditorPanel {
 	}
 
 	private async refreshForDisplayLanguageChange(): Promise<void> {
-		if (this.hasPendingEdits) {
+		if (this.document.hasPendingEdits()) {
 			void vscode.window.showWarningMessage(
 				getWebviewStrings().displayLanguageRefreshBlocked,
 			);
@@ -414,7 +488,7 @@ export class XlsxEditorPanel {
 	}
 
 	private async confirmDiscardPendingEdits(): Promise<boolean> {
-		if (!this.hasPendingEdits) {
+		if (!this.document.hasPendingEdits()) {
 			return true;
 		}
 
@@ -471,7 +545,20 @@ export class XlsxEditorPanel {
 						return;
 					}
 
-					const match = this.findSearchMatch(message.query, message.direction);
+					let match: { sheetKey: string; rowNumber: number; columnNumber: number } | null;
+					try {
+						match = this.findSearchMatch(
+							message.query,
+							message.direction,
+							message.options,
+						);
+					} catch (error) {
+						await vscode.window.showInformationMessage(
+							`${getWebviewStrings().invalidSearchPattern} ${toErrorMessage(error)}`,
+						);
+						return;
+					}
+
 					if (!match) {
 						await vscode.window.showInformationMessage(
 							getWebviewStrings().noSearchMatches,
@@ -509,13 +596,12 @@ export class XlsxEditorPanel {
 					);
 					return;
 				case 'pendingEditStateChanged':
-					this.hasPendingEdits = message.hasPendingEdits;
 					if (!message.hasPendingEdits) {
 						this.hasWarnedPendingExternalChange = false;
 					}
 					return;
-				case 'saveEdits': {
-					if (!this.workbook || message.edits.length === 0) {
+				case 'setPendingEdits': {
+					if (!this.workbook) {
 						return;
 					}
 
@@ -529,21 +615,22 @@ export class XlsxEditorPanel {
 							: [];
 					});
 
-					if (cellEdits.length === 0) {
+					await this.controller.onPendingEditsChanged(cellEdits);
+					if (cellEdits.length === 0 && !this.document.hasPendingEdits()) {
+						this.hasWarnedPendingExternalChange = false;
+					}
+					return;
+				}
+				case 'requestSave':
+					this.suppressAutoRefreshUntil = Date.now() + 2000;
+					await this.controller.onRequestSave();
+					return;
+				case 'reload':
+					if (this.document.hasPendingEdits()) {
+						await this.controller.onRequestRevert();
 						return;
 					}
 
-					this.suppressAutoRefreshUntil = Date.now() + 2000;
-					await writeCellValues(this.workbookUri, cellEdits);
-					this.hasPendingEdits = false;
-					this.hasWarnedPendingExternalChange = false;
-					await this.enqueueReload({ silent: true, clearPendingEdits: true });
-					return;
-				}
-				case 'reload':
-					if (!(await this.confirmDiscardPendingEdits())) {
-						return;
-					}
 					await this.enqueueReload({ clearPendingEdits: true });
 					return;
 			}
@@ -588,37 +675,48 @@ export class XlsxEditorPanel {
 	private findSearchMatch(
 		query: string,
 		direction: 'next' | 'prev',
+		options: SearchOptions,
 	): { sheetKey: string; rowNumber: number; columnNumber: number } | null {
-		const normalizedQuery = query.trim().toLocaleLowerCase();
+		const normalizedQuery = query.trim();
 		if (!this.workbook || !normalizedQuery) {
 			return null;
 		}
 
+		const pattern = createSearchPattern(normalizedQuery, options);
 		const sheetEntries = this.getSheetEntries();
-		const matches = sheetEntries.flatMap((entry) =>
-			Object.values(entry.sheet.cells)
-				.filter((cell) => {
-					const value = cell.displayValue.toLocaleLowerCase();
-					const formula = cell.formula?.toLocaleLowerCase() ?? '';
-					return value.includes(normalizedQuery) || formula.includes(normalizedQuery);
-				})
-				.map((cell) => ({
-					sheetKey: entry.key,
-					sheetIndex: entry.index,
-					rowNumber: cell.rowNumber,
-					columnNumber: cell.columnNumber,
-				})),
+		const activeSheetEntry =
+			sheetEntries.find((entry) => entry.key === this.state.activeSheetKey) ??
+			sheetEntries[0];
+		if (!activeSheetEntry) {
+			return null;
+		}
+
+		const pageStartRow = (this.state.currentPage - 1) * DEFAULT_PAGE_SIZE + 1;
+		const pageEndRow = Math.min(
+			activeSheetEntry.sheet.rowCount,
+			this.state.currentPage * DEFAULT_PAGE_SIZE,
 		);
+		const matches = Object.values(activeSheetEntry.sheet.cells)
+			.filter((cell) => {
+				if (cell.rowNumber < pageStartRow || cell.rowNumber > pageEndRow) {
+					return false;
+				}
+
+				const value = cell.displayValue;
+				const formula = cell.formula ?? '';
+				return pattern.test(value) || pattern.test(formula);
+			})
+			.map((cell) => ({
+				sheetKey: activeSheetEntry.key,
+				rowNumber: cell.rowNumber,
+				columnNumber: cell.columnNumber,
+			}));
 
 		if (matches.length === 0) {
 			return null;
 		}
 
 		matches.sort((left, right) => {
-			if (left.sheetIndex !== right.sheetIndex) {
-				return left.sheetIndex - right.sheetIndex;
-			}
-
 			if (left.rowNumber !== right.rowNumber) {
 				return left.rowNumber - right.rowNumber;
 			}
@@ -626,22 +724,18 @@ export class XlsxEditorPanel {
 			return left.columnNumber - right.columnNumber;
 		});
 
-		const activeSheetIndex = sheetEntries.findIndex(
-			(entry) => entry.key === this.state.activeSheetKey,
-		);
+		const selectionOnCurrentPage =
+			this.state.selectedCell &&
+			this.state.selectedCell.rowNumber >= pageStartRow &&
+			this.state.selectedCell.rowNumber <= pageEndRow;
 		const anchor = {
-			sheetIndex: activeSheetIndex < 0 ? 0 : activeSheetIndex,
-			rowNumber: this.state.selectedCell?.rowNumber ?? 1,
-			columnNumber: this.state.selectedCell?.columnNumber ?? 1,
+			rowNumber: selectionOnCurrentPage ? this.state.selectedCell!.rowNumber : pageStartRow,
+			columnNumber: selectionOnCurrentPage ? this.state.selectedCell!.columnNumber : 0,
 		};
 		const compare = (
-			candidate: { sheetIndex: number; rowNumber: number; columnNumber: number },
-			current: { sheetIndex: number; rowNumber: number; columnNumber: number },
+			candidate: { rowNumber: number; columnNumber: number },
+			current: { rowNumber: number; columnNumber: number },
 		): number => {
-			if (candidate.sheetIndex !== current.sheetIndex) {
-				return candidate.sheetIndex - current.sheetIndex;
-			}
-
 			if (candidate.rowNumber !== current.rowNumber) {
 				return candidate.rowNumber - current.rowNumber;
 			}
@@ -721,7 +815,9 @@ export class XlsxEditorPanel {
 			}
 		}
 
-		this.workbook = await loadWorkbookSnapshot(this.workbookUri);
+		this.workbook = await loadWorkbookSnapshot(this.document.getReadUri());
+		this.workbook.filePath = this.workbookUri.fsPath;
+		this.workbook.fileName = getWorkbookResourceName(this.workbookUri);
 		this.state = this.workbook.sheets.length
 			? normalizeEditorPanelState(
 					this.workbook,
@@ -732,23 +828,34 @@ export class XlsxEditorPanel {
 			: createInitialEditorPanelState(this.workbook);
 
 		const renderModel = createEditorRenderModel(this.workbook, this.state, {
-			hasPendingEdits: clearPendingEdits ? false : this.hasPendingEdits,
+			hasPendingEdits: clearPendingEdits ? false : this.document.hasPendingEdits(),
 		});
 
 		if (clearPendingEdits) {
 			this.hasWarnedPendingExternalChange = false;
 		}
 		this.panel.title = renderModel.title;
-		await this.render(renderModel, { silent, clearPendingEdits });
+		await this.render(renderModel, {
+			silent,
+			clearPendingEdits,
+			useModelSelection: true,
+		});
 	}
 
-	private async render(renderModel?: EditorRenderModel, { silent = false, clearPendingEdits = false }: { silent?: boolean; clearPendingEdits?: boolean } = {}): Promise<void> {
+	private async render(
+		renderModel?: EditorRenderModel,
+		{
+			silent = false,
+			clearPendingEdits = false,
+			useModelSelection = true,
+		}: { silent?: boolean; clearPendingEdits?: boolean; useModelSelection?: boolean } = {},
+	): Promise<void> {
 		if (!this.workbook) {
 			return;
 		}
 
 		const payload = renderModel ?? createEditorRenderModel(this.workbook, this.state, {
-			hasPendingEdits: this.hasPendingEdits,
+			hasPendingEdits: this.document.hasPendingEdits(),
 		});
 		this.panel.title = payload.title;
 
@@ -763,6 +870,7 @@ export class XlsxEditorPanel {
 			payload,
 			silent,
 			clearPendingEdits,
+			useModelSelection,
 		});
 	}
 }
