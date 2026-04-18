@@ -250,7 +250,7 @@ body {
 .grid thead th {
 	position: sticky;
 	top: 0;
-	z-index: 2;
+	z-index: 3;
 	background: var(
 		--vscode-sideBarSectionHeader-background,
 		color-mix(in srgb, var(--vscode-editor-background) 88%, white 12%)
@@ -268,12 +268,12 @@ body {
 .grid td:first-child {
 	position: sticky;
 	left: 0;
-	z-index: 1;
+	z-index: 2;
 	background: color-mix(in srgb, var(--vscode-editor-background) 94%, black 6%);
 }
 
 .grid thead th:first-child {
-	z-index: 3;
+	z-index: 4;
 }
 
 .grid__row-number {
@@ -428,6 +428,38 @@ body {
 	inset: 0;
 	border: 2px solid var(--vscode-focusBorder);
 	pointer-events: none;
+}
+
+.grid__cell--editing {
+	padding: 0;
+	z-index: 5;
+}
+
+.grid__cell--editing::after {
+	display: none;
+}
+
+.grid__cell--editing .grid__cell-content {
+	max-height: none;
+	overflow: visible;
+	padding: 0;
+	min-height: 100%;
+}
+
+.grid__cell-input {
+	position: absolute;
+	inset: 0;
+	padding: 3px 7px;
+	background: var(--vscode-input-background, var(--vscode-editor-background));
+	color: var(--vscode-input-foreground, var(--vscode-editor-foreground));
+	border: 2px solid var(--vscode-focusBorder);
+	font-family: inherit;
+	font-size: inherit;
+	line-height: inherit;
+	width: 100%;
+	box-sizing: border-box;
+	outline: none;
+	z-index: 5;
 }
 
 .empty-table {

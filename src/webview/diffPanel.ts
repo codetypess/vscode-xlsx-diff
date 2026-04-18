@@ -3,6 +3,7 @@ import * as vscode from 'vscode';
 import { WEBVIEW_TYPE_DIFF_PANEL } from '../constants';
 import { buildWorkbookDiff } from '../core/diff/buildWorkbookDiff';
 import { loadWorkbookSnapshot } from '../core/fastxlsx/loadWorkbookSnapshot';
+import { writeCellValue } from '../core/fastxlsx/writeCellValue';
 import type {
 	PanelState,
 	RenderModel,
@@ -34,6 +35,7 @@ type WebviewMessage =
 	| { type: 'prevDiff' }
 	| { type: 'nextDiff' }
 	| { type: 'selectCell'; rowNumber: number; columnNumber: number }
+	| { type: 'editCell'; side: 'left' | 'right'; rowNumber: number; columnNumber: number; value: string }
 	| { type: 'swap' }
 	| { type: 'reload' };
 
@@ -474,6 +476,36 @@ export class XlsxDiffPanel {
 					);
 					await this.render();
 					return;
+				case 'editCell': {
+					if (!this.diffModel) {
+						return;
+					}
+
+					const activeSheet = this.diffModel.sheets.find(
+						(sheet) => sheet.key === this.state.activeSheetKey,
+					);
+					if (!activeSheet) {
+						return;
+					}
+
+					const sheetSnapshot = message.side === 'left'
+						? activeSheet.leftSheet
+						: activeSheet.rightSheet;
+					if (!sheetSnapshot) {
+						return;
+					}
+
+					const fileUri = message.side === 'left' ? this.leftFileUri : this.rightFileUri;
+					await writeCellValue(
+						fileUri,
+						sheetSnapshot.name,
+						message.rowNumber,
+						message.columnNumber,
+						message.value,
+					);
+					await this.enqueueReload();
+					return;
+				}
 				case 'swap': {
 					this.setFileUris(this.rightFileUri, this.leftFileUri);
 					await this.enqueueReload();
