@@ -27,14 +27,14 @@ type OutgoingMessage =
 	| { type: 'prevDiff' }
 	| { type: 'nextDiff' }
 	| { type: 'selectCell'; rowNumber: number; columnNumber: number }
-	| { type: 'editCell'; side: 'left' | 'right'; rowNumber: number; columnNumber: number; value: string }
+	| { type: 'saveEdits'; edits: Array<{ sheetKey: string; side: 'left' | 'right'; rowNumber: number; columnNumber: number; value: string }> }
 	| { type: 'swap' }
 	| { type: 'reload' };
 
 type IncomingMessage =
 	| { type: 'loading'; message: string }
 	| { type: 'error'; message: string }
-	| { type: 'render'; payload: RenderModel };
+	| { type: 'render'; payload: RenderModel; silent?: boolean; clearPendingEdits?: boolean };
 
 // ─── State ────────────────────────────────────────────────────────────────────
 
@@ -54,6 +54,20 @@ interface EditState {
 }
 
 let editState: EditState | null = null;
+
+interface PendingEdit {
+	sheetKey: string;
+	side: 'left' | 'right';
+	rowNumber: number;
+	columnNumber: number;
+	value: string;
+}
+
+const pendingEdits = new Map<string, PendingEdit>();
+
+function getPendingEditKey(sheetKey: string, side: 'left' | 'right', rowNumber: number, columnNumber: number): string {
+	return `${sheetKey}:${side}:${rowNumber}:${columnNumber}`;
+}
 
 const DEFAULT_STRINGS = {
 	loading: 'Loading XLSX diff...',
@@ -82,6 +96,7 @@ const DEFAULT_STRINGS = {
 	sameRows: 'Same rows',
 	visibleRows: 'Visible rows',
 	readOnly: 'Read-only',
+	save: 'Save',
 };
 
 type Strings = typeof DEFAULT_STRINGS;
@@ -149,6 +164,35 @@ function getColumnDiffTones(rows: GridRowView[]): Map<number, CellDiffStatus> {
 
 function getDiffToneClass(diffTone: CellDiffStatus | undefined): string {
 	return diffTone ? `diff-marker--${diffTone}` : '';
+}
+
+function getEffectiveDiffMarkerClass(diffTone: string, hasPending: boolean): string | null {
+	if (hasPending) {
+		return 'diff-marker--pending';
+	}
+
+	if (diffTone) {
+		return getDiffToneClass(diffTone as CellDiffStatus);
+	}
+
+	return null;
+}
+
+function updateLabelMarker(labelEl: Element, markerClass: string | null, extraClass?: string): void {
+	let markerEl = labelEl.querySelector<HTMLElement>('.diff-marker');
+
+	if (!markerClass) {
+		markerEl?.remove();
+		return;
+	}
+
+	if (!markerEl) {
+		markerEl = document.createElement('span');
+		markerEl.setAttribute('aria-hidden', 'true');
+		labelEl.insertBefore(markerEl, labelEl.firstChild);
+	}
+
+	markerEl.className = `diff-marker ${markerClass}${extraClass ? ` ${extraClass}` : ''}`;
 }
 
 function shouldHighlightCell(cell: GridCellView, side: 'left' | 'right', isHighlighted: boolean): boolean {
@@ -514,7 +558,120 @@ function cancelEdit(): void {
 	editState = null;
 }
 
-function commitEdit(value: string): void {
+function updateSaveButtonState(): void {
+	const saveBtn = document.querySelector<HTMLButtonElement>('[data-action="save-edits"]');
+	if (!saveBtn) {
+		return;
+	}
+
+	const hasPending = pendingEdits.size > 0;
+	saveBtn.disabled = !hasPending;
+	saveBtn.classList.toggle('is-dirty', hasPending);
+}
+
+function getCellFormula(rowNumber: number, columnNumber: number, side: 'left' | 'right'): string | null {
+	const row = model?.page.rows.find((r) => r.rowNumber === rowNumber);
+	const cell = row?.cells[columnNumber - 1];
+	if (!cell) {
+		return null;
+	}
+
+	return side === 'left' ? cell.leftFormula : cell.rightFormula;
+}
+
+function applyPendingEditStyles(): void {
+	const activeSheetKey = model?.activeSheet.key;
+
+	// 1. Cells – update content and pending border
+	for (const cellEl of document.querySelectorAll<HTMLElement>('[data-role="grid-cell"]')) {
+		const pane = cellEl.closest<HTMLElement>('[data-side]');
+		const side = pane?.getAttribute('data-side') as 'left' | 'right' | null;
+		if (!side || !activeSheetKey) {
+			continue;
+		}
+
+		const rowNumber = Number(cellEl.getAttribute('data-row-number'));
+		const columnNumber = Number(cellEl.getAttribute('data-column-number'));
+		const key = getPendingEditKey(activeSheetKey, side, rowNumber, columnNumber);
+		const pending = pendingEdits.get(key);
+		const content = cellEl.querySelector<HTMLElement>('.grid__cell-content');
+		if (content && pending) {
+			content.innerHTML = renderCellValue(pending.value, null);
+		}
+
+		cellEl.classList.toggle('grid__cell--pending', Boolean(pending));
+	}
+
+	// 2. Row number headers – square marker with priority: pending > diff
+	for (const rowEl of document.querySelectorAll<HTMLElement>('[data-role="grid-row"]')) {
+		const rowNumber = Number(rowEl.getAttribute('data-row-number'));
+		const pane = rowEl.closest<HTMLElement>('[data-side]');
+		const side = pane?.getAttribute('data-side') as 'left' | 'right' | null;
+		if (!side || !activeSheetKey) {
+			continue;
+		}
+
+		const hasPending = [...pendingEdits.values()].some(
+			(e) => e.sheetKey === activeSheetKey && e.side === side && e.rowNumber === rowNumber,
+		);
+		const rowHeader = rowEl.querySelector<HTMLElement>('th[data-diff-tone]');
+		if (!rowHeader) {
+			continue;
+		}
+
+		const diffTone = rowHeader.getAttribute('data-diff-tone') ?? '';
+		const labelEl = rowHeader.querySelector('.grid__row-label');
+		if (labelEl) {
+			updateLabelMarker(labelEl, getEffectiveDiffMarkerClass(diffTone, hasPending));
+		}
+	}
+
+	// 3. Column headers – square marker with priority: pending > diff
+	for (const pane of document.querySelectorAll<HTMLElement>('.pane__table[data-side]')) {
+		const side = pane.getAttribute('data-side') as 'left' | 'right';
+		if (!activeSheetKey) {
+			continue;
+		}
+
+		for (const colHeader of pane.querySelectorAll<HTMLElement>('thead th[data-column-number]')) {
+			const columnNumber = Number(colHeader.getAttribute('data-column-number'));
+			const diffTone = colHeader.getAttribute('data-diff-tone') ?? '';
+			const hasPending = [...pendingEdits.values()].some(
+				(e) => e.sheetKey === activeSheetKey && e.side === side && e.columnNumber === columnNumber,
+			);
+			const markerClass = getEffectiveDiffMarkerClass(diffTone, hasPending);
+			// Ensure --diff class is present when pending adds a new marker to a non-diff column
+			colHeader.classList.toggle('grid__column--diff', Boolean(diffTone) || hasPending);
+			const labelEl = colHeader.querySelector('.grid__column-label');
+			if (labelEl) {
+				updateLabelMarker(labelEl, markerClass);
+			}
+		}
+	}
+
+	// 4. Sheet tabs – square marker with priority: pending > diff
+	for (const tabEl of document.querySelectorAll<HTMLElement>('[data-action="set-sheet"]')) {
+		const sheetKey = tabEl.getAttribute('data-sheet-key');
+		const hasPending = sheetKey ? [...pendingEdits.values()].some((e) => e.sheetKey === sheetKey) : false;
+		const diffTone = tabEl.getAttribute('data-diff-tone') ?? '';
+		const markerClass = getEffectiveDiffMarkerClass(diffTone, hasPending);
+		let markerEl = tabEl.querySelector<HTMLElement>('.tab__marker');
+
+		if (!markerClass) {
+			markerEl?.remove();
+		} else {
+			if (!markerEl) {
+				markerEl = document.createElement('span');
+				markerEl.setAttribute('aria-hidden', 'true');
+				tabEl.insertBefore(markerEl, tabEl.firstChild);
+			}
+
+			markerEl.className = `diff-marker ${markerClass} tab__marker`;
+		}
+	}
+}
+
+function commitEdit(sheetKey: string, value: string): void {
 	if (!editState) {
 		return;
 	}
@@ -522,7 +679,29 @@ function commitEdit(value: string): void {
 	const { rowNumber, columnNumber, side } = editState;
 	editState = null;
 
-	vscode.postMessage({ type: 'editCell', side, rowNumber, columnNumber, value });
+	const key = getPendingEditKey(sheetKey, side, rowNumber, columnNumber);
+	const modelValue = getCellModelValue(rowNumber, columnNumber, side);
+
+	if (value === modelValue) {
+		// Value reverted to original — remove any existing pending for this cell
+		pendingEdits.delete(key);
+	} else {
+		pendingEdits.set(key, { sheetKey, side, rowNumber, columnNumber, value });
+	}
+
+	applyPendingEditStyles();
+	updateSaveButtonState();
+}
+
+function triggerSave(): void {
+	if (pendingEdits.size === 0) {
+		return;
+	}
+
+	const edits = Array.from(pendingEdits.values());
+	pendingEdits.clear();
+	updateSaveButtonState();
+	vscode.postMessage({ type: 'saveEdits', edits });
 }
 
 function enterEditMode(
@@ -535,6 +714,7 @@ function enterEditMode(
 	cancelEdit();
 	editState = { rowNumber, columnNumber, side };
 
+	const capturedSheetKey = model!.activeSheet.key;
 	const content = cellEl.querySelector<HTMLElement>('.grid__cell-content');
 	if (!content) {
 		return;
@@ -560,7 +740,10 @@ function enterEditMode(
 
 		committed = true;
 		cellEl.classList.remove('grid__cell--editing');
-		commitEdit(inputValue);
+		commitEdit(capturedSheetKey, inputValue);
+		// Clear selection after committing so the border doesn't linger
+		selectedCell = null;
+		clearSelectedCells();
 	};
 
 	const cancel = (): void => {
@@ -571,8 +754,18 @@ function enterEditMode(
 		committed = true;
 		editState = null;
 		cellEl.classList.remove('grid__cell--editing');
-		// Re-render to restore original content
-		renderApp();
+
+		// Restore displayed value — use pending value if staged, otherwise model value + formula
+		const pendingKey = getPendingEditKey(capturedSheetKey, side, rowNumber, columnNumber);
+		const pendingEdit = pendingEdits.get(pendingKey);
+		const restoreValue = pendingEdit ? pendingEdit.value : currentValue;
+		const formula = pendingEdit ? null : getCellFormula(rowNumber, columnNumber, side);
+		const cellContent = cellEl.querySelector<HTMLElement>('.grid__cell-content');
+		if (cellContent) {
+			cellContent.innerHTML = renderCellValue(restoreValue, formula);
+		}
+
+		cellEl.classList.toggle('grid__cell--pending', Boolean(pendingEdit));
 	};
 
 	input.addEventListener('keydown', (e: KeyboardEvent) => {
@@ -604,7 +797,7 @@ function renderTable(side: 'left' | 'right'): string {
 		.map((column, index) => {
 			const diffTone = diffColumnTones.get(index);
 
-			return `<th class="grid__column ${diffTone ? `grid__column--diff grid__column--${diffTone}` : ''}">
+			return `<th class="grid__column ${diffTone ? `grid__column--diff grid__column--${diffTone}` : ''}" data-column-number="${index + 1}" data-diff-tone="${diffTone ?? ''}">
 				<span class="grid__column-label">
 					${diffTone ? `<span class="diff-marker ${getDiffToneClass(diffTone)}" aria-hidden="true"></span>` : ''}
 					<span>${escapeHtml(column)}</span>
@@ -641,7 +834,7 @@ function renderTable(side: 'left' | 'right'): string {
 
 			return `
 				<tr class="${rowClasses}" data-role="grid-row" data-row-number="${row.rowNumber}" data-row-has-diff="${row.hasDiff ? 'true' : 'false'}">
-					<th class="grid__row-number ${row.hasDiff ? `grid__row-number--diff grid__row-number--${row.diffTone}` : ''}">
+					<th class="grid__row-number ${row.hasDiff ? `grid__row-number--diff grid__row-number--${row.diffTone}` : ''}" data-diff-tone="${row.hasDiff ? row.diffTone : ''}">
 						<span class="grid__row-label">
 							${row.hasDiff ? `<span class="diff-marker ${getDiffToneClass(row.diffTone)}" aria-hidden="true"></span>` : ''}
 							<span>${row.rowNumber}</span>
@@ -741,8 +934,7 @@ function renderToolbar(): string {
 				${renderToolbarButton({ action: 'prev-page', icon: 'codicon-arrow-left', label: s.prevPage, disabled: !m.canPrevPage })}
 				${renderToolbarButton({ action: 'next-page', icon: 'codicon-arrow-right', label: s.nextPage, disabled: !m.canNextPage })}
 				${renderToolbarButton({ action: 'swap', icon: 'codicon-arrow-swap', label: s.swap })}
-				${renderToolbarButton({ action: 'reload', icon: 'codicon-refresh', label: s.reload })}
-			</div>
+				${renderToolbarButton({ action: 'reload', icon: 'codicon-refresh', label: s.reload })}			${renderToolbarButton({ action: 'save-edits', icon: 'codicon-save', label: s.save, disabled: true })}			</div>
 		</header>
 	`;
 }
@@ -757,6 +949,7 @@ function renderTabs(): string {
 					class="tab tab--${sheet.diffTone} ${sheet.isActive ? 'is-active' : ''} ${sheet.hasDiff ? 'has-diff' : ''}"
 					data-action="set-sheet"
 					data-sheet-key="${escapeHtml(sheet.key)}"
+					data-diff-tone="${sheet.hasDiff ? sheet.diffTone : ''}"
 					title="${escapeHtml(getSheetTooltip(sheet))}"
 				>
 					${sheet.hasDiff ? `<span class="diff-marker ${getDiffToneClass(sheet.diffTone)} tab__marker" aria-hidden="true"></span>` : ''}
@@ -790,7 +983,7 @@ function renderStatus(): string {
 
 // ─── App render ───────────────────────────────────────────────────────────────
 
-function renderApp(): void {
+function renderApp({ silent = false }: { silent?: boolean } = {}): void {
 	if (!model) {
 		renderLoading(STRINGS.loading);
 		return;
@@ -818,6 +1011,8 @@ function renderApp(): void {
 
 	attachPaneScrollSync();
 	restorePaneScrollState(previousPaneScrollState);
+	applyPendingEditStyles();
+	updateSaveButtonState();
 	scheduleLayoutSync({ afterRender: true });
 }
 
@@ -886,7 +1081,11 @@ window.addEventListener('message', (event: MessageEvent<IncomingMessage>) => {
 
 	if (message.type === 'render') {
 		model = message.payload;
-		renderApp();
+		if (message.clearPendingEdits) {
+			pendingEdits.clear();
+		}
+
+		renderApp({ silent: message.silent });
 	}
 });
 
@@ -952,6 +1151,44 @@ document.addEventListener('click', (event: MouseEvent) => {
 		case 'reload':
 			vscode.postMessage({ type: 'reload' });
 			return;
+		case 'save-edits':
+			triggerSave();
+			return;
+	}
+});
+
+document.addEventListener('keydown', (event: KeyboardEvent) => {
+	if ((event.ctrlKey || event.metaKey) && event.key === 's') {
+		event.preventDefault();
+		// If in edit mode, commit the current edit first
+		if (editState && model) {
+			const input = document.querySelector<HTMLInputElement>('.grid__cell-input');
+			if (input) {
+				commitEdit(model.activeSheet.key, input.value);
+			}
+		}
+
+		triggerSave();
+		return;
+	}
+
+	// Delete / Backspace: clear pending edits for the selected cell (only when not in edit mode)
+	if ((event.key === 'Delete' || event.key === 'Backspace') && !editState && selectedCell && model) {
+		const activeSheetKey = model.activeSheet.key;
+		let changed = false;
+
+		for (const side of ['left', 'right'] as const) {
+			const key = getPendingEditKey(activeSheetKey, side, selectedCell.rowNumber, selectedCell.columnNumber);
+			if (pendingEdits.has(key)) {
+				pendingEdits.delete(key);
+				changed = true;
+			}
+		}
+
+		if (changed) {
+			applyPendingEditStyles();
+			updateSaveButtonState();
+		}
 	}
 });
 
@@ -980,7 +1217,11 @@ document.addEventListener('dblclick', (event: MouseEvent) => {
 
 	const rowNumber = Number(cellTarget.getAttribute('data-row-number'));
 	const columnNumber = Number(cellTarget.getAttribute('data-column-number'));
-	const currentValue = getCellModelValue(rowNumber, columnNumber, side);
+
+	// Use pending value if the cell has been staged but not yet saved
+	const pendingKey = getPendingEditKey(model!.activeSheet.key, side, rowNumber, columnNumber);
+	const pendingEdit = pendingEdits.get(pendingKey);
+	const currentValue = pendingEdit ? pendingEdit.value : getCellModelValue(rowNumber, columnNumber, side);
 
 	selectedCell = { rowNumber, columnNumber };
 	enterEditMode(cellTarget, rowNumber, columnNumber, side, currentValue);

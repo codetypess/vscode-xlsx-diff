@@ -3,7 +3,7 @@ import * as vscode from 'vscode';
 import { WEBVIEW_TYPE_DIFF_PANEL } from '../constants';
 import { buildWorkbookDiff } from '../core/diff/buildWorkbookDiff';
 import { loadWorkbookSnapshot } from '../core/fastxlsx/loadWorkbookSnapshot';
-import { writeCellValue } from '../core/fastxlsx/writeCellValue';
+import { writeCellValues, type CellEdit } from '../core/fastxlsx/writeCellValue';
 import type {
 	PanelState,
 	RenderModel,
@@ -35,7 +35,7 @@ type WebviewMessage =
 	| { type: 'prevDiff' }
 	| { type: 'nextDiff' }
 	| { type: 'selectCell'; rowNumber: number; columnNumber: number }
-	| { type: 'editCell'; side: 'left' | 'right'; rowNumber: number; columnNumber: number; value: string }
+	| { type: 'saveEdits'; edits: Array<{ sheetKey: string; side: 'left' | 'right'; rowNumber: number; columnNumber: number; value: string }> }
 	| { type: 'swap' }
 	| { type: 'reload' };
 
@@ -66,6 +66,7 @@ interface WebviewStrings {
 	sameRows: string;
 	visibleRows: string;
 	readOnly: string;
+	save: string;
 }
 
 function getNonce(): string {
@@ -110,6 +111,7 @@ function getWebviewStrings(): WebviewStrings {
 			sameRows: '相同行',
 			visibleRows: '可见行',
 			readOnly: '只读',
+			save: '保存',
 		};
 	}
 
@@ -140,6 +142,7 @@ function getWebviewStrings(): WebviewStrings {
 		sameRows: 'Same rows',
 		visibleRows: 'Visible rows',
 		readOnly: 'Read-only',
+		save: 'Save',
 	};
 }
 
@@ -166,6 +169,7 @@ export class XlsxDiffPanel {
 	private isReloading = false;
 	private hasQueuedReload = false;
 	private autoRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+	private suppressAutoRefreshUntil = 0;
 
 	private constructor(
 		panel: vscode.WebviewPanel,
@@ -306,19 +310,28 @@ export class XlsxDiffPanel {
 	}
 
 	private scheduleAutoRefresh(): void {
+		if (Date.now() < this.suppressAutoRefreshUntil) {
+			if (this.autoRefreshTimer) {
+				clearTimeout(this.autoRefreshTimer);
+				this.autoRefreshTimer = undefined;
+			}
+
+			return;
+		}
+
 		if (this.autoRefreshTimer) {
 			clearTimeout(this.autoRefreshTimer);
 		}
 
 		this.autoRefreshTimer = setTimeout(() => {
 			this.autoRefreshTimer = undefined;
-			void this.enqueueReload().catch((error) => {
+			void this.enqueueReload({ clearPendingEdits: true }).catch((error) => {
 				void this.handleError(error);
 			});
 		}, 250);
 	}
 
-	private async enqueueReload(): Promise<void> {
+	private async enqueueReload({ silent = false, clearPendingEdits = false }: { silent?: boolean; clearPendingEdits?: boolean } = {}): Promise<void> {
 		if (this.isReloading) {
 			this.hasQueuedReload = true;
 			return;
@@ -328,7 +341,7 @@ export class XlsxDiffPanel {
 		let reloadError: unknown;
 
 		try {
-			await this.reloadModel();
+			await this.reloadModel({ silent, clearPendingEdits });
 		} catch (error) {
 			reloadError = error;
 		} finally {
@@ -474,43 +487,48 @@ export class XlsxDiffPanel {
 					);
 					await this.render();
 					return;
-				case 'editCell': {
-					if (!this.diffModel) {
+				case 'saveEdits': {
+					if (!this.diffModel || message.edits.length === 0) {
 						return;
 					}
 
-					const activeSheet = this.diffModel.sheets.find(
-						(sheet) => sheet.key === this.state.activeSheetKey,
-					);
-					if (!activeSheet) {
-						return;
-					}
+					// Resolve each edit's sheet name from its sheetKey (supports multi-sheet saves)
+					const leftCellEdits: CellEdit[] = message.edits
+						.filter((e) => e.side === 'left')
+						.flatMap((e) => {
+							const sheet = this.diffModel!.sheets.find((s) => s.key === e.sheetKey);
+							return sheet?.leftSheet
+								? [{ sheetName: sheet.leftSheet.name, rowNumber: e.rowNumber, columnNumber: e.columnNumber, value: e.value }]
+								: [];
+						});
 
-					const sheetSnapshot = message.side === 'left'
-						? activeSheet.leftSheet
-						: activeSheet.rightSheet;
-					if (!sheetSnapshot) {
-						return;
-					}
+					const rightCellEdits: CellEdit[] = message.edits
+						.filter((e) => e.side === 'right')
+						.flatMap((e) => {
+							const sheet = this.diffModel!.sheets.find((s) => s.key === e.sheetKey);
+							return sheet?.rightSheet
+								? [{ sheetName: sheet.rightSheet.name, rowNumber: e.rowNumber, columnNumber: e.columnNumber, value: e.value }]
+								: [];
+						});
 
-					const fileUri = message.side === 'left' ? this.leftFileUri : this.rightFileUri;
-					await writeCellValue(
-						fileUri,
-						sheetSnapshot.name,
-						message.rowNumber,
-						message.columnNumber,
-						message.value,
-					);
-					await this.enqueueReload();
+					// Suppress the auto-refresh that the file writes below will trigger
+					this.suppressAutoRefreshUntil = Date.now() + 2000;
+
+					await Promise.all([
+						leftCellEdits.length > 0 ? writeCellValues(this.leftFileUri, leftCellEdits) : Promise.resolve(),
+						rightCellEdits.length > 0 ? writeCellValues(this.rightFileUri, rightCellEdits) : Promise.resolve(),
+					]);
+
+					await this.enqueueReload({ silent: true });
 					return;
 				}
 				case 'swap': {
 					this.setFileUris(this.rightFileUri, this.leftFileUri);
-					await this.enqueueReload();
+					await this.enqueueReload({ clearPendingEdits: true });
 					return;
 				}
 				case 'reload':
-					await this.enqueueReload();
+					await this.enqueueReload({ clearPendingEdits: true });
 					return;
 			}
 		} catch (error) {
@@ -518,15 +536,18 @@ export class XlsxDiffPanel {
 		}
 	}
 
-	private async reloadModel(): Promise<void> {
+	private async reloadModel({ silent = false, clearPendingEdits = false }: { silent?: boolean; clearPendingEdits?: boolean } = {}): Promise<void> {
 		const webviewStrings = getWebviewStrings();
-		this.panel.title = webviewStrings.loading;
 
-		if (this.isWebviewReady) {
-			await this.panel.webview.postMessage({
-				type: 'loading',
-				message: webviewStrings.loading,
-			});
+		if (!silent) {
+			this.panel.title = webviewStrings.loading;
+
+			if (this.isWebviewReady) {
+				await this.panel.webview.postMessage({
+					type: 'loading',
+					message: webviewStrings.loading,
+				});
+			}
 		}
 
 		const [leftWorkbook, rightWorkbook] = await Promise.all([
@@ -546,10 +567,10 @@ export class XlsxDiffPanel {
 
 		const renderModel = createRenderModel(this.diffModel, this.state);
 		this.panel.title = renderModel.title;
-		await this.render(renderModel);
+		await this.render(renderModel, { silent, clearPendingEdits });
 	}
 
-	private async render(renderModel?: RenderModel): Promise<void> {
+	private async render(renderModel?: RenderModel, { silent = false, clearPendingEdits = false }: { silent?: boolean; clearPendingEdits?: boolean } = {}): Promise<void> {
 		if (!this.diffModel) {
 			return;
 		}
@@ -566,6 +587,8 @@ export class XlsxDiffPanel {
 		await this.panel.webview.postMessage({
 			type: 'render',
 			payload,
+			silent,
+			clearPendingEdits,
 		});
 	}
 }
