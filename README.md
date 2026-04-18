@@ -18,6 +18,10 @@ Current implementation includes:
 - `XLSX Diff: Compare Two XLSX Files`
 - `XLSX Diff: Compare Active XLSX With...`
 
+## Settings
+
+- `xlsx-diff.displayLanguage`: `auto` (default), `en`, or `zh-cn` to control the language used by prompts and the diff panel.
+
 ## Local development
 
 1. Install dependencies:

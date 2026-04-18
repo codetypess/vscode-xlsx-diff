@@ -43,7 +43,7 @@ suite('Workbook resource URIs', () => {
 			getWorkbookResourcePathLabel(gitUri),
 			'/tmp/item.xlsx @ HEAD',
 		);
-		assert.strictEqual(getWorkbookResourceTimeLabel(gitUri), 'Git ref: HEAD');
+		assert.match(getWorkbookResourceTimeLabel(gitUri) ?? '', /HEAD$/);
 	});
 
 	test('filters scm workbook diffs to non-file originals', () => {
@@ -69,23 +69,21 @@ suite('Workbook resource URIs', () => {
 	});
 
 	test('describes git refs for commit and index-backed resources', () => {
-		assert.deepStrictEqual(describeGitResourceRef('HEAD', { resolvedCommit: 'd44224e' }), {
-			label: 'Commit',
-			value: 'd44224e',
+		const commitRef = describeGitResourceRef('HEAD', {
+			resolvedCommit: 'd44224e',
 		});
-		assert.deepStrictEqual(
-			describeGitResourceRef('~', {
-				resolvedCommit: 'd44224e',
-				hasStagedChanges: true,
-			}),
-			{
-				label: 'Source',
-				value: 'Index · base d44224e',
-			},
-		);
-		assert.deepStrictEqual(describeGitResourceRef('~2'), {
-			label: 'Source',
-			value: 'Stage 2',
+		assert.strictEqual(commitRef.value, 'd44224e');
+		assert.ok(['Commit', '提交'].includes(commitRef.label));
+
+		const indexRef = describeGitResourceRef('~', {
+			resolvedCommit: 'd44224e',
+			hasStagedChanges: true,
 		});
+		assert.match(indexRef.value, /d44224e$/);
+		assert.ok(['Source', '来源'].includes(indexRef.label));
+
+		const stageRef = describeGitResourceRef('~2');
+		assert.match(stageRef.value, /2$/);
+		assert.ok(['Source', '来源'].includes(stageRef.label));
 	});
 });

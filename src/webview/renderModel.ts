@@ -1,5 +1,6 @@
 import { DEFAULT_PAGE_SIZE } from '../constants';
 import { createPageSlice } from '../core/paging/createPageSlice';
+import { isChineseDisplayLanguage } from '../displayLanguage';
 import {
 	type CellDiffStatus,
 	type PanelState,
@@ -8,7 +9,18 @@ import {
 	type SheetDiffModel,
 	type SheetTabView,
 	type WorkbookDiffModel,
+	type WorkbookSnapshot,
 } from '../core/model/types';
+
+function getUntitledSheetLabel(): string {
+	return isChineseDisplayLanguage() ? '未命名工作表' : 'Untitled Sheet';
+}
+
+function getWorkbookTitle(workbook: WorkbookSnapshot): string {
+	return workbook.titleDetail
+		? `${workbook.fileName} @ ${workbook.titleDetail}`
+		: workbook.fileName;
+}
 
 function formatFileSize(bytes: number): string {
 	if (bytes < 1024) {
@@ -39,7 +51,7 @@ function getSheetLabel(sheet: SheetDiffModel): string {
 		return `${sheet.leftSheetName} -> ${sheet.rightSheetName}`;
 	}
 
-	return sheet.rightSheetName ?? sheet.leftSheetName ?? 'Untitled Sheet';
+	return sheet.rightSheetName ?? sheet.leftSheetName ?? getUntitledSheetLabel();
 }
 
 function getSheetHasDiff(sheet: SheetDiffModel): boolean {
@@ -248,22 +260,26 @@ export function createRenderModel(
 	}));
 
 	return {
-		title: `${diff.left.fileName} ↔ ${diff.right.fileName}`,
+		title: `${getWorkbookTitle(diff.left)} ↔ ${getWorkbookTitle(diff.right)}`,
 		leftFile: {
 			fileName: diff.left.fileName,
 			filePath: diff.left.filePath,
 			fileSizeLabel: formatFileSize(diff.left.fileSize),
 			detailLabel: diff.left.detailLabel,
-			detailValue: diff.left.modifiedTimeLabel,
-			modifiedTimeLabel: formatModifiedTime(diff.left.modifiedTime),
+			detailValue: diff.left.detailValue,
+			modifiedTimeLabel:
+				diff.left.modifiedTimeLabel ?? formatModifiedTime(diff.left.modifiedTime),
+			isReadonly: diff.left.isReadonly ?? false,
 		},
 		rightFile: {
 			fileName: diff.right.fileName,
 			filePath: diff.right.filePath,
 			fileSizeLabel: formatFileSize(diff.right.fileSize),
 			detailLabel: diff.right.detailLabel,
-			detailValue: diff.right.modifiedTimeLabel,
-			modifiedTimeLabel: formatModifiedTime(diff.right.modifiedTime),
+			detailValue: diff.right.detailValue,
+			modifiedTimeLabel:
+				diff.right.modifiedTimeLabel ?? formatModifiedTime(diff.right.modifiedTime),
+			isReadonly: diff.right.isReadonly ?? false,
 		},
 		summary: {
 			totalSheets: diff.sheets.length,

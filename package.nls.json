@@ -1,6 +1,11 @@
 {
   "extension.displayName": "XLSX Diff",
   "extension.description": "Compare XLSX files in VS Code and Git",
+  "configuration.title": "XLSX Diff",
+  "configuration.displayLanguage.description": "Controls the display language used by XLSX Diff prompts and diff panels.",
+  "configuration.displayLanguage.auto": "Follow the current VS Code display language.",
+  "configuration.displayLanguage.en": "Always use English.",
+  "configuration.displayLanguage.zhCn": "Always use Simplified Chinese.",
   "command.category": "XLSX Diff",
   "command.compareTwoFiles.title": "Compare Two XLSX Files",
   "command.compareActiveWith.title": "Compare Active XLSX With...",

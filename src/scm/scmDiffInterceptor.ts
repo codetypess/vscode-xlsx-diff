@@ -61,7 +61,7 @@ export function registerScmWorkbookDiffInterceptor(
 
 		inFlight.add(requestKey);
 		try {
-			await XlsxDiffPanel.create(
+			const openPanelPromise = XlsxDiffPanel.create(
 				extensionUri,
 				diffUris.original,
 				diffUris.modified,
@@ -69,6 +69,7 @@ export function registerScmWorkbookDiffInterceptor(
 			);
 			await vscode.window.tabGroups.close(tab, true);
 			await closePreviewWorkbookTabs(diffUris.modified);
+			await openPanelPromise;
 		} finally {
 			inFlight.delete(requestKey);
 		}

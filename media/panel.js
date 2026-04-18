@@ -2,6 +2,8 @@ const vscode = acquireVsCodeApi();
 
 let model = null;
 let isSyncingScroll = false;
+let selectedCell = null;
+let pendingSelectionReason = null;
 const STRINGS = globalThis.__XLSX_DIFF_STRINGS__ ?? {
 	loading: 'Loading XLSX diff...',
 	all: 'All',
@@ -21,11 +23,14 @@ const STRINGS = globalThis.__XLSX_DIFF_STRINGS__ ?? {
 	modified: 'Modified',
 	sheet: 'Sheet',
 	rows: 'Rows',
+	noRows: 'No rows',
 	page: 'Page',
 	filter: 'Filter',
+	diffCells: 'Diff cells',
 	diffRows: 'Diff rows',
 	sameRows: 'Same rows',
 	visibleRows: 'Visible rows',
+	readOnly: 'Read-only',
 };
 
 function escapeHtml(value) {
@@ -125,16 +130,134 @@ function getSideCellClass(cell, side, isHighlighted) {
 	return classes.join(' ');
 }
 
+function getCellTooltip(address, value, formula) {
+	const lines = [address];
+
+	if (value) {
+		lines.push(value);
+	}
+
+	if (formula) {
+		lines.push(`fx ${formula}`);
+	}
+
+	return lines.join('\n');
+}
+
 function renderCellValue(value, formula) {
 	if (!value && !formula) {
 		return '';
 	}
 
-	return `${escapeHtml(value)}${
-		formula
-			? `<span class="cell__formula" title="${escapeHtml(formula)}">fx</span>`
-			: ''
-	}`;
+	return `${
+		value ? `<span class="grid__cell-value">${escapeHtml(value)}</span>` : ''
+	}${formula ? `<span class="cell__formula" title="${escapeHtml(formula)}">fx</span>` : ''}`;
+}
+
+function getFilterLabel(filter) {
+	switch (filter) {
+		case 'diffs':
+			return STRINGS.diffs;
+		case 'same':
+			return STRINGS.same;
+		case 'all':
+		default:
+			return STRINGS.all;
+	}
+}
+
+function getSheetTooltip(sheet) {
+	return `${sheet.label} · ${sheet.diffCellCount} ${STRINGS.diffCells} · ${sheet.diffRowCount} ${STRINGS.diffRows}`;
+}
+
+function getHighlightedDiffSelection() {
+	if (!model || model.page.highlightedDiffRow === null) {
+		return null;
+	}
+
+	const highlightedRow = model.page.rows.find(
+		(row) => row.rowNumber === model.page.highlightedDiffRow,
+	);
+	if (!highlightedRow || highlightedRow.cells.length === 0) {
+		return null;
+	}
+
+	const diffColumnIndex = highlightedRow.cells.findIndex(
+		(cell) => cell.status !== 'equal',
+	);
+	return {
+		rowNumber: highlightedRow.rowNumber,
+		columnNumber: diffColumnIndex >= 0 ? diffColumnIndex + 1 : 1,
+	};
+}
+
+function getSelectedCellElements() {
+	if (!selectedCell) {
+		return [];
+	}
+
+	return Array.from(
+		document.querySelectorAll(
+			`[data-role="grid-cell"][data-row-number="${selectedCell.rowNumber}"][data-column-number="${selectedCell.columnNumber}"]`,
+		),
+	);
+}
+
+function clearSelectedCells() {
+	for (const cell of document.querySelectorAll('.grid__cell--selected')) {
+		cell.classList.remove('grid__cell--selected');
+	}
+
+	for (const cell of document.querySelectorAll(
+		'[data-role="grid-cell"][aria-selected="true"]',
+	)) {
+		cell.setAttribute('aria-selected', 'false');
+	}
+}
+
+function revealSelectedCells(elements) {
+	for (const element of elements) {
+		element.scrollIntoView({
+			block: 'nearest',
+			inline: 'center',
+		});
+	}
+}
+
+function applySelectedCell({ reveal = false } = {}) {
+	clearSelectedCells();
+
+	if (!selectedCell) {
+		return;
+	}
+
+	const elements = getSelectedCellElements();
+	if (elements.length === 0) {
+		return;
+	}
+
+	for (const element of elements) {
+		element.classList.add('grid__cell--selected');
+		element.setAttribute('aria-selected', 'true');
+	}
+
+	if (reveal) {
+		revealSelectedCells(elements);
+	}
+}
+
+function syncSelectedCellAfterRender() {
+	const shouldRevealSelection = pendingSelectionReason === 'highlighted-diff';
+	if (pendingSelectionReason === 'highlighted-diff') {
+		selectedCell = getHighlightedDiffSelection() ?? selectedCell;
+	}
+
+	if (!selectedCell || getSelectedCellElements().length === 0) {
+		selectedCell = getHighlightedDiffSelection();
+	}
+
+	applySelectedCell({ reveal: shouldRevealSelection });
+	pendingSelectionReason = null;
 }
 
 function renderTable(side) {
@@ -167,7 +290,7 @@ function renderTable(side) {
 				.join(' ');
 
 			const cells = row.cells
-				.map((cell) => {
+				.map((cell, columnIndex) => {
 					const value = side === 'left' ? cell.leftValue : cell.rightValue;
 					const formula = side === 'left' ? cell.leftFormula : cell.rightFormula;
 					const highlightCell = shouldHighlightCell(
@@ -177,8 +300,9 @@ function renderTable(side) {
 					);
 
 					const cellClass = getSideCellClass(cell, side, highlightCell);
+					const cellTooltip = getCellTooltip(cell.address, value, formula);
 
-					return `<td title="${escapeHtml(cell.address)}" class="${cellClass}">
+					return `<td title="${escapeHtml(cellTooltip)}" class="${cellClass}" data-role="grid-cell" data-row-number="${row.rowNumber}" data-column-number="${columnIndex + 1}" aria-selected="false">
 						<div class="grid__cell-content">${renderCellValue(value, formula)}</div>
 					</td>`;
 				})
@@ -208,6 +332,29 @@ function renderTable(side) {
 			</thead>
 			<tbody>${bodyRows}</tbody>
 		</table>
+	`;
+}
+
+function renderFileCard(file) {
+	const readOnlyIcon = file.isReadonly
+		? `<span class="codicon codicon-lock file-card__lock" title="${escapeHtml(STRINGS.readOnly)}" aria-label="${escapeHtml(STRINGS.readOnly)}"></span>`
+		: '';
+
+	return `
+		<div class="file-card">
+			<div class="file-card__name" title="${escapeHtml(file.filePath)}">
+				<span class="file-card__name-text">${escapeHtml(file.fileName)}</span>
+				${readOnlyIcon}
+			</div>
+			<div class="file-card__meta">
+				<div class="file-card__path" title="${escapeHtml(file.filePath)}">${escapeHtml(file.filePath)}</div>
+				<div class="file-card__facts">
+					<span>${escapeHtml(STRINGS.size)}: ${escapeHtml(file.fileSizeLabel)}</span>
+					${file.detailLabel && file.detailValue ? `<span>${escapeHtml(file.detailLabel)}: ${escapeHtml(file.detailValue)}</span>` : ''}
+					<span>${escapeHtml(STRINGS.modified)}: ${escapeHtml(file.modifiedTimeLabel)}</span>
+				</div>
+			</div>
+		</div>
 	`;
 }
 
@@ -260,28 +407,8 @@ function renderToolbar() {
 function renderFiles() {
 	return `
 		<section class="files">
-			<div class="file-card">
-				<div class="file-card__name" title="${escapeHtml(model.leftFile.filePath)}">${escapeHtml(model.leftFile.fileName)}</div>
-				<div class="file-card__meta">
-					<div class="file-card__path" title="${escapeHtml(model.leftFile.filePath)}">${escapeHtml(model.leftFile.filePath)}</div>
-					<div class="file-card__facts">
-						<span>${escapeHtml(STRINGS.size)}: ${escapeHtml(model.leftFile.fileSizeLabel)}</span>
-						${model.leftFile.detailLabel && model.leftFile.detailValue ? `<span>${escapeHtml(model.leftFile.detailLabel)}: ${escapeHtml(model.leftFile.detailValue)}</span>` : ''}
-						<span>${escapeHtml(STRINGS.modified)}: ${escapeHtml(model.leftFile.modifiedTimeLabel)}</span>
-					</div>
-				</div>
-			</div>
-			<div class="file-card">
-				<div class="file-card__name" title="${escapeHtml(model.rightFile.filePath)}">${escapeHtml(model.rightFile.fileName)}</div>
-				<div class="file-card__meta">
-					<div class="file-card__path" title="${escapeHtml(model.rightFile.filePath)}">${escapeHtml(model.rightFile.filePath)}</div>
-					<div class="file-card__facts">
-						<span>${escapeHtml(STRINGS.size)}: ${escapeHtml(model.rightFile.fileSizeLabel)}</span>
-						${model.rightFile.detailLabel && model.rightFile.detailValue ? `<span>${escapeHtml(model.rightFile.detailLabel)}: ${escapeHtml(model.rightFile.detailValue)}</span>` : ''}
-						<span>${escapeHtml(STRINGS.modified)}: ${escapeHtml(model.rightFile.modifiedTimeLabel)}</span>
-					</div>
-				</div>
-			</div>
+			${renderFileCard(model.leftFile)}
+			${renderFileCard(model.rightFile)}
 		</section>
 	`;
 }
@@ -294,7 +421,7 @@ function renderTabs() {
 					class="tab tab--${sheet.diffTone} ${sheet.isActive ? 'is-active' : ''} ${sheet.hasDiff ? 'has-diff' : ''}"
 					data-action="set-sheet"
 					data-sheet-key="${escapeHtml(sheet.key)}"
-					title="${escapeHtml(`${sheet.label} · ${sheet.diffCellCount} changed cells · ${sheet.diffRowCount} changed rows`)}"
+					title="${escapeHtml(getSheetTooltip(sheet))}"
 				>
 					${sheet.hasDiff ? `<span class="diff-marker ${getDiffToneClass(sheet.diffTone)} tab__marker" aria-hidden="true"></span>` : ''}
 					<span class="tab__label">${escapeHtml(sheet.label)}</span>
@@ -305,14 +432,17 @@ function renderTabs() {
 }
 
 function renderStatus() {
+	const rowRangeLabel =
+		model.page.visibleRowCount === 0 ? STRINGS.noRows : model.page.rangeLabel;
+
 	return `
 		<footer class="footer">
 			<div class="tabs">${renderTabs()}</div>
 			<div class="status">
 				<span><strong>${escapeHtml(STRINGS.sheet)}:</strong> ${escapeHtml(model.activeSheet.label)}</span>
-				<span><strong>${escapeHtml(STRINGS.rows)}:</strong> ${model.page.rangeLabel}</span>
+				<span><strong>${escapeHtml(STRINGS.rows)}:</strong> ${escapeHtml(rowRangeLabel)}</span>
 				<span><strong>${escapeHtml(STRINGS.page)}:</strong> ${model.page.currentPage} / ${model.page.totalPages}</span>
-				<span><strong>${escapeHtml(STRINGS.filter)}:</strong> ${escapeHtml(model.filter)}</span>
+				<span><strong>${escapeHtml(STRINGS.filter)}:</strong> ${escapeHtml(getFilterLabel(model.filter))}</span>
 				<span><strong>${escapeHtml(STRINGS.diffRows)}:</strong> ${model.page.diffRowCount}</span>
 				<span><strong>${escapeHtml(STRINGS.sameRows)}:</strong> ${model.page.sameRowCount}</span>
 				<span><strong>${escapeHtml(STRINGS.visibleRows)}:</strong> ${model.page.visibleRowCount}</span>
@@ -340,6 +470,7 @@ function renderApp() {
 	`;
 
 	attachPaneScrollSync();
+	syncSelectedCellAfterRender();
 }
 
 function syncPaneScroll(sourcePane) {
@@ -400,6 +531,17 @@ window.addEventListener('message', (event) => {
 });
 
 document.addEventListener('click', (event) => {
+	const cellTarget = event.target.closest('[data-role="grid-cell"]');
+	if (cellTarget) {
+		selectedCell = {
+			rowNumber: Number(cellTarget.getAttribute('data-row-number')),
+			columnNumber: Number(cellTarget.getAttribute('data-column-number')),
+		};
+		pendingSelectionReason = null;
+		applySelectedCell();
+		return;
+	}
+
 	const target = event.target.closest('[data-action]');
 	if (!target) {
 		return;
@@ -426,9 +568,11 @@ document.addEventListener('click', (event) => {
 			vscode.postMessage({ type: 'nextPage' });
 			return;
 		case 'prev-diff':
+			pendingSelectionReason = 'highlighted-diff';
 			vscode.postMessage({ type: 'prevDiff' });
 			return;
 		case 'next-diff':
+			pendingSelectionReason = 'highlighted-diff';
 			vscode.postMessage({ type: 'nextDiff' });
 			return;
 		case 'swap':

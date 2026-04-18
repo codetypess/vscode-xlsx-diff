@@ -12,8 +12,6 @@
   ],
   "activationEvents": [
     "onStartupFinished",
-    "onCommand:xlsx-diff.compareTwoFiles",
-    "onCommand:xlsx-diff.compareActiveWith",
     "onUri"
   ],
   "main": "./dist/extension.js",
@@ -68,6 +66,26 @@
           "group": "navigation@10"
         }
       ]
+    },
+    "configuration": {
+      "title": "%configuration.title%",
+      "properties": {
+        "xlsx-diff.displayLanguage": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "en",
+            "zh-cn"
+          ],
+          "default": "auto",
+          "markdownDescription": "%configuration.displayLanguage.description%",
+          "enumDescriptions": [
+            "%configuration.displayLanguage.auto%",
+            "%configuration.displayLanguage.en%",
+            "%configuration.displayLanguage.zhCn%"
+          ]
+        }
+      }
     }
   },
   "scripts": {

@@ -1,13 +1,14 @@
-import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { WEBVIEW_TYPE_DIFF_PANEL } from '../constants';
 import { buildWorkbookDiff } from '../core/diff/buildWorkbookDiff';
 import { loadWorkbookSnapshot } from '../core/fastxlsx/loadWorkbookSnapshot';
 import type {
 	PanelState,
+	RenderModel,
 	RowFilterMode,
 	WorkbookDiffModel,
 } from '../core/model/types';
+import { getHtmlLanguageTag, isChineseDisplayLanguage } from '../displayLanguage';
 import {
 	createInitialPanelState,
 	createRenderModel,
@@ -50,11 +51,14 @@ interface WebviewStrings {
 	modified: string;
 	sheet: string;
 	rows: string;
+	noRows: string;
 	page: string;
 	filter: string;
+	diffCells: string;
 	diffRows: string;
 	sameRows: string;
 	visibleRows: string;
+	readOnly: string;
 }
 
 function getNonce(): string {
@@ -66,7 +70,7 @@ function toErrorMessage(error: unknown): string {
 }
 
 function getWebviewStrings(): WebviewStrings {
-	const isChinese = vscode.env.language.toLowerCase().startsWith('zh');
+	const isChinese = isChineseDisplayLanguage();
 	if (isChinese) {
 		return {
 			loading: '正在加载 XLSX 对比...',
@@ -87,11 +91,14 @@ function getWebviewStrings(): WebviewStrings {
 			modified: '修改时间',
 			sheet: '工作表',
 			rows: '行',
+			noRows: '无行',
 			page: '页码',
 			filter: '筛选',
+			diffCells: '差异单元格',
 			diffRows: '差异行',
 			sameRows: '相同行',
 			visibleRows: '可见行',
+			readOnly: '只读',
 		};
 	}
 
@@ -114,11 +121,14 @@ function getWebviewStrings(): WebviewStrings {
 		modified: 'Modified',
 		sheet: 'Sheet',
 		rows: 'Rows',
+		noRows: 'No rows',
 		page: 'Page',
 		filter: 'Filter',
+		diffCells: 'Diff cells',
 		diffRows: 'Diff rows',
 		sameRows: 'Same rows',
 		visibleRows: 'Visible rows',
+		readOnly: 'Read-only',
 	};
 }
 
@@ -211,6 +221,14 @@ export class XlsxDiffPanel {
 		await instance.reloadModel();
 	}
 
+	public static async refreshAll(): Promise<void> {
+		await Promise.all(
+			[...XlsxDiffPanel.panels.values()].map((panel) =>
+				panel.refreshForDisplayLanguageChange(),
+			),
+		);
+	}
+
 	private static getPanelKey(leftFileUri: vscode.Uri, rightFileUri: vscode.Uri): string {
 		return [leftFileUri.toString(), rightFileUri.toString()].sort().join('::');
 	}
@@ -221,10 +239,18 @@ export class XlsxDiffPanel {
 		}
 	}
 
+	private async refreshForDisplayLanguageChange(): Promise<void> {
+		this.isWebviewReady = false;
+		this.hasPendingRender = Boolean(this.diffModel);
+		this.panel.webview.html = this.getHtml();
+		await this.reloadModel();
+	}
+
 	private getHtml(): string {
 		const webview = this.panel.webview;
 		const nonce = getNonce();
-		const strings = JSON.stringify(getWebviewStrings()).replace(/</g, '\\u003c');
+		const webviewStrings = getWebviewStrings();
+		const strings = JSON.stringify(webviewStrings).replace(/</g, '\\u003c');
 		const scriptUri = webview.asWebviewUri(
 			vscode.Uri.joinPath(this.extensionUri, 'media', 'panel.js'),
 		);
@@ -243,7 +269,7 @@ export class XlsxDiffPanel {
 		);
 
 		return `<!DOCTYPE html>
-<html lang="en">
+<html lang="${getHtmlLanguageTag()}">
 <head>
 	<meta charset="UTF-8" />
 	<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} https: data:; script-src 'nonce-${nonce}'; style-src ${webview.cspSource}; font-src ${webview.cspSource};" />
@@ -254,7 +280,7 @@ export class XlsxDiffPanel {
 </head>
 <body>
 	<div id="app" class="loading-shell">
-		<div class="loading-shell__message">${getWebviewStrings().loading}</div>
+		<div class="loading-shell__message">${webviewStrings.loading}</div>
 	</div>
 	<script nonce="${nonce}">window.__XLSX_DIFF_STRINGS__ = ${strings};</script>
 	<script nonce="${nonce}" src="${scriptUri}"></script>
@@ -353,12 +379,13 @@ export class XlsxDiffPanel {
 	}
 
 	private async reloadModel(): Promise<void> {
-		this.panel.title = 'Loading XLSX diff...';
+		const webviewStrings = getWebviewStrings();
+		this.panel.title = webviewStrings.loading;
 
 		if (this.isWebviewReady) {
 			await this.panel.webview.postMessage({
 				type: 'loading',
-				message: 'Loading XLSX diff...',
+				message: webviewStrings.loading,
 			});
 		}
 
@@ -377,12 +404,20 @@ export class XlsxDiffPanel {
 				)
 			: createInitialPanelState(this.diffModel);
 
-		this.panel.title = `${leftWorkbook.fileName} ↔ ${rightWorkbook.fileName}`;
-		await this.render();
+		const renderModel = createRenderModel(this.diffModel, this.state);
+		this.panel.title = renderModel.title;
+		await this.render(renderModel);
 	}
 
-	private async render(): Promise<void> {
-		if (!this.diffModel || !this.isWebviewReady) {
+	private async render(renderModel?: RenderModel): Promise<void> {
+		if (!this.diffModel) {
+			return;
+		}
+
+		const payload = renderModel ?? createRenderModel(this.diffModel, this.state);
+		this.panel.title = payload.title;
+
+		if (!this.isWebviewReady) {
 			this.hasPendingRender = true;
 			return;
 		}
@@ -390,7 +425,7 @@ export class XlsxDiffPanel {
 		this.hasPendingRender = false;
 		await this.panel.webview.postMessage({
 			type: 'render',
-			payload: createRenderModel(this.diffModel, this.state),
+			payload,
 		});
 	}
 }

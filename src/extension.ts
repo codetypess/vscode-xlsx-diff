@@ -5,8 +5,10 @@ import {
 	COMMAND_COMPARE_ACTIVE_WITH,
 	COMMAND_COMPARE_TWO_FILES,
 } from './constants';
+import { affectsDisplayLanguage } from './displayLanguage';
 import { XlsxDiffUriHandler } from './git/uriHandler';
 import { registerScmWorkbookDiffInterceptor } from './scm/scmDiffInterceptor';
+import { XlsxDiffPanel } from './webview/diffPanel';
 
 export function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(
@@ -14,6 +16,13 @@ export function activate(context: vscode.ExtensionContext) {
 			new XlsxDiffUriHandler(context.extensionUri),
 		),
 		registerScmWorkbookDiffInterceptor(context.extensionUri),
+		vscode.workspace.onDidChangeConfiguration((event) => {
+			if (!affectsDisplayLanguage(event)) {
+				return;
+			}
+
+			void XlsxDiffPanel.refreshAll();
+		}),
 		vscode.commands.registerCommand(COMMAND_COMPARE_TWO_FILES, async () => {
 			await compareTwoFiles(context.extensionUri);
 		}),

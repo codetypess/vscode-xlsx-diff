@@ -2,17 +2,20 @@ import { execFile as execFileCallback } from 'node:child_process';
 import * as path from 'node:path';
 import { promisify } from 'node:util';
 import * as vscode from 'vscode';
+import { isChineseDisplayLanguage } from '../displayLanguage';
 
 interface GitUriQuery {
 	path?: string;
 	ref?: string;
 }
 
-const execFile = promisify(execFileCallback);
-
-function isChineseLocale(): boolean {
-	return vscode.env.language.toLowerCase().startsWith('zh');
+interface WorkbookResourceDetail {
+	label: string;
+	value: string;
+	titleValue?: string;
 }
+
+const execFile = promisify(execFileCallback);
 
 function getUriPathForExtension(uri: vscode.Uri): string {
 	return uri.scheme === 'file' ? uri.fsPath : decodeURIComponent(uri.path);
@@ -67,14 +70,14 @@ async function resolveShortCommit(
 	return runGit(repositoryRoot, ['rev-parse', '--short', ref]);
 }
 
-export function describeGitResourceRef(
+function createGitResourcePresentation(
 	ref: string,
 	options: {
 		resolvedCommit?: string;
 		hasStagedChanges?: boolean;
 	} = {},
-): { label: string; value: string } {
-	const isChinese = isChineseLocale();
+): WorkbookResourceDetail {
+	const isChinese = isChineseDisplayLanguage();
 	const sourceLabel = isChinese ? '来源' : 'Source';
 	const commitLabel = isChinese ? '提交' : 'Commit';
 	const indexLabel = isChinese ? '暂存区' : 'Index';
@@ -99,12 +102,14 @@ export function describeGitResourceRef(
 						? `暂存区 · 基线 ${options.resolvedCommit}`
 						: `Index · base ${options.resolvedCommit}`
 					: indexLabel,
+				titleValue: options.resolvedCommit,
 			};
 		}
 
 		return {
 			label: commitLabel,
 			value: options.resolvedCommit ?? 'HEAD',
+			titleValue: options.resolvedCommit,
 		};
 	}
 
@@ -112,6 +117,7 @@ export function describeGitResourceRef(
 		return {
 			label: commitLabel,
 			value: options.resolvedCommit,
+			titleValue: options.resolvedCommit,
 		};
 	}
 
@@ -119,6 +125,17 @@ export function describeGitResourceRef(
 		label: sourceLabel,
 		value: isChinese ? `Git 引用: ${ref}` : `Git ref: ${ref}`,
 	};
+}
+
+export function describeGitResourceRef(
+	ref: string,
+	options: {
+		resolvedCommit?: string;
+		hasStagedChanges?: boolean;
+	} = {},
+): { label: string; value: string } {
+	const { label, value } = createGitResourcePresentation(ref, options);
+	return { label, value };
 }
 
 export function isWorkbookResourceUri(uri: vscode.Uri | undefined): uri is vscode.Uri {
@@ -138,15 +155,21 @@ export function getWorkbookResourcePathLabel(uri: vscode.Uri): string {
 export function getWorkbookResourceTimeLabel(uri: vscode.Uri): string | undefined {
 	const gitQuery = parseGitUriQuery(uri);
 	if (gitQuery && gitQuery.ref !== undefined) {
-		return `Git ref: ${gitQuery.ref}`;
+		return isChineseDisplayLanguage()
+			? `Git 引用: ${gitQuery.ref}`
+			: `Git ref: ${gitQuery.ref}`;
 	}
 
-	return uri.scheme === 'file' ? undefined : `${uri.scheme.toUpperCase()} resource`;
+	return uri.scheme === 'file'
+		? undefined
+		: isChineseDisplayLanguage()
+			? `${uri.scheme.toUpperCase()} 资源`
+			: `${uri.scheme.toUpperCase()} resource`;
 }
 
 export async function getWorkbookResourceDetail(
 	uri: vscode.Uri,
-): Promise<{ label: string; value: string } | undefined> {
+): Promise<WorkbookResourceDetail | undefined> {
 	const gitQuery = parseGitUriQuery(uri);
 	if (!gitQuery || gitQuery.ref === undefined) {
 		return undefined;
@@ -163,18 +186,23 @@ export async function getWorkbookResourceDetail(
 			resolveShortCommit(repositoryRoot, 'HEAD'),
 			hasStagedChanges(repositoryRoot, resourcePath),
 		]);
-		return describeGitResourceRef(gitQuery.ref, {
+		return createGitResourcePresentation(gitQuery.ref, {
 			resolvedCommit,
 			hasStagedChanges: stagedChanges,
 		});
 	}
 
 	if (gitQuery.ref === '' || /^~\d$/.test(gitQuery.ref)) {
-		return describeGitResourceRef(gitQuery.ref);
+		return createGitResourcePresentation(gitQuery.ref);
 	}
 
 	const resolvedCommit = await resolveShortCommit(repositoryRoot, gitQuery.ref);
-	return describeGitResourceRef(gitQuery.ref, { resolvedCommit });
+	return createGitResourcePresentation(gitQuery.ref, { resolvedCommit });
+}
+
+export function isWorkbookResourceReadOnly(uri: vscode.Uri): boolean {
+	const isWritable = vscode.workspace.fs.isWritableFileSystem(uri.scheme);
+	return isWritable === false || (isWritable === undefined && uri.scheme !== 'file');
 }
 
 export function getWorkbookDiffUrisFromTabInput(

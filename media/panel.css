@@ -150,10 +150,25 @@ body {
 }
 
 .file-card__name {
+	display: flex;
+	align-items: center;
+	gap: 6px;
 	font-size: 14px;
 	font-weight: 600;
 	margin-bottom: 6px;
+	min-width: 0;
+}
+
+.file-card__name-text {
+	flex: 1 1 auto;
+	min-width: 0;
 	word-break: break-word;
+}
+
+.file-card__lock {
+	flex: 0 0 auto;
+	font-size: 14px;
+	color: var(--vscode-descriptionForeground);
 }
 
 .file-card__meta {
@@ -263,9 +278,11 @@ body {
 
 .grid__row-number {
 	width: 56px;
+	padding: 4px 7px;
 	text-align: right;
 	color: var(--vscode-descriptionForeground);
 	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
 }
 
 .grid__row-label,
@@ -273,6 +290,7 @@ body {
 	display: inline-flex;
 	align-items: center;
 	gap: 6px;
+	min-height: 18px;
 }
 
 .grid__row-label {
@@ -281,20 +299,36 @@ body {
 }
 
 .grid__column {
+	padding: 4px 7px;
 	min-width: 108px;
 	max-width: 240px;
 	text-align: left;
 }
 
 .grid__cell {
-	padding: 4px 7px;
-	line-height: 1.35;
-	white-space: pre-wrap;
-	word-break: break-word;
+	padding: 3px 7px;
+	line-height: 1.25;
+	position: relative;
+	cursor: pointer;
 }
 
 .grid__cell-content {
-	display: block;
+	display: flex;
+	align-items: flex-start;
+	gap: 6px;
+	min-height: 18px;
+	max-height: calc(1.25em * 2);
+	overflow: hidden;
+}
+
+.grid__cell-value {
+	flex: 1 1 auto;
+	display: -webkit-box;
+	overflow: hidden;
+	white-space: pre-wrap;
+	word-break: break-word;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 2;
 }
 
 .grid__cell--modified {
@@ -322,11 +356,11 @@ body {
 
 .cell__formula {
 	display: inline-flex;
-	margin-left: 6px;
+	flex: 0 0 auto;
 	padding: 0 5px;
 	border-radius: 999px;
-	font-size: 11px;
-	line-height: 16px;
+	font-size: 10px;
+	line-height: 14px;
 	background: color-mix(
 		in srgb,
 		var(--vscode-editorInfo-foreground, #3794ff) 18%,
@@ -383,9 +417,10 @@ body {
 	background: var(--vscode-editorError-foreground, #f14c4c);
 }
 
-.grid__cell--highlighted {
-	outline: 1px solid var(--cell-accent, var(--vscode-focusBorder));
-	outline-offset: -1px;
+.grid__cell--selected {
+	outline: 2px solid var(--vscode-focusBorder);
+	outline-offset: -2px;
+	z-index: 1;
 }
 
 .empty-table {

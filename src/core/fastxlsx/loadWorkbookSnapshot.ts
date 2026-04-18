@@ -13,6 +13,7 @@ import {
 	getWorkbookResourceName,
 	getWorkbookResourcePathLabel,
 	getWorkbookResourceTimeLabel,
+	isWorkbookResourceReadOnly,
 } from '../../workbook/resourceUri';
 
 interface SheetReader {
@@ -37,6 +38,9 @@ interface WorkbookSnapshotMetadata {
 	modifiedTime: string;
 	modifiedTimeLabel?: string;
 	detailLabel?: string;
+	detailValue?: string;
+	titleDetail?: string;
+	isReadonly?: boolean;
 }
 
 function createSheetSignature(sheet: SheetSnapshot): string {
@@ -134,6 +138,7 @@ export async function loadWorkbookSnapshot(
 			fileName: path.basename(filePathOrUri),
 			fileSize: fileStats.size,
 			modifiedTime: fileStats.mtime.toISOString(),
+			isReadonly: false,
 		});
 	}
 
@@ -152,20 +157,26 @@ export async function loadWorkbookSnapshot(
 			fileName: resourceName,
 			fileSize: fileStats.size,
 			modifiedTime: fileStats.mtime.toISOString(),
+			isReadonly: isWorkbookResourceReadOnly(filePathOrUri),
 		});
 	}
 
-	const resourceStats = resourceFilePath ? await stat(resourceFilePath).catch(() => undefined) : undefined;
+	const resourceStats = resourceFilePath
+		? await stat(resourceFilePath).catch(() => undefined)
+		: undefined;
 
 	return createWorkbookSnapshot(workbook, {
 		filePath: resourcePath,
 		fileName: resourceName,
 		fileSize: archiveData.byteLength,
 		modifiedTime: resourceStats?.mtime.toISOString() ?? new Date().toISOString(),
+		modifiedTimeLabel: resourceStats
+			? undefined
+			: getWorkbookResourceTimeLabel(filePathOrUri) ??
+				`${filePathOrUri.scheme.toUpperCase()} resource`,
 		detailLabel: resourceDetail?.label,
-		modifiedTimeLabel:
-			resourceDetail?.value ??
-			getWorkbookResourceTimeLabel(filePathOrUri) ??
-			`${filePathOrUri.scheme.toUpperCase()} resource`,
+		detailValue: resourceDetail?.value,
+		titleDetail: resourceDetail?.titleValue,
+		isReadonly: isWorkbookResourceReadOnly(filePathOrUri),
 	});
 }

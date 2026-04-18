@@ -1,9 +1,12 @@
 import * as path from 'node:path';
 import * as vscode from 'vscode';
+import { isChineseDisplayLanguage } from '../displayLanguage';
 
-const XLSX_FILTER = {
-	'Excel Workbooks': ['xlsx'],
-};
+function getWorkbookFilters(): Record<string, string[]> {
+	return {
+		[isChineseDisplayLanguage() ? 'Excel 工作簿' : 'Excel Workbooks']: ['xlsx'],
+	};
+}
 
 function getWorkbookUriFromTabInput(
 	input: vscode.TabInputText | vscode.TabInputTextDiff | vscode.TabInputCustom | vscode.TabInputNotebook | unknown,
@@ -52,7 +55,7 @@ export async function pickWorkbook(
 		canSelectFolders: false,
 		canSelectMany: false,
 		defaultUri: toDirectoryUri(seedUri) ?? seedUri,
-		filters: XLSX_FILTER,
+		filters: getWorkbookFilters(),
 		openLabel,
 	});
 

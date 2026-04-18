@@ -28,6 +28,9 @@ export interface WorkbookSnapshot {
 	modifiedTime: string;
 	modifiedTimeLabel?: string;
 	detailLabel?: string;
+	detailValue?: string;
+	titleDetail?: string;
+	isReadonly?: boolean;
 	sheets: SheetSnapshot[];
 }
 
@@ -116,6 +119,7 @@ export interface WorkbookFileView {
 	detailLabel?: string;
 	detailValue?: string;
 	modifiedTimeLabel: string;
+	isReadonly: boolean;
 }
 
 export interface RenderModel {

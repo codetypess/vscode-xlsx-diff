@@ -1,6 +1,11 @@
 {
   "extension.displayName": "XLSX 对比",
   "extension.description": "在 VS Code 和 Git 中对比 XLSX 文件",
+  "configuration.title": "XLSX 对比",
+  "configuration.displayLanguage.description": "控制 XLSX Diff 提示和对比面板使用的显示语言。",
+  "configuration.displayLanguage.auto": "跟随当前 VS Code 显示语言。",
+  "configuration.displayLanguage.en": "始终使用英文。",
+  "configuration.displayLanguage.zhCn": "始终使用简体中文。",
   "command.category": "XLSX 对比",
   "command.compareTwoFiles.title": "比较两个 XLSX 文件",
   "command.compareActiveWith.title": "与当前 XLSX 进行比较...",
