@@ -2,7 +2,7 @@
 
 A VS Code extension for visually comparing and editing `.xlsx` workbooks — directly inside the editor, with first-class Git / SCM integration.
 
-![XLSX Diff screenshot](snapshot.png)
+![XLSX Diff screenshot](./media/preview.png)
 
 ---
 
@@ -116,10 +116,7 @@ npm test
 
 ## License
 
-MIT
-
-3. VS Code routes the URI to the extension's `UriHandler`
-4. The extension opens the XLSX diff panel with those two files
+MIT. See [LICENSE](./LICENSE).
 
 ## Current behavior notes
 

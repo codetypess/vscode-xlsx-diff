@@ -5,12 +5,34 @@
   "description": "%extension.description%",
   "icon": "media/icon.png",
   "version": "0.0.1",
+  "license": "MIT",
+  "homepage": "https://github.com/codetypess/vscode-xlsx-diff#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/codetypess/vscode-xlsx-diff.git"
+  },
+  "bugs": {
+    "url": "https://github.com/codetypess/vscode-xlsx-diff/issues"
+  },
   "engines": {
     "vscode": "^1.105.0"
   },
   "categories": [
+    "Visualization",
     "Other"
   ],
+  "keywords": [
+    "xlsx",
+    "excel",
+    "spreadsheet",
+    "diff",
+    "compare",
+    "git"
+  ],
+  "galleryBanner": {
+    "color": "#0f172a",
+    "theme": "dark"
+  },
   "activationEvents": [
     "onStartupFinished",
     "onUri"
@@ -18,6 +40,16 @@
   "main": "./dist/extension.js",
   "bin": {
     "xlsx-difftool": "./scripts/xlsx-difftool.mjs"
+  },
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "XLSX Diff reads workbook contents and can write local workbook files when cell editing is used."
+    },
+    "virtualWorkspaces": {
+      "supported": false,
+      "description": "XLSX Diff currently requires local file-system access to compare and edit workbook files."
+    }
   },
   "contributes": {
     "commands": [
@@ -103,7 +135,7 @@
   "devDependencies": {
     "@types/mocha": "^10.0.10",
     "@types/node": "22.x",
-    "@types/vscode": "^1.116.0",
+    "@types/vscode": "1.105.0",
     "@vscode/test-cli": "^0.0.12",
     "@vscode/test-electron": "^2.5.2",
     "esbuild": "^0.27.3",
@@ -114,7 +146,6 @@
     "typescript-eslint": "^8.56.1"
   },
   "dependencies": {
-    "@vscode/codicons": "^0.0.45",
     "fastxlsx": "^1.3.1"
   }
 }

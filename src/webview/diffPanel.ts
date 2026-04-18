@@ -378,10 +378,8 @@ export class XlsxDiffPanel {
 		const codiconStyleUri = webview.asWebviewUri(
 			vscode.Uri.joinPath(
 				this.extensionUri,
-				'node_modules',
-				'@vscode',
+				'media',
 				'codicons',
-				'dist',
 				'codicon.css',
 			),
 		);
