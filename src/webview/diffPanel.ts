@@ -1,3 +1,4 @@
+import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { WEBVIEW_TYPE_DIFF_PANEL } from '../constants';
 import { buildWorkbookDiff } from '../core/diff/buildWorkbookDiff';
@@ -12,11 +13,14 @@ import { getHtmlLanguageTag, isChineseDisplayLanguage } from '../displayLanguage
 import {
 	createInitialPanelState,
 	createRenderModel,
+	movePageCursor,
 	moveDiffCursor,
 	normalizePanelState,
 	setActiveSheet,
 	setCurrentPage,
 	setFilterMode,
+	setHighlightedDiffCell,
+	setHighlightedDiffRow,
 } from './renderModel';
 import { getWorkbookResourceName } from '../workbook/resourceUri';
 
@@ -29,6 +33,7 @@ type WebviewMessage =
 	| { type: 'nextPage' }
 	| { type: 'prevDiff' }
 	| { type: 'nextDiff' }
+	| { type: 'selectCell'; rowNumber: number; columnNumber: number }
 	| { type: 'swap' }
 	| { type: 'reload' };
 
@@ -67,6 +72,10 @@ function getNonce(): string {
 
 function toErrorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
+}
+
+function escapeWatcherGlobSegment(value: string): string {
+	return value.replace(/[{}\[\]*?]/g, '[$&]');
 }
 
 function getWebviewStrings(): WebviewStrings {
@@ -138,6 +147,7 @@ export class XlsxDiffPanel {
 	private readonly panel: vscode.WebviewPanel;
 	private readonly extensionUri: vscode.Uri;
 	private readonly disposables: vscode.Disposable[] = [];
+	private readonly fileWatchers: vscode.Disposable[] = [];
 	private readonly panelKey: string;
 
 	private leftFileUri: vscode.Uri;
@@ -147,10 +157,13 @@ export class XlsxDiffPanel {
 		activeSheetKey: null,
 		filter: 'all',
 		currentPage: 1,
-		highlightedDiffRow: null,
+		highlightedDiffCellKey: null,
 	};
 	private isWebviewReady = false;
 	private hasPendingRender = false;
+	private isReloading = false;
+	private hasQueuedReload = false;
+	private autoRefreshTimer: ReturnType<typeof setTimeout> | undefined;
 
 	private constructor(
 		panel: vscode.WebviewPanel,
@@ -181,6 +194,7 @@ export class XlsxDiffPanel {
 			null,
 			this.disposables,
 		);
+		this.refreshFileWatchers();
 	}
 
 	public static async create(
@@ -192,10 +206,9 @@ export class XlsxDiffPanel {
 		const panelKey = XlsxDiffPanel.getPanelKey(leftFileUri, rightFileUri);
 		const existingPanel = XlsxDiffPanel.panels.get(panelKey);
 		if (existingPanel) {
-			existingPanel.leftFileUri = leftFileUri;
-			existingPanel.rightFileUri = rightFileUri;
+			existingPanel.setFileUris(leftFileUri, rightFileUri);
 			existingPanel.panel.reveal(viewColumn, true);
-			await existingPanel.reloadModel();
+			await existingPanel.enqueueReload();
 			return;
 		}
 
@@ -218,7 +231,7 @@ export class XlsxDiffPanel {
 			panelKey,
 		);
 		XlsxDiffPanel.panels.set(panelKey, instance);
-		await instance.reloadModel();
+		await instance.enqueueReload();
 	}
 
 	public static async refreshAll(): Promise<void> {
@@ -234,8 +247,111 @@ export class XlsxDiffPanel {
 	}
 
 	private dispose(): void {
+		if (this.autoRefreshTimer) {
+			clearTimeout(this.autoRefreshTimer);
+			this.autoRefreshTimer = undefined;
+		}
+
+		this.disposeFileWatchers();
+
 		for (const disposable of this.disposables) {
 			disposable.dispose();
+		}
+	}
+
+	private disposeFileWatchers(): void {
+		for (const disposable of this.fileWatchers) {
+			disposable.dispose();
+		}
+
+		this.fileWatchers.length = 0;
+	}
+
+	private setFileUris(leftFileUri: vscode.Uri, rightFileUri: vscode.Uri): void {
+		this.leftFileUri = leftFileUri;
+		this.rightFileUri = rightFileUri;
+		this.refreshFileWatchers();
+	}
+
+	private refreshFileWatchers(): void {
+		this.disposeFileWatchers();
+
+		const watchTargets = new Map<string, vscode.Uri>();
+		for (const uri of [this.leftFileUri, this.rightFileUri]) {
+			if (uri.scheme !== 'file') {
+				continue;
+			}
+
+			watchTargets.set(uri.toString(), uri);
+		}
+
+		for (const uri of watchTargets.values()) {
+			const watcher = vscode.workspace.createFileSystemWatcher(
+				new vscode.RelativePattern(
+					vscode.Uri.file(path.dirname(uri.fsPath)),
+					escapeWatcherGlobSegment(path.basename(uri.fsPath)),
+				),
+			);
+			const scheduleRefresh = () => {
+				this.scheduleAutoRefresh();
+			};
+
+			this.fileWatchers.push(watcher);
+			this.fileWatchers.push(watcher.onDidChange(scheduleRefresh));
+			this.fileWatchers.push(watcher.onDidCreate(scheduleRefresh));
+			this.fileWatchers.push(watcher.onDidDelete(scheduleRefresh));
+		}
+	}
+
+	private scheduleAutoRefresh(): void {
+		if (this.autoRefreshTimer) {
+			clearTimeout(this.autoRefreshTimer);
+		}
+
+		this.autoRefreshTimer = setTimeout(() => {
+			this.autoRefreshTimer = undefined;
+			void this.enqueueReload().catch((error) => {
+				void this.handleError(error);
+			});
+		}, 250);
+	}
+
+	private async enqueueReload(): Promise<void> {
+		if (this.isReloading) {
+			this.hasQueuedReload = true;
+			return;
+		}
+
+		this.isReloading = true;
+		let reloadError: unknown;
+
+		try {
+			await this.reloadModel();
+		} catch (error) {
+			reloadError = error;
+		} finally {
+			this.isReloading = false;
+
+			if (this.hasQueuedReload) {
+				this.hasQueuedReload = false;
+				await this.enqueueReload();
+			}
+		}
+
+		if (reloadError) {
+			throw reloadError;
+		}
+	}
+
+	private async handleError(error: unknown): Promise<void> {
+		const errorMessage = toErrorMessage(error);
+		console.error(error);
+		await vscode.window.showErrorMessage(errorMessage);
+		if (this.isWebviewReady) {
+			await this.panel.webview.postMessage({
+				type: 'error',
+				message: errorMessage,
+			});
 		}
 	}
 
@@ -243,7 +359,7 @@ export class XlsxDiffPanel {
 		this.isWebviewReady = false;
 		this.hasPendingRender = Boolean(this.diffModel);
 		this.panel.webview.html = this.getHtml();
-		await this.reloadModel();
+		await this.enqueueReload();
 	}
 
 	private getHtml(): string {
@@ -322,22 +438,14 @@ export class XlsxDiffPanel {
 					if (!this.diffModel) {
 						return;
 					}
-					this.state = setCurrentPage(
-						this.diffModel,
-						this.state,
-						this.state.currentPage - 1,
-					);
+					this.state = movePageCursor(this.diffModel, this.state, -1);
 					await this.render();
 					return;
 				case 'nextPage':
 					if (!this.diffModel) {
 						return;
 					}
-					this.state = setCurrentPage(
-						this.diffModel,
-						this.state,
-						this.state.currentPage + 1,
-					);
+					this.state = movePageCursor(this.diffModel, this.state, 1);
 					await this.render();
 					return;
 				case 'prevDiff':
@@ -354,27 +462,29 @@ export class XlsxDiffPanel {
 					this.state = moveDiffCursor(this.diffModel, this.state, 1);
 					await this.render();
 					return;
+				case 'selectCell':
+					if (!this.diffModel) {
+						return;
+					}
+					this.state = setHighlightedDiffCell(
+						this.diffModel,
+						this.state,
+						message.rowNumber,
+						message.columnNumber,
+					);
+					await this.render();
+					return;
 				case 'swap': {
-					const leftFileUri = this.leftFileUri;
-					this.leftFileUri = this.rightFileUri;
-					this.rightFileUri = leftFileUri;
-					await this.reloadModel();
+					this.setFileUris(this.rightFileUri, this.leftFileUri);
+					await this.enqueueReload();
 					return;
 				}
 				case 'reload':
-					await this.reloadModel();
+					await this.enqueueReload();
 					return;
 			}
 		} catch (error) {
-			const errorMessage = toErrorMessage(error);
-			console.error(error);
-			await vscode.window.showErrorMessage(errorMessage);
-			if (this.isWebviewReady) {
-				await this.panel.webview.postMessage({
-					type: 'error',
-					message: errorMessage,
-				});
-			}
+			await this.handleError(error);
 		}
 	}
 

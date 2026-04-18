@@ -149,7 +149,7 @@ export function getWorkbookResourceName(uri: vscode.Uri): string {
 export function getWorkbookResourcePathLabel(uri: vscode.Uri): string {
 	const resourcePath = getUriPathForExtension(uri);
 	const gitQuery = parseGitUriQuery(uri);
-	return gitQuery?.ref ? `${resourcePath} @ ${gitQuery.ref}` : resourcePath;
+	return gitQuery?.ref ? `${resourcePath} (${gitQuery.ref})` : resourcePath;
 }
 
 export function getWorkbookResourceTimeLabel(uri: vscode.Uri): string | undefined {

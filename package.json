@@ -3,6 +3,7 @@
   "publisher": "codetypess",
   "displayName": "%extension.displayName%",
   "description": "%extension.description%",
+  "icon": "media/icon.png",
   "version": "0.0.1",
   "engines": {
     "vscode": "^1.105.0"
@@ -41,13 +42,6 @@
         },
         {
           "command": "xlsx-diff.compareTwoFiles",
-          "when": "resourceScheme == file && resourceExtname == .xlsx",
-          "group": "navigation@11"
-        }
-      ],
-      "editor/title": [
-        {
-          "command": "xlsx-diff.compareActiveWith",
           "when": "resourceScheme == file && resourceExtname == .xlsx",
           "group": "navigation@10"
         }

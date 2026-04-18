@@ -4,6 +4,8 @@ let model = null;
 let isSyncingScroll = false;
 let selectedCell = null;
 let pendingSelectionReason = null;
+let layoutSyncFrame = 0;
+let shouldSyncSelectionAfterRender = false;
 const STRINGS = globalThis.__XLSX_DIFF_STRINGS__ ?? {
 	loading: 'Loading XLSX diff...',
 	all: 'All',
@@ -171,23 +173,13 @@ function getSheetTooltip(sheet) {
 }
 
 function getHighlightedDiffSelection() {
-	if (!model || model.page.highlightedDiffRow === null) {
+	if (!model || !model.page.highlightedDiffCell) {
 		return null;
 	}
 
-	const highlightedRow = model.page.rows.find(
-		(row) => row.rowNumber === model.page.highlightedDiffRow,
-	);
-	if (!highlightedRow || highlightedRow.cells.length === 0) {
-		return null;
-	}
-
-	const diffColumnIndex = highlightedRow.cells.findIndex(
-		(cell) => cell.status !== 'equal',
-	);
 	return {
-		rowNumber: highlightedRow.rowNumber,
-		columnNumber: diffColumnIndex >= 0 ? diffColumnIndex + 1 : 1,
+		rowNumber: model.page.highlightedDiffCell.rowNumber,
+		columnNumber: model.page.highlightedDiffCell.columnNumber,
 	};
 }
 
@@ -215,13 +207,106 @@ function clearSelectedCells() {
 	}
 }
 
-function revealSelectedCells(elements) {
-	for (const element of elements) {
-		element.scrollIntoView({
-			block: 'nearest',
-			inline: 'center',
-		});
+function clampScrollPosition(value, maxValue) {
+	return Math.max(0, Math.min(value, Math.max(maxValue, 0)));
+}
+
+function getPaneScrollState() {
+	const pane = document.querySelector('.pane__table');
+	if (!pane) {
+		return null;
 	}
+
+	return {
+		top: pane.scrollTop,
+		left: pane.scrollLeft,
+	};
+}
+
+function setPaneScrollPositions(updates) {
+	if (updates.length === 0) {
+		return;
+	}
+
+	isSyncingScroll = true;
+	for (const { pane, top, left } of updates) {
+		pane.scrollTop = clampScrollPosition(
+			top,
+			pane.scrollHeight - pane.clientHeight,
+		);
+		pane.scrollLeft = clampScrollPosition(
+			left,
+			pane.scrollWidth - pane.clientWidth,
+		);
+	}
+
+	requestAnimationFrame(() => {
+		isSyncingScroll = false;
+	});
+}
+
+function restorePaneScrollState(scrollState) {
+	if (!scrollState) {
+		return;
+	}
+
+	setPaneScrollPositions(
+		Array.from(document.querySelectorAll('.pane__table')).map((pane) => ({
+			pane,
+			top: scrollState.top,
+			left: scrollState.left,
+		})),
+	);
+}
+
+function getStickyPaneInsets(pane) {
+	const headerRow = pane.querySelector('thead tr');
+	const firstColumn = pane.querySelector('thead th:first-child');
+
+	return {
+		top: headerRow?.getBoundingClientRect().height ?? 0,
+		left: firstColumn?.getBoundingClientRect().width ?? 0,
+	};
+}
+
+function getDesiredPaneScrollPosition(pane, element) {
+	const paneRect = pane.getBoundingClientRect();
+	const elementRect = element.getBoundingClientRect();
+	const stickyInsets = getStickyPaneInsets(pane);
+	let top = pane.scrollTop;
+	let left = pane.scrollLeft;
+
+	if (elementRect.top < paneRect.top + stickyInsets.top) {
+		top -= paneRect.top + stickyInsets.top - elementRect.top;
+	} else if (elementRect.bottom > paneRect.bottom) {
+		top += elementRect.bottom - paneRect.bottom;
+	}
+
+	if (elementRect.left < paneRect.left + stickyInsets.left) {
+		left -= paneRect.left + stickyInsets.left - elementRect.left;
+	} else if (elementRect.right > paneRect.right) {
+		left += elementRect.right - paneRect.right;
+	}
+
+	return { top, left };
+}
+
+function revealSelectedCells(elements) {
+	setPaneScrollPositions(
+		elements
+			.map((element) => {
+				const pane = element.closest('.pane__table');
+				if (!pane) {
+					return null;
+				}
+
+				return {
+					pane,
+					...getDesiredPaneScrollPosition(pane, element),
+				};
+			})
+			.filter(Boolean),
+	);
 }
 
 function applySelectedCell({ reveal = false } = {}) {
@@ -258,6 +343,64 @@ function syncSelectedCellAfterRender() {
 
 	applySelectedCell({ reveal: shouldRevealSelection });
 	pendingSelectionReason = null;
+}
+
+function getGridRows(side) {
+	return Array.from(
+		document.querySelectorAll(`.pane[data-side="${side}"] [data-role="grid-row"]`),
+	);
+}
+
+function syncTableRowHeights() {
+	const leftRows = getGridRows('left');
+	const rightRows = getGridRows('right');
+	const rowCount = Math.min(leftRows.length, rightRows.length);
+
+	for (const row of [...leftRows, ...rightRows]) {
+		row.style.height = '';
+	}
+
+	for (let index = 0; index < rowCount; index += 1) {
+		const leftRow = leftRows[index];
+		const rightRow = rightRows[index];
+		const syncedHeight = Math.ceil(
+			Math.max(
+				leftRow.getBoundingClientRect().height,
+				rightRow.getBoundingClientRect().height,
+			),
+		);
+
+		if (syncedHeight <= 0) {
+			continue;
+		}
+
+		leftRow.style.height = `${syncedHeight}px`;
+		rightRow.style.height = `${syncedHeight}px`;
+	}
+}
+
+function scheduleLayoutSync({ afterRender = false } = {}) {
+	shouldSyncSelectionAfterRender =
+		shouldSyncSelectionAfterRender || afterRender;
+
+	if (layoutSyncFrame) {
+		cancelAnimationFrame(layoutSyncFrame);
+	}
+
+	layoutSyncFrame = requestAnimationFrame(() => {
+		const syncSelection = shouldSyncSelectionAfterRender;
+
+		layoutSyncFrame = 0;
+		shouldSyncSelectionAfterRender = false;
+		syncTableRowHeights();
+
+		if (syncSelection) {
+			syncSelectedCellAfterRender();
+			return;
+		}
+
+		applySelectedCell();
+	});
 }
 
 function renderTable(side) {
@@ -302,14 +445,14 @@ function renderTable(side) {
 					const cellClass = getSideCellClass(cell, side, highlightCell);
 					const cellTooltip = getCellTooltip(cell.address, value, formula);
 
-					return `<td title="${escapeHtml(cellTooltip)}" class="${cellClass}" data-role="grid-cell" data-row-number="${row.rowNumber}" data-column-number="${columnIndex + 1}" aria-selected="false">
+					return `<td title="${escapeHtml(cellTooltip)}" class="${cellClass}" data-role="grid-cell" data-row-number="${row.rowNumber}" data-column-number="${columnIndex + 1}" data-cell-status="${cell.status}" aria-selected="false">
 						<div class="grid__cell-content">${renderCellValue(value, formula)}</div>
 					</td>`;
 				})
 				.join('');
 
 			return `
-				<tr class="${rowClasses}">
+				<tr class="${rowClasses}" data-role="grid-row" data-row-number="${row.rowNumber}" data-row-has-diff="${row.hasDiff ? 'true' : 'false'}">
 					<th class="grid__row-number ${row.hasDiff ? `grid__row-number--diff grid__row-number--${row.diffTone}` : ''}">
 						<span class="grid__row-label">
 							${row.hasDiff ? `<span class="diff-marker ${getDiffToneClass(row.diffTone)}" aria-hidden="true"></span>` : ''}
@@ -360,12 +503,12 @@ function renderFileCard(file) {
 
 function renderPane(title, side) {
 	return `
-		<section class="pane">
+		<section class="pane" data-side="${side}">
 			<div class="pane__header">
 				<div class="pane__title">${escapeHtml(title)}</div>
 				${model.activeSheet.mergedRangesChanged ? `<span class="badge badge--warn">${escapeHtml(STRINGS.mergedRangesChanged)}</span>` : ''}
 			</div>
-			<div class="pane__table">${renderTable(side)}</div>
+			<div class="pane__table" data-side="${side}">${renderTable(side)}</div>
 		</section>
 	`;
 }
@@ -457,6 +600,8 @@ function renderApp() {
 		return;
 	}
 
+	const previousPaneScrollState = getPaneScrollState();
+
 	document.body.innerHTML = `
 		<div id="app" class="app">
 			${renderToolbar()}
@@ -470,7 +615,8 @@ function renderApp() {
 	`;
 
 	attachPaneScrollSync();
-	syncSelectedCellAfterRender();
+	restorePaneScrollState(previousPaneScrollState);
+	scheduleLayoutSync({ afterRender: true });
 }
 
 function syncPaneScroll(sourcePane) {
@@ -511,6 +657,14 @@ function attachPaneScrollSync() {
 	}
 }
 
+window.addEventListener('resize', () => {
+	if (!model) {
+		return;
+	}
+
+	scheduleLayoutSync();
+});
+
 window.addEventListener('message', (event) => {
 	const message = event.data;
 
@@ -531,18 +685,42 @@ window.addEventListener('message', (event) => {
 });
 
 document.addEventListener('click', (event) => {
-	const cellTarget = event.target.closest('[data-role="grid-cell"]');
-	if (cellTarget) {
-		selectedCell = {
-			rowNumber: Number(cellTarget.getAttribute('data-row-number')),
-			columnNumber: Number(cellTarget.getAttribute('data-column-number')),
-		};
-		pendingSelectionReason = null;
-		applySelectedCell();
+	const eventTarget = event.target instanceof Element ? event.target : null;
+	if (!eventTarget) {
 		return;
 	}
 
-	const target = event.target.closest('[data-action]');
+	const cellTarget = eventTarget.closest('[data-role="grid-cell"]');
+	if (cellTarget) {
+		const rowNumber = Number(cellTarget.getAttribute('data-row-number'));
+		const columnNumber = Number(cellTarget.getAttribute('data-column-number'));
+		const cellStatus = cellTarget.getAttribute('data-cell-status');
+
+		selectedCell = {
+			rowNumber,
+			columnNumber,
+		};
+		pendingSelectionReason = null;
+		applySelectedCell();
+
+		if (
+			cellStatus !== 'equal' &&
+			(
+				model?.page.highlightedDiffCell?.rowNumber !== rowNumber ||
+				model?.page.highlightedDiffCell?.columnNumber !== columnNumber
+			)
+		) {
+			vscode.postMessage({
+				type: 'selectCell',
+				rowNumber,
+				columnNumber,
+			});
+		}
+
+		return;
+	}
+
+	const target = eventTarget.closest('[data-action]');
 	if (!target) {
 		return;
 	}

@@ -2,6 +2,7 @@ import { DEFAULT_PAGE_SIZE } from '../../constants';
 import { createCellKey, getColumnLabel } from '../model/cells';
 import {
 	type CellDiffStatus,
+	type DiffCellLocation,
 	type PageSlice,
 	type RowFilterMode,
 	type SheetDiffModel,
@@ -133,16 +134,33 @@ function resolveRowDiffTone(cells: { status: CellDiffStatus }[]): CellDiffStatus
 	return 'equal';
 }
 
+function getHighlightedDiffCell(
+	sheet: SheetDiffModel,
+	highlightedDiffCellKey: string | null,
+): DiffCellLocation | null {
+	if (!highlightedDiffCellKey) {
+		return null;
+	}
+
+	return (
+		sheet.diffCells.find((cell) => cell.key === highlightedDiffCellKey) ?? null
+	);
+}
+
 export function createPageSlice(
 	sheet: SheetDiffModel,
 	filter: RowFilterMode,
 	currentPage: number,
-	highlightedDiffRow: number | null,
+	highlightedDiffCellKey: string | null,
 ): PageSlice {
 	const totalRows = getFilteredRowCount(sheet, filter);
 	const normalizedPage = clampPage(totalRows, currentPage);
 	const rowNumbers = getRowNumbersForPage(sheet, filter, normalizedPage);
 	const diffRows = new Set(sheet.diffRows);
+	const highlightedDiffCell = getHighlightedDiffCell(
+		sheet,
+		highlightedDiffCellKey,
+	);
 	const columns = Array.from({ length: sheet.columnCount }, (_, index) =>
 		getColumnLabel(index + 1),
 	);
@@ -185,7 +203,7 @@ export function createPageSlice(
 			rowNumber,
 			hasDiff: diffRows.has(rowNumber),
 			isHighlighted:
-				highlightedDiffRow !== null && rowNumber === highlightedDiffRow,
+				highlightedDiffCell !== null && rowNumber === highlightedDiffCell.rowNumber,
 			diffTone: resolveRowDiffTone(cells),
 			cells,
 		};
@@ -209,7 +227,8 @@ export function createPageSlice(
 		diffRowCount: sheet.diffRows.length,
 		diffCellCount: sheet.diffCellCount,
 		sameRowCount: getSameRowCount(sheet),
-		highlightedDiffRow,
+		highlightedDiffRow: highlightedDiffCell?.rowNumber ?? null,
+		highlightedDiffCell,
 		mergedRangesChanged: sheet.mergedRangesChanged,
 	};
 }

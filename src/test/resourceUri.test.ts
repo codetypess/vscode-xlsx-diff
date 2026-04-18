@@ -41,7 +41,7 @@ suite('Workbook resource URIs', () => {
 
 		assert.strictEqual(
 			getWorkbookResourcePathLabel(gitUri),
-			'/tmp/item.xlsx @ HEAD',
+			'/tmp/item.xlsx (HEAD)',
 		);
 		assert.match(getWorkbookResourceTimeLabel(gitUri) ?? '', /HEAD$/);
 	});

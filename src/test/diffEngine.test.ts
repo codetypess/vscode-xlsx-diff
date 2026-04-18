@@ -86,9 +86,13 @@ suite('Diff engine', () => {
 		const sheet = diff.sheets[0];
 
 		assert.deepStrictEqual(sheet.diffRows, [2, 4]);
+		assert.deepStrictEqual(
+			sheet.diffCells.map((cell) => cell.key),
+			['2:1', '4:1'],
+		);
 		assert.strictEqual(sheet.diffCellCount, 2);
 
-		const diffPage = createPageSlice(sheet, 'diffs', 1, 2);
+		const diffPage = createPageSlice(sheet, 'diffs', 1, '2:1');
 		assert.deepStrictEqual(
 			diffPage.rows.map((row) => row.rowNumber),
 			[2, 4],
@@ -96,6 +100,7 @@ suite('Diff engine', () => {
 		assert.strictEqual(diffPage.rows[0].diffTone, 'modified');
 		assert.strictEqual(diffPage.rows[1].diffTone, 'added');
 		assert.strictEqual(diffPage.sameRowCount, 203);
+		assert.strictEqual(diffPage.highlightedDiffCell?.key, '2:1');
 
 		const secondAllPage = createPageSlice(sheet, 'all', 2, null);
 		assert.strictEqual(secondAllPage.currentPage, 2);

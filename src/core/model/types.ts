@@ -2,6 +2,13 @@ export type RowFilterMode = 'all' | 'diffs' | 'same';
 export type SheetComparisonKind = 'matched' | 'renamed' | 'added' | 'removed';
 export type CellDiffStatus = 'equal' | 'modified' | 'added' | 'removed';
 
+export interface DiffCellLocation {
+	key: string;
+	rowNumber: number;
+	columnNumber: number;
+	address: string;
+}
+
 export interface CellSnapshot {
 	key: string;
 	rowNumber: number;
@@ -44,6 +51,7 @@ export interface SheetDiffModel {
 	rowCount: number;
 	columnCount: number;
 	diffRows: number[];
+	diffCells: DiffCellLocation[];
 	diffCellCount: number;
 	mergedRangesChanged: boolean;
 }
@@ -90,6 +98,7 @@ export interface PageSlice {
 	diffCellCount: number;
 	sameRowCount: number;
 	highlightedDiffRow: number | null;
+	highlightedDiffCell: DiffCellLocation | null;
 	mergedRangesChanged: boolean;
 }
 
@@ -97,7 +106,7 @@ export interface PanelState {
 	activeSheetKey: string | null;
 	filter: RowFilterMode;
 	currentPage: number;
-	highlightedDiffRow: number | null;
+	highlightedDiffCellKey: string | null;
 }
 
 export interface SheetTabView {

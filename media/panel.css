@@ -329,6 +329,7 @@ body {
 	word-break: break-word;
 	-webkit-box-orient: vertical;
 	-webkit-line-clamp: 2;
+	line-clamp: 2;
 }
 
 .grid__cell--modified {
@@ -418,9 +419,15 @@ body {
 }
 
 .grid__cell--selected {
-	outline: 2px solid var(--vscode-focusBorder);
-	outline-offset: -2px;
 	z-index: 1;
+}
+
+.grid__cell--selected::after {
+	content: '';
+	position: absolute;
+	inset: 0;
+	border: 2px solid var(--vscode-focusBorder);
+	pointer-events: none;
 }
 
 .empty-table {

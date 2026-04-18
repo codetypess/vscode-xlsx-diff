@@ -1,5 +1,6 @@
 import {
 	type CellSnapshot,
+	type DiffCellLocation,
 	type SheetComparisonKind,
 	type SheetDiffModel,
 	type SheetSnapshot,
@@ -56,13 +57,18 @@ function createSheetDiff(
 	rightSheet: SheetSnapshot | null,
 ): SheetDiffModel {
 	const diffRows = new Set<number>();
-	let diffCellCount = 0;
+	const diffCells: DiffCellLocation[] = [];
 
 	if (!leftSheet || !rightSheet) {
 		const existingSheet = leftSheet ?? rightSheet;
 		for (const cell of Object.values(existingSheet?.cells ?? {})) {
 			diffRows.add(cell.rowNumber);
-			diffCellCount += 1;
+			diffCells.push({
+				key: cell.key,
+				rowNumber: cell.rowNumber,
+				columnNumber: cell.columnNumber,
+				address: cell.address,
+			});
 		}
 	} else {
 		const keys = new Set([
@@ -78,10 +84,24 @@ function createSheetDiff(
 				continue;
 			}
 
-			diffCellCount += 1;
-			diffRows.add((leftCell ?? rightCell)!.rowNumber);
+			const diffCell = leftCell ?? rightCell;
+			diffRows.add(diffCell!.rowNumber);
+			diffCells.push({
+				key: diffCell!.key,
+				rowNumber: diffCell!.rowNumber,
+				columnNumber: diffCell!.columnNumber,
+				address: diffCell!.address,
+			});
 		}
 	}
+
+	diffCells.sort((left, right) => {
+		if (left.rowNumber !== right.rowNumber) {
+			return left.rowNumber - right.rowNumber;
+		}
+
+		return left.columnNumber - right.columnNumber;
+	});
 
 	return {
 		key: createSheetKey(kind, leftSheet?.name ?? null, rightSheet?.name ?? null),
@@ -96,7 +116,8 @@ function createSheetDiff(
 			rightSheet?.columnCount ?? 0,
 		),
 		diffRows: [...diffRows].sort((left, right) => left - right),
-		diffCellCount,
+		diffCells,
+		diffCellCount: diffCells.length,
 		mergedRangesChanged: !areMergedRangesEqual(leftSheet, rightSheet),
 	};
 }

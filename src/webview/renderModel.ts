@@ -18,7 +18,7 @@ function getUntitledSheetLabel(): string {
 
 function getWorkbookTitle(workbook: WorkbookSnapshot): string {
 	return workbook.titleDetail
-		? `${workbook.fileName} @ ${workbook.titleDetail}`
+		? `${workbook.fileName} (${workbook.titleDetail})`
 		: workbook.fileName;
 }
 
@@ -91,16 +91,38 @@ function getFilteredRowCount(
 	}
 }
 
+function getTotalPages(sheet: SheetDiffModel, filter: RowFilterMode): number {
+	return Math.max(
+		1,
+		Math.ceil(Math.max(getFilteredRowCount(sheet, filter), 1) / DEFAULT_PAGE_SIZE),
+	);
+}
+
+function getFirstDiffCellKey(sheet: SheetDiffModel): string | null {
+	return sheet.diffCells[0]?.key ?? null;
+}
+
+function getDiffCellPage(
+	sheet: SheetDiffModel,
+	filter: RowFilterMode,
+	rowNumber: number,
+): number {
+	if (filter === 'diffs') {
+		const diffRowIndex = sheet.diffRows.indexOf(rowNumber);
+		return diffRowIndex >= 0
+			? Math.floor(diffRowIndex / DEFAULT_PAGE_SIZE) + 1
+			: 1;
+	}
+
+	return Math.floor((rowNumber - 1) / DEFAULT_PAGE_SIZE) + 1;
+}
+
 function clampPage(
 	sheet: SheetDiffModel,
 	filter: RowFilterMode,
 	page: number,
 ): number {
-	const totalRows = getFilteredRowCount(sheet, filter);
-	const totalPages = Math.max(
-		1,
-		Math.ceil(Math.max(totalRows, 1) / DEFAULT_PAGE_SIZE),
-	);
+	const totalPages = getTotalPages(sheet, filter);
 	return Math.min(Math.max(page, 1), totalPages);
 }
 
@@ -111,7 +133,7 @@ export function createInitialPanelState(diff: WorkbookDiffModel): PanelState {
 		activeSheetKey: firstSheet?.key ?? null,
 		filter: 'all',
 		currentPage: 1,
-		highlightedDiffRow: firstSheet?.diffRows[0] ?? null,
+		highlightedDiffCellKey: getFirstDiffCellKey(firstSheet),
 	};
 }
 
@@ -129,22 +151,24 @@ export function normalizePanelState(
 			activeSheetKey: null,
 			filter: 'all',
 			currentPage: 1,
-			highlightedDiffRow: null,
+			highlightedDiffCellKey: null,
 		};
 	}
 
-	const highlightedDiffRow =
-		state.filter === 'same' || activeSheet.diffRows.length === 0
+	const highlightedDiffCellKey =
+		state.filter === 'same' || activeSheet.diffCells.length === 0
 			? null
-			: activeSheet.diffRows.includes(state.highlightedDiffRow ?? -1)
-				? state.highlightedDiffRow
-				: activeSheet.diffRows[0] ?? null;
+			: activeSheet.diffCells.some(
+					(cell) => cell.key === state.highlightedDiffCellKey,
+				)
+				? state.highlightedDiffCellKey
+				: getFirstDiffCellKey(activeSheet);
 
 	return {
 		activeSheetKey: activeSheet.key,
 		filter: state.filter,
 		currentPage: clampPage(activeSheet, state.filter, state.currentPage),
-		highlightedDiffRow,
+		highlightedDiffCellKey,
 	};
 }
 
@@ -162,7 +186,7 @@ export function setActiveSheet(
 		activeSheetKey: activeSheet.key,
 		filter: state.filter,
 		currentPage: 1,
-		highlightedDiffRow: activeSheet.diffRows[0] ?? null,
+		highlightedDiffCellKey: getFirstDiffCellKey(activeSheet),
 	});
 }
 
@@ -175,7 +199,8 @@ export function setFilterMode(
 		...state,
 		filter,
 		currentPage: 1,
-		highlightedDiffRow: filter === 'same' ? null : state.highlightedDiffRow,
+		highlightedDiffCellKey:
+			filter === 'same' ? null : state.highlightedDiffCellKey,
 	});
 }
 
@@ -190,6 +215,104 @@ export function setCurrentPage(
 	});
 }
 
+export function movePageCursor(
+	diff: WorkbookDiffModel,
+	state: PanelState,
+	direction: -1 | 1,
+): PanelState {
+	const normalizedState = normalizePanelState(diff, state);
+	const activeSheetIndex = diff.sheets.findIndex(
+		(sheet) => sheet.key === normalizedState.activeSheetKey,
+	);
+
+	if (activeSheetIndex < 0) {
+		return normalizedState;
+	}
+
+	const activeSheet = diff.sheets[activeSheetIndex];
+	const activeSheetTotalPages = getTotalPages(activeSheet, normalizedState.filter);
+
+	if (direction < 0 && normalizedState.currentPage > 1) {
+		return normalizePanelState(diff, {
+			...normalizedState,
+			currentPage: normalizedState.currentPage - 1,
+		});
+	}
+
+	if (direction > 0 && normalizedState.currentPage < activeSheetTotalPages) {
+		return normalizePanelState(diff, {
+			...normalizedState,
+			currentPage: normalizedState.currentPage + 1,
+		});
+	}
+
+	const adjacentSheet =
+		direction < 0
+			? diff.sheets[activeSheetIndex - 1]
+			: diff.sheets[activeSheetIndex + 1];
+
+	if (!adjacentSheet) {
+		return normalizedState;
+	}
+
+	return normalizePanelState(diff, {
+		activeSheetKey: adjacentSheet.key,
+		filter: normalizedState.filter,
+		currentPage:
+			direction < 0
+				? getTotalPages(adjacentSheet, normalizedState.filter)
+				: 1,
+		highlightedDiffCellKey:
+			normalizedState.filter === 'same'
+				? null
+				: getFirstDiffCellKey(adjacentSheet),
+	});
+}
+
+export function setHighlightedDiffCell(
+	diff: WorkbookDiffModel,
+	state: PanelState,
+	rowNumber: number,
+	columnNumber?: number,
+): PanelState {
+	const normalizedState = normalizePanelState(diff, state);
+	const activeSheet = diff.sheets.find(
+		(sheet) => sheet.key === normalizedState.activeSheetKey,
+	);
+
+	if (!activeSheet) {
+		return normalizedState;
+	}
+
+	const targetCell = activeSheet.diffCells.find(
+		(cell) =>
+			cell.rowNumber === rowNumber &&
+			(columnNumber === undefined || cell.columnNumber === columnNumber),
+	);
+
+	if (!targetCell) {
+		return normalizedState;
+	}
+
+	const filter = normalizedState.filter === 'same' ? 'diffs' : normalizedState.filter;
+	const currentPage = getDiffCellPage(activeSheet, filter, targetCell.rowNumber);
+
+	return normalizePanelState(diff, {
+		...normalizedState,
+		filter,
+		currentPage,
+		highlightedDiffCellKey: targetCell.key,
+	});
+}
+
+export function setHighlightedDiffRow(
+	diff: WorkbookDiffModel,
+	state: PanelState,
+	rowNumber: number,
+): PanelState {
+	return setHighlightedDiffCell(diff, state, rowNumber);
+}
+
 export function moveDiffCursor(
 	diff: WorkbookDiffModel,
 	state: PanelState,
@@ -200,31 +323,34 @@ export function moveDiffCursor(
 		(sheet) => sheet.key === normalizedState.activeSheetKey,
 	);
 
-	if (!activeSheet || activeSheet.diffRows.length === 0) {
+	if (!activeSheet || activeSheet.diffCells.length === 0) {
 		return normalizedState;
 	}
 
 	const filter = normalizedState.filter === 'same' ? 'diffs' : normalizedState.filter;
-	const currentIndex = normalizedState.highlightedDiffRow
-		? activeSheet.diffRows.indexOf(normalizedState.highlightedDiffRow)
+	const currentIndex = normalizedState.highlightedDiffCellKey
+		? activeSheet.diffCells.findIndex(
+				(cell) => cell.key === normalizedState.highlightedDiffCellKey,
+			)
 		: direction > 0
 			? -1
-			: activeSheet.diffRows.length;
+			: activeSheet.diffCells.length;
 	const nextIndex = Math.min(
 		Math.max(currentIndex + direction, 0),
-		activeSheet.diffRows.length - 1,
+		activeSheet.diffCells.length - 1,
 	);
-	const nextHighlightedRow = activeSheet.diffRows[nextIndex];
-	const nextPage =
-		filter === 'diffs'
-			? Math.floor(nextIndex / DEFAULT_PAGE_SIZE) + 1
-			: Math.floor((nextHighlightedRow - 1) / DEFAULT_PAGE_SIZE) + 1;
+	const nextHighlightedCell = activeSheet.diffCells[nextIndex];
+	const nextPage = getDiffCellPage(
+		activeSheet,
+		filter,
+		nextHighlightedCell.rowNumber,
+	);
 
 	return normalizePanelState(diff, {
 		activeSheetKey: activeSheet.key,
 		filter,
 		currentPage: nextPage,
-		highlightedDiffRow: nextHighlightedRow,
+		highlightedDiffCellKey: nextHighlightedCell.key,
 	});
 }
 
@@ -240,12 +366,17 @@ export function createRenderModel(
 		activeSheet,
 		normalizedState.filter,
 		normalizedState.currentPage,
-		normalizedState.highlightedDiffRow,
+		normalizedState.highlightedDiffCellKey,
 	);
 	const currentDiffIndex =
-		normalizedState.highlightedDiffRow === null
+		normalizedState.highlightedDiffCellKey === null
 			? -1
-			: activeSheet.diffRows.indexOf(normalizedState.highlightedDiffRow);
+			: activeSheet.diffCells.findIndex(
+					(cell) => cell.key === normalizedState.highlightedDiffCellKey,
+				);
+	const activeSheetIndex = diff.sheets.findIndex(
+		(sheet) => sheet.key === activeSheet.key,
+	);
 
 	const sheets: SheetTabView[] = diff.sheets.map((sheet) => ({
 		key: sheet.key,
@@ -299,10 +430,11 @@ export function createRenderModel(
 		filter: normalizedState.filter,
 		page,
 		sheets,
-		canPrevPage: page.currentPage > 1,
-		canNextPage: page.currentPage < page.totalPages,
+		canPrevPage: page.currentPage > 1 || activeSheetIndex > 0,
+		canNextPage:
+			page.currentPage < page.totalPages || activeSheetIndex < diff.sheets.length - 1,
 		canPrevDiff: currentDiffIndex > 0,
 		canNextDiff:
-			currentDiffIndex >= 0 && currentDiffIndex < activeSheet.diffRows.length - 1,
+			currentDiffIndex >= 0 && currentDiffIndex < activeSheet.diffCells.length - 1,
 	};
 }
