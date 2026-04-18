@@ -395,8 +395,18 @@ body {
 	--diff-accent: var(--vscode-gitDecoration-addedResourceForeground, #2ea043);
 }
 
+.grid__row-number--pending,
+.grid__column--pending {
+	--diff-accent: var(--vscode-editorWarning-foreground, #cca700);
+}
+
 .row--diff .grid__row-number {
 	color: var(--diff-accent, var(--vscode-editorError-foreground, #f14c4c));
+	font-weight: 600;
+}
+
+.grid__row-number--pending {
+	color: var(--diff-accent, var(--vscode-editorWarning-foreground, #cca700));
 	font-weight: 600;
 }
 
@@ -423,6 +433,7 @@ body {
 }
 
 .diff-marker--pending {
+	color: var(--vscode-editorWarning-foreground, #cca700);
 	background: var(--vscode-editorWarning-foreground, #cca700);
 }
 
