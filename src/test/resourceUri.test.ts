@@ -2,10 +2,12 @@ import * as assert from "assert";
 import * as vscode from "vscode";
 import {
     describeGitResourceRef,
+    getScmWorkbookDiffUrisFromEditorUris,
     getScmWorkbookDiffUrisFromTabInput,
     getWorkbookDiffUrisFromTabInput,
     getWorkbookResourcePathLabel,
     getWorkbookResourceTimeLabel,
+    isWorkbookResourceUri,
 } from "../workbook/resourceUri";
 
 suite("Workbook resource URIs", () => {
@@ -43,6 +45,20 @@ suite("Workbook resource URIs", () => {
         assert.match(getWorkbookResourceTimeLabel(gitUri) ?? "", /HEAD$/);
     });
 
+    test("recognizes git virtual workbook resources with rewritten paths", () => {
+        const gitUri = vscode.Uri.from({
+            scheme: "git",
+            path: "/tmp/item.xlsx.git",
+            query: JSON.stringify({
+                path: "/tmp/item.xlsx",
+                ref: "",
+            }),
+        });
+
+        assert.strictEqual(isWorkbookResourceUri(gitUri), true);
+        assert.strictEqual(getWorkbookResourcePathLabel(gitUri), "/tmp/item.xlsx");
+    });
+
     test("filters scm workbook diffs to non-file originals", () => {
         const scmInput = new vscode.TabInputTextDiff(
             vscode.Uri.from({
@@ -63,6 +79,71 @@ suite("Workbook resource URIs", () => {
 
         assert.ok(getScmWorkbookDiffUrisFromTabInput(scmInput));
         assert.strictEqual(getScmWorkbookDiffUrisFromTabInput(fileDiffInput), undefined);
+    });
+
+    test("pairs scm custom editor resources for the same workbook", () => {
+        const gitUri = vscode.Uri.from({
+            scheme: "git",
+            path: "/tmp/item.xlsx",
+            query: JSON.stringify({
+                path: "/tmp/item.xlsx",
+                ref: "~",
+            }),
+        });
+        const fileUri = vscode.Uri.file("/tmp/item.xlsx");
+
+        assert.deepStrictEqual(getScmWorkbookDiffUrisFromEditorUris(fileUri, gitUri), {
+            original: gitUri,
+            modified: fileUri,
+        });
+    });
+
+    test("pairs scm custom editor resources for git index diffs", () => {
+        const headUri = vscode.Uri.from({
+            scheme: "git",
+            path: "/tmp/item.xlsx",
+            query: JSON.stringify({
+                path: "/tmp/item.xlsx",
+                ref: "HEAD",
+            }),
+        });
+        const indexUri = vscode.Uri.from({
+            scheme: "git",
+            path: "/tmp/item.xlsx.git",
+            query: JSON.stringify({
+                path: "/tmp/item.xlsx",
+                ref: "",
+            }),
+        });
+
+        assert.deepStrictEqual(getScmWorkbookDiffUrisFromEditorUris(indexUri, headUri), {
+            original: headUri,
+            modified: indexUri,
+        });
+    });
+
+    test("ignores non-scm custom editor resource pairs", () => {
+        assert.strictEqual(
+            getScmWorkbookDiffUrisFromEditorUris(
+                vscode.Uri.file("/tmp/item.xlsx"),
+                vscode.Uri.file("/tmp/item.xlsx")
+            ),
+            undefined
+        );
+        assert.strictEqual(
+            getScmWorkbookDiffUrisFromEditorUris(
+                vscode.Uri.from({
+                    scheme: "git",
+                    path: "/tmp/left.xlsx",
+                    query: JSON.stringify({
+                        path: "/tmp/left.xlsx",
+                        ref: "~",
+                    }),
+                }),
+                vscode.Uri.file("/tmp/right.xlsx")
+            ),
+            undefined
+        );
     });
 
     test("describes git refs for commit and index-backed resources", () => {

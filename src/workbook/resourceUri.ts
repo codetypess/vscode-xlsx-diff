@@ -18,6 +18,11 @@ interface WorkbookResourceDetail {
 const execFile = promisify(execFileCallback);
 
 function getUriPathForExtension(uri: vscode.Uri): string {
+    const gitQuery = parseGitUriQuery(uri);
+    if (gitQuery?.path) {
+        return gitQuery.path;
+    }
+
     return uri.scheme === "file" ? uri.fsPath : decodeURIComponent(uri.path);
 }
 
@@ -136,7 +141,15 @@ export function describeGitResourceRef(
 }
 
 export function isWorkbookResourceUri(uri: vscode.Uri | undefined): uri is vscode.Uri {
-    return Boolean(uri && path.extname(uri.path).toLowerCase() === ".xlsx");
+    if (!uri) {
+        return false;
+    }
+
+    const resourcePath = getUriPathForExtension(uri);
+    const normalizedPath = resourcePath.toLowerCase().endsWith(".git")
+        ? resourcePath.slice(0, -".git".length)
+        : resourcePath;
+    return path.extname(normalizedPath).toLowerCase() === ".xlsx";
 }
 
 export function getWorkbookResourceName(uri: vscode.Uri): string {
@@ -234,29 +247,55 @@ export function getScmWorkbookDiffUrisFromTabInput(
     return diffUris;
 }
 
-export async function getScmDiffUrisForCustomEditorTab(
-    uri: vscode.Uri
-): Promise<{ original: vscode.Uri; modified: vscode.Uri } | undefined> {
-    if (uri.scheme !== "file" || !isWorkbookResourceUri(uri)) {
+function normalizeResourcePathForComparison(resourcePath: string): string {
+    const normalizedPath = path.normalize(resourcePath);
+    return process.platform === "win32" ? normalizedPath.toLowerCase() : normalizedPath;
+}
+
+function getWorkbookResourcePathKey(uri: vscode.Uri): string | undefined {
+    if (!isWorkbookResourceUri(uri)) {
         return undefined;
     }
 
-    const dirPath = path.dirname(uri.fsPath);
-    const status = await runGit(dirPath, [
-        "status",
-        "--porcelain",
-        "--",
-        path.basename(uri.fsPath),
-    ]);
-    if (!status) {
+    const gitQuery = parseGitUriQuery(uri);
+    return normalizeResourcePathForComparison(gitQuery?.path ?? getUriPathForExtension(uri));
+}
+
+export function getScmWorkbookDiffUrisFromEditorUris(
+    firstUri: vscode.Uri,
+    secondUri: vscode.Uri
+): { original: vscode.Uri; modified: vscode.Uri } | undefined {
+    if (firstUri.toString() === secondUri.toString()) {
         return undefined;
     }
 
-    const originalUri = vscode.Uri.from({
-        scheme: "git",
-        path: uri.path,
-        query: JSON.stringify({ path: uri.fsPath, ref: "~" }),
-    });
+    const firstPathKey = getWorkbookResourcePathKey(firstUri);
+    const secondPathKey = getWorkbookResourcePathKey(secondUri);
+    if (!firstPathKey || firstPathKey !== secondPathKey) {
+        return undefined;
+    }
 
-    return { original: originalUri, modified: uri };
+    if (firstUri.scheme === "file" && secondUri.scheme === "file") {
+        return undefined;
+    }
+
+    if (firstUri.scheme === "file") {
+        return { original: secondUri, modified: firstUri };
+    }
+
+    if (secondUri.scheme === "file") {
+        return { original: firstUri, modified: secondUri };
+    }
+
+    const firstRef = parseGitUriQuery(firstUri)?.ref;
+    const secondRef = parseGitUriQuery(secondUri)?.ref;
+    if (firstRef === "" && secondRef !== "") {
+        return { original: secondUri, modified: firstUri };
+    }
+
+    if (secondRef === "" && firstRef !== "") {
+        return { original: firstUri, modified: secondUri };
+    }
+
+    return { original: firstUri, modified: secondUri };
 }
