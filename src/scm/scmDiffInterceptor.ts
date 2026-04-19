@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
+import { WEBVIEW_TYPE_EDITOR_PANEL } from '../constants';
 import { XlsxDiffPanel } from '../webview/diffPanel';
-import { getScmWorkbookDiffUrisFromTabInput } from '../workbook/resourceUri';
+import { getScmWorkbookDiffUrisFromTabInput, getScmDiffUrisForCustomEditorTab } from '../workbook/resourceUri';
 
 function getTabResourceUri(input: vscode.Tab['input']): vscode.Uri | undefined {
 	if (input instanceof vscode.TabInputText) {
@@ -49,7 +50,17 @@ export function registerScmWorkbookDiffInterceptor(
 			return;
 		}
 
-		const diffUris = getScmWorkbookDiffUrisFromTabInput(tab.input);
+		let diffUris = getScmWorkbookDiffUrisFromTabInput(tab.input);
+
+		if (
+			!diffUris &&
+			tab.input instanceof vscode.TabInputCustom &&
+			tab.input.viewType === WEBVIEW_TYPE_EDITOR_PANEL &&
+			tab.isPreview
+		) {
+			diffUris = await getScmDiffUrisForCustomEditorTab(tab.input.uri);
+		}
+
 		if (!diffUris) {
 			return;
 		}

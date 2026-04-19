@@ -636,6 +636,7 @@ function finishEdit(
 
 	if (mode === 'commit') {
 		commitEdit(sheetKey, rowNumber, columnNumber, input.value);
+		syncCellDisplay(cellEl, sheetKey, rowNumber, columnNumber);
 		if (clearSelection) {
 			setSelectedCellLocal(null, { syncHost: false });
 		}

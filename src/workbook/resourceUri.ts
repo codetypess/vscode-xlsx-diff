@@ -242,3 +242,25 @@ export function getScmWorkbookDiffUrisFromTabInput(
 
 	return diffUris;
 }
+
+export async function getScmDiffUrisForCustomEditorTab(
+	uri: vscode.Uri,
+): Promise<{ original: vscode.Uri; modified: vscode.Uri } | undefined> {
+	if (uri.scheme !== 'file' || !isWorkbookResourceUri(uri)) {
+		return undefined;
+	}
+
+	const dirPath = path.dirname(uri.fsPath);
+	const status = await runGit(dirPath, ['status', '--porcelain', '--', path.basename(uri.fsPath)]);
+	if (!status) {
+		return undefined;
+	}
+
+	const originalUri = vscode.Uri.from({
+		scheme: 'git',
+		path: uri.path,
+		query: JSON.stringify({ path: uri.fsPath, ref: '~' }),
+	});
+
+	return { original: originalUri, modified: uri };
+}
