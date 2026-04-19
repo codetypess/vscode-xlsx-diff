@@ -62,6 +62,24 @@ suite("Workbook edit writer", () => {
                         value: "new",
                     },
                 ],
+                viewEdits: [
+                    {
+                        sheetKey: "base-sheet",
+                        sheetName: "Base",
+                        freezePane: {
+                            columnCount: 1,
+                            rowCount: 1,
+                        },
+                    },
+                    {
+                        sheetKey: "added-sheet",
+                        sheetName: "Renamed",
+                        freezePane: {
+                            columnCount: 2,
+                            rowCount: 0,
+                        },
+                    },
+                ],
             };
 
             await writeWorkbookEditsToDestination(
@@ -77,6 +95,18 @@ suite("Workbook edit writer", () => {
             );
             assert.strictEqual(snapshot.sheets[0]?.cells["1:1"]?.displayValue, "updated");
             assert.strictEqual(snapshot.sheets[1]?.cells["2:2"]?.displayValue, "new");
+            assert.deepStrictEqual(snapshot.sheets[0]?.freezePane, {
+                columnCount: 1,
+                rowCount: 1,
+                topLeftCell: "B2",
+                activePane: "bottomRight",
+            });
+            assert.deepStrictEqual(snapshot.sheets[1]?.freezePane, {
+                columnCount: 2,
+                rowCount: 0,
+                topLeftCell: "C1",
+                activePane: "topRight",
+            });
         } finally {
             await rm(tempDirectory, { recursive: true, force: true });
         }
@@ -96,6 +126,16 @@ suite("Workbook edit writer", () => {
                         targetIndex: 1,
                     },
                 ],
+                viewEdits: [
+                    {
+                        sheetKey: "sheet-1",
+                        sheetName: "Sheet1",
+                        freezePane: {
+                            columnCount: 1,
+                            rowCount: 1,
+                        },
+                    },
+                ],
             }),
             true
         );
@@ -106,6 +146,16 @@ suite("Workbook edit writer", () => {
                 sheetKey: "sheet-2",
                 sheetName: "Sheet2",
                 targetIndex: 1,
+            },
+        ]);
+        assert.deepStrictEqual(document.getPendingState().viewEdits, [
+            {
+                sheetKey: "sheet-1",
+                sheetName: "Sheet1",
+                freezePane: {
+                    columnCount: 1,
+                    rowCount: 1,
+                },
             },
         ]);
 

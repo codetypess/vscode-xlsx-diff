@@ -3,7 +3,12 @@ import { stat } from "node:fs/promises";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { createCellKey, getCellAddress } from "../model/cells";
-import { type CellSnapshot, type SheetSnapshot, type WorkbookSnapshot } from "../model/types";
+import {
+    type CellSnapshot,
+    type SheetFreezePaneSnapshot,
+    type SheetSnapshot,
+    type WorkbookSnapshot,
+} from "../model/types";
 import {
     getWorkbookResourceDetail,
     getWorkbookResourceName,
@@ -20,6 +25,7 @@ interface SheetReader {
     getFormula(rowNumber: number, columnNumber: number): string | null;
     getStyleId(rowNumber: number, columnNumber: number): number | null;
     getMergedRanges(): string[];
+    getFreezePane(): SheetFreezePaneSnapshot | null;
 }
 
 interface WorkbookReader {
@@ -60,6 +66,7 @@ function createSheetSignature(sheet: SheetSnapshot): string {
 function loadSheetSnapshot(workbook: WorkbookReader, sheetName: string): SheetSnapshot {
     const sheet = workbook.getSheet(sheetName);
     const cells: Record<string, CellSnapshot> = {};
+    const freezePane = sheet.getFreezePane();
 
     for (let rowNumber = 1; rowNumber <= sheet.rowCount; rowNumber += 1) {
         for (let columnNumber = 1; columnNumber <= sheet.columnCount; columnNumber += 1) {
@@ -88,6 +95,7 @@ function loadSheetSnapshot(workbook: WorkbookReader, sheetName: string): SheetSn
         rowCount: sheet.rowCount,
         columnCount: sheet.columnCount,
         mergedRanges: [...sheet.getMergedRanges()].sort((left, right) => left.localeCompare(right)),
+        freezePane: freezePane ? { ...freezePane } : null,
         cells,
         signature: "",
     };

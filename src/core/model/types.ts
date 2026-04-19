@@ -19,11 +19,19 @@ export interface CellSnapshot {
     styleId: number | null;
 }
 
+export interface SheetFreezePaneSnapshot {
+    columnCount: number;
+    rowCount: number;
+    topLeftCell: string;
+    activePane: "bottomLeft" | "topRight" | "bottomRight" | null;
+}
+
 export interface SheetSnapshot {
     name: string;
     rowCount: number;
     columnCount: number;
     mergedRanges: string[];
+    freezePane?: SheetFreezePaneSnapshot | null;
     cells: Record<string, CellSnapshot>;
     signature: string;
 }
@@ -102,6 +110,7 @@ export interface EditorActiveSheetView {
     hasData: boolean;
     mergedRangeCount: number;
     hasMergedRanges: boolean;
+    freezePane: SheetFreezePaneSnapshot | null;
 }
 
 export interface EditorWorkbookSummary {

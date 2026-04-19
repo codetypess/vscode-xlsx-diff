@@ -33,9 +33,19 @@ export interface RenameSheetEdit {
 
 export type SheetEdit = AddSheetEdit | DeleteSheetEdit | RenameSheetEdit;
 
+export interface SheetViewEdit {
+    sheetKey: string;
+    sheetName: string;
+    freezePane: {
+        columnCount: number;
+        rowCount: number;
+    } | null;
+}
+
 export interface WorkbookEditState {
     cellEdits: CellEdit[];
     sheetEdits: SheetEdit[];
+    viewEdits?: SheetViewEdit[];
 }
 
 /**
@@ -68,6 +78,7 @@ export async function writeCellValuesToDestination(
     await writeWorkbookEditsToDestination(sourceUri, destinationUri, {
         cellEdits: edits,
         sheetEdits: [],
+        viewEdits: [],
     });
 }
 
@@ -86,7 +97,11 @@ export async function writeWorkbookEditsToDestination(
         await copyFile(sourceUri.fsPath, destinationUri.fsPath);
     }
 
-    if (edits.cellEdits.length === 0 && edits.sheetEdits.length === 0) {
+    if (
+        edits.cellEdits.length === 0 &&
+        edits.sheetEdits.length === 0 &&
+        (edits.viewEdits?.length ?? 0) === 0
+    ) {
         return;
     }
 
@@ -112,6 +127,19 @@ export async function writeWorkbookEditsToDestination(
         const sheet = workbook.getSheet(edit.sheetName);
         const address = getCellAddress(edit.rowNumber, edit.columnNumber);
         sheet.cell(address).setValue(edit.value);
+    }
+
+    for (const edit of edits.viewEdits ?? []) {
+        const sheet = workbook.getSheet(edit.sheetName);
+        if (
+            !edit.freezePane ||
+            (edit.freezePane.columnCount === 0 && edit.freezePane.rowCount === 0)
+        ) {
+            sheet.unfreezePane();
+            continue;
+        }
+
+        sheet.freezePane(edit.freezePane.columnCount, edit.freezePane.rowCount);
     }
 
     await workbook.save(destinationUri.fsPath);

@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import {
     type CellEdit,
     type SheetEdit,
+    type SheetViewEdit,
     type WorkbookEditState,
     writeWorkbookEditsToDestination,
 } from "../core/fastxlsx/writeCellValue";
@@ -73,8 +74,44 @@ function areSheetEditsEqual(left: readonly SheetEdit[], right: readonly SheetEdi
     });
 }
 
+function compareViewEdits(left: SheetViewEdit, right: SheetViewEdit): number {
+    if (left.sheetKey !== right.sheetKey) {
+        return left.sheetKey.localeCompare(right.sheetKey);
+    }
+
+    const leftColumnCount = left.freezePane?.columnCount ?? -1;
+    const rightColumnCount = right.freezePane?.columnCount ?? -1;
+    if (leftColumnCount !== rightColumnCount) {
+        return leftColumnCount - rightColumnCount;
+    }
+
+    const leftRowCount = left.freezePane?.rowCount ?? -1;
+    const rightRowCount = right.freezePane?.rowCount ?? -1;
+    return leftRowCount - rightRowCount;
+}
+
+function areViewEditsEqual(
+    left: readonly SheetViewEdit[],
+    right: readonly SheetViewEdit[]
+): boolean {
+    if (left.length !== right.length) {
+        return false;
+    }
+
+    return left.every((edit, index) => {
+        const other = right[index];
+        return (
+            edit.sheetKey === other.sheetKey &&
+            edit.sheetName === other.sheetName &&
+            (edit.freezePane?.columnCount ?? null) === (other.freezePane?.columnCount ?? null) &&
+            (edit.freezePane?.rowCount ?? null) === (other.freezePane?.rowCount ?? null)
+        );
+    });
+}
+
 export class XlsxEditorDocument implements vscode.CustomDocument {
     private readonly pendingEdits = new Map<string, CellEdit>();
+    private pendingViewEdits: SheetViewEdit[] = [];
     private pendingSheetEdits: SheetEdit[] = [];
     private backupUri: vscode.Uri | null;
     private shouldMarkDirtyFromBackup: boolean;
@@ -97,6 +134,7 @@ export class XlsxEditorDocument implements vscode.CustomDocument {
         return (
             this.pendingEdits.size > 0 ||
             this.pendingSheetEdits.length > 0 ||
+            this.pendingViewEdits.length > 0 ||
             this.backupUri !== null
         );
     }
@@ -118,16 +156,19 @@ export class XlsxEditorDocument implements vscode.CustomDocument {
         return {
             cellEdits: this.getPendingEdits(),
             sheetEdits: [...this.pendingSheetEdits],
+            viewEdits: [...this.pendingViewEdits],
         };
     }
 
     public replacePendingState(state: Readonly<WorkbookEditState>): boolean {
         const normalizedEdits = [...state.cellEdits].sort(compareCellEdits);
         const normalizedSheetEdits = [...state.sheetEdits];
+        const normalizedViewEdits = [...(state.viewEdits ?? [])].sort(compareViewEdits);
         const currentState = this.getPendingState();
         if (
             areCellEditsEqual(currentState.cellEdits, normalizedEdits) &&
-            areSheetEditsEqual(currentState.sheetEdits, normalizedSheetEdits)
+            areSheetEditsEqual(currentState.sheetEdits, normalizedSheetEdits) &&
+            areViewEditsEqual(currentState.viewEdits ?? [], normalizedViewEdits)
         ) {
             return false;
         }
@@ -138,6 +179,7 @@ export class XlsxEditorDocument implements vscode.CustomDocument {
         }
 
         this.pendingSheetEdits = normalizedSheetEdits;
+        this.pendingViewEdits = normalizedViewEdits;
 
         return true;
     }
@@ -145,6 +187,7 @@ export class XlsxEditorDocument implements vscode.CustomDocument {
     public markSaved(): void {
         this.pendingEdits.clear();
         this.pendingSheetEdits = [];
+        this.pendingViewEdits = [];
         this.backupUri = null;
         this.shouldMarkDirtyFromBackup = false;
     }

@@ -45,6 +45,7 @@ type OutgoingMessage =
     | { type: "pendingEditStateChanged"; hasPendingEdits: boolean }
     | { type: "undoSheetEdit" }
     | { type: "redoSheetEdit" }
+    | { type: "toggleViewLock"; rowCount: number; columnCount: number }
     | { type: "reload" };
 
 type IncomingMessage =
@@ -165,6 +166,8 @@ const DEFAULT_STRINGS = {
     visibleRows: "Visible rows",
     readOnly: "Read-only",
     save: "Save",
+    lockView: "Lock View",
+    unlockView: "Unlock View",
     addSheet: "Add Sheet",
     deleteSheet: "Delete Sheet",
     renameSheet: "Rename Sheet",
@@ -335,6 +338,23 @@ function isCellInSelection(rowNumber: number, columnNumber: number): boolean {
     );
 }
 
+function getSelectionOutlineClasses(
+    rowNumber: number,
+    columnNumber: number,
+    range: CellRange | null
+): Array<string | false> {
+    if (!range) {
+        return [];
+    }
+
+    return [
+        rowNumber === range.startRow && "grid__cell--selection-top",
+        rowNumber === range.endRow && "grid__cell--selection-bottom",
+        columnNumber === range.startColumn && "grid__cell--selection-left",
+        columnNumber === range.endColumn && "grid__cell--selection-right",
+    ];
+}
+
 function getSelectionStartCell(): CellPosition | null {
     const range = getSelectionRange();
     if (!range) {
@@ -429,6 +449,78 @@ function getSelectedCellAddress(): string {
 
     const cell = getCellView(selectedCell.rowNumber, selectedCell.columnNumber);
     return cell?.address ?? getCellAddressLabel(selectedCell.rowNumber, selectedCell.columnNumber);
+}
+
+function getViewLockTarget(): { rowCount: number; columnCount: number } | null {
+    if (!model) {
+        return null;
+    }
+
+    const anchorCell =
+        selectedCell ??
+        (model.selection
+            ? {
+                  rowNumber: model.selection.rowNumber,
+                  columnNumber: model.selection.columnNumber,
+              }
+            : null) ??
+        getSelectionStartCell() ??
+        (model.page.rows[0]
+            ? {
+                  rowNumber: model.page.rows[0].rowNumber,
+                  columnNumber: 1,
+              }
+            : null);
+    if (!anchorCell) {
+        return null;
+    }
+
+    return {
+        rowCount: Math.max(anchorCell.rowNumber, 0),
+        columnCount: Math.max(anchorCell.columnNumber, 0),
+    };
+}
+
+function isViewLocked(): boolean {
+    return Boolean(
+        model?.activeSheet.freezePane &&
+        (model.activeSheet.freezePane.columnCount > 0 || model.activeSheet.freezePane.rowCount > 0)
+    );
+}
+
+function canToggleViewLock(): boolean {
+    if (!model?.canEdit) {
+        return false;
+    }
+
+    if (isViewLocked()) {
+        return true;
+    }
+
+    const target = getViewLockTarget();
+    return Boolean(target && (target.rowCount > 0 || target.columnCount > 0));
+}
+
+function toggleViewLock(): void {
+    if (!model?.canEdit) {
+        return;
+    }
+
+    if (editingCell) {
+        finishEdit({ mode: "commit", refresh: false });
+    }
+
+    const target = getViewLockTarget();
+    if (!isViewLocked() && (!target || (target.rowCount === 0 && target.columnCount === 0))) {
+        renderApp({ commitEditing: false });
+        return;
+    }
+
+    vscode.postMessage({
+        type: "toggleViewLock",
+        rowCount: target?.rowCount ?? 0,
+        columnCount: target?.columnCount ?? 0,
+    });
 }
 
 function closeTabContextMenu({ refresh = true }: { refresh?: boolean } = {}): void {
@@ -547,13 +639,146 @@ function restorePaneScrollState(scrollState: ScrollState | null): void {
     pane.scrollLeft = clampScrollPosition(scrollState.left, pane.scrollWidth - pane.clientWidth);
 }
 
+function clearFrozenPaneLayout(): void {
+    for (const element of document.querySelectorAll<HTMLElement>(
+        ".grid__column--frozen, .grid__row-number--frozen, .grid__cell--frozen-row, .grid__cell--frozen-column, .grid__cell--frozen-intersection"
+    )) {
+        element.classList.remove(
+            "grid__column--frozen",
+            "grid__row-number--frozen",
+            "grid__cell--frozen-row",
+            "grid__cell--frozen-column",
+            "grid__cell--frozen-intersection"
+        );
+        element.style.removeProperty("--grid-freeze-top");
+        element.style.removeProperty("--grid-freeze-left");
+        element.style.removeProperty("--grid-freeze-background");
+    }
+}
+
+function getFrozenPaneBackgroundColor(element: HTMLElement, fallbackColor: string): string {
+    const backgroundColor = globalThis.getComputedStyle(element).backgroundColor;
+    if (backgroundColor === "rgba(0, 0, 0, 0)" || backgroundColor === "transparent") {
+        return fallbackColor;
+    }
+
+    return backgroundColor;
+}
+
+function applyFrozenPaneLayout(freezePane: EditorRenderModel["activeSheet"]["freezePane"]): void {
+    clearFrozenPaneLayout();
+
+    if (!freezePane || (freezePane.columnCount <= 0 && freezePane.rowCount <= 0)) {
+        return;
+    }
+
+    const pane = document.querySelector<HTMLElement>(".pane__table");
+    const table = pane?.querySelector<HTMLTableElement>(".grid");
+    if (!pane || !table) {
+        return;
+    }
+
+    const fallbackColor = globalThis.getComputedStyle(pane).backgroundColor;
+    const headerRow = table.querySelector<HTMLTableRowElement>("thead tr");
+    const cornerHeader = table.querySelector<HTMLElement>("thead th.grid__row-number");
+    const headerHeight = headerRow?.getBoundingClientRect().height ?? 0;
+    const rowHeaderWidth = cornerHeader?.getBoundingClientRect().width ?? 0;
+
+    const frozenColumnOffsets = new Map<number, number>();
+    let currentLeft = rowHeaderWidth;
+    for (const header of table.querySelectorAll<HTMLElement>(
+        "thead th.grid__column[data-column-number]"
+    )) {
+        const columnNumber = Number(header.dataset.columnNumber);
+        if (!Number.isInteger(columnNumber) || columnNumber > freezePane.columnCount) {
+            continue;
+        }
+
+        frozenColumnOffsets.set(columnNumber, currentLeft);
+        header.classList.add("grid__column--frozen");
+        header.style.setProperty("--grid-freeze-left", `${currentLeft}px`);
+        header.style.setProperty(
+            "--grid-freeze-background",
+            getFrozenPaneBackgroundColor(header, fallbackColor)
+        );
+        currentLeft += header.getBoundingClientRect().width;
+    }
+
+    const frozenRowOffsets = new Map<number, number>();
+    let currentTop = headerHeight;
+    for (const row of table.querySelectorAll<HTMLTableRowElement>(
+        'tbody tr[data-role="grid-row"]'
+    )) {
+        const rowNumber = Number(row.dataset.rowNumber);
+        if (!Number.isInteger(rowNumber) || rowNumber > freezePane.rowCount) {
+            continue;
+        }
+
+        frozenRowOffsets.set(rowNumber, currentTop);
+        const rowHeader = row.querySelector<HTMLElement>('th[data-role="grid-row-header"]');
+        if (rowHeader) {
+            rowHeader.classList.add("grid__row-number--frozen");
+            rowHeader.style.setProperty("--grid-freeze-top", `${currentTop}px`);
+            rowHeader.style.setProperty(
+                "--grid-freeze-background",
+                getFrozenPaneBackgroundColor(rowHeader, fallbackColor)
+            );
+        }
+
+        currentTop += row.getBoundingClientRect().height;
+    }
+
+    for (const cell of table.querySelectorAll<HTMLElement>('td[data-role="grid-cell"]')) {
+        const rowNumber = Number(cell.dataset.rowNumber);
+        const columnNumber = Number(cell.dataset.columnNumber);
+        const topOffset = frozenRowOffsets.get(rowNumber);
+        const leftOffset = frozenColumnOffsets.get(columnNumber);
+
+        if (topOffset === undefined && leftOffset === undefined) {
+            continue;
+        }
+
+        if (topOffset !== undefined) {
+            cell.classList.add("grid__cell--frozen-row");
+            cell.style.setProperty("--grid-freeze-top", `${topOffset}px`);
+        }
+
+        if (leftOffset !== undefined) {
+            cell.classList.add("grid__cell--frozen-column");
+            cell.style.setProperty("--grid-freeze-left", `${leftOffset}px`);
+        }
+
+        if (topOffset !== undefined && leftOffset !== undefined) {
+            cell.classList.add("grid__cell--frozen-intersection");
+        }
+
+        cell.style.setProperty(
+            "--grid-freeze-background",
+            getFrozenPaneBackgroundColor(cell, fallbackColor)
+        );
+    }
+}
+
 function getStickyPaneInsets(pane: HTMLElement): { top: number; left: number } {
+    const paneRect = pane.getBoundingClientRect();
     const headerRow = pane.querySelector("thead tr");
     const firstColumn = pane.querySelector("thead th:first-child");
+    let top = headerRow?.getBoundingClientRect().height ?? 0;
+    let left = firstColumn?.getBoundingClientRect().width ?? 0;
+
+    for (const rowHeader of pane.querySelectorAll<HTMLElement>("th.grid__row-number--frozen")) {
+        top = Math.max(top, rowHeader.getBoundingClientRect().bottom - paneRect.top);
+    }
+
+    for (const columnHeader of pane.querySelectorAll<HTMLElement>(
+        "thead th.grid__column--frozen"
+    )) {
+        left = Math.max(left, columnHeader.getBoundingClientRect().right - paneRect.left);
+    }
 
     return {
-        top: headerRow?.getBoundingClientRect().height ?? 0,
-        left: firstColumn?.getBoundingClientRect().width ?? 0,
+        top,
+        left,
     };
 }
 
@@ -1359,6 +1584,12 @@ function EditorToolbar({ currentModel }: { currentModel: EditorRenderModel }): R
     const hasPendingEdits = pendingEdits.size > 0 || currentModel.hasPendingEdits;
     const canUndo = undoStack.length > 0 || currentModel.canUndoStructuralEdits;
     const canRedo = redoStack.length > 0 || currentModel.canRedoStructuralEdits;
+    const viewLocked = Boolean(
+        currentModel.activeSheet.freezePane &&
+        (currentModel.activeSheet.freezePane.columnCount > 0 ||
+            currentModel.activeSheet.freezePane.rowCount > 0)
+    );
+    const viewLockActionLabel = viewLocked ? STRINGS.unlockView : STRINGS.lockView;
 
     return (
         <header className="toolbar toolbar--editor">
@@ -1467,23 +1698,35 @@ function EditorToolbar({ currentModel }: { currentModel: EditorRenderModel }): R
                     disabled={!currentModel.canEdit || !canUndo || isSaving}
                     icon="codicon-redo"
                     iconMirrored
+                    iconOnly={true}
                     onClick={undoPendingEdits}
                 />
                 <ToolbarButton
                     actionLabel={STRINGS.redo}
                     disabled={!currentModel.canEdit || !canRedo || isSaving}
                     icon="codicon-redo"
+                    iconOnly={true}
                     onClick={redoPendingEdits}
                 />
                 <ToolbarButton
                     actionLabel={STRINGS.reload}
                     icon="codicon-refresh"
+                    iconOnly={true}
                     onClick={() => vscode.postMessage({ type: "reload" })}
+                />
+                <ToolbarButton
+                    actionLabel={viewLockActionLabel}
+                    disabled={!canToggleViewLock() || isSaving}
+                    icon={viewLocked ? "codicon-unlock" : "codicon-lock"}
+                    iconOnly={true}
+                    isActive={viewLocked}
+                    onClick={toggleViewLock}
                 />
                 <ToolbarButton
                     actionLabel={STRINGS.save}
                     disabled={!currentModel.canEdit || !hasPendingEdits || isSaving}
                     icon="codicon-save"
+                    iconOnly={true}
                     isActive={hasPendingEdits}
                     onClick={triggerSave}
                 />
@@ -1543,9 +1786,18 @@ function GridCell({
     const value = pendingEdit ? pendingEdit.value : cell.value;
     const formula = pendingEdit ? null : cell.formula;
     const editable = isGridCellEditable(cell);
+    const selectionRange = getSelectionRange();
     const isPrimarySelection =
-        selectedCell?.rowNumber === row.rowNumber && selectedCell.columnNumber === columnNumber;
-    const isSelected = isCellInSelection(row.rowNumber, columnNumber);
+        !hasExpandedSelection(selectionRange) &&
+        selectedCell?.rowNumber === row.rowNumber &&
+        selectedCell.columnNumber === columnNumber;
+    const isSelected = Boolean(
+        selectionRange &&
+        row.rowNumber >= selectionRange.startRow &&
+        row.rowNumber <= selectionRange.endRow &&
+        columnNumber >= selectionRange.startColumn &&
+        columnNumber <= selectionRange.endColumn
+    );
     const isActiveRow = isRowInSelection(row.rowNumber);
     const isActiveColumn = isColumnInSelection(columnNumber);
     const isEditing =
@@ -1563,6 +1815,7 @@ function GridCell({
                 !editable && "grid__cell--locked",
                 pendingEdit && "grid__cell--pending",
                 isEditing && "grid__cell--editing",
+                ...getSelectionOutlineClasses(row.rowNumber, columnNumber, selectionRange),
             ])}
             data-column-number={columnNumber}
             data-editable={editable}
@@ -1871,10 +2124,11 @@ function EditorApp({ view }: { view: Extract<ViewState, { kind: "app" }> }): Rea
 
     React.useLayoutEffect(() => {
         restorePaneScrollState(view.scrollState);
+        applyFrozenPaneLayout(view.model.activeSheet.freezePane);
         if (view.revealSelection) {
             revealSelectedCell();
         }
-    }, [view.revision, view.revealSelection, view.scrollState]);
+    }, [view.model.activeSheet.freezePane, view.revision, view.revealSelection, view.scrollState]);
 
     return (
         <div className="app app--editor">

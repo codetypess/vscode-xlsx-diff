@@ -1,11 +1,12 @@
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { DEFAULT_PAGE_SIZE } from "../constants";
-import { getColumnNumber } from "../core/model/cells";
+import { getCellAddress, getColumnNumber } from "../core/model/cells";
 import { loadWorkbookSnapshot } from "../core/fastxlsx/loadWorkbookSnapshot";
 import {
     type CellEdit,
     type SheetEdit,
+    type SheetViewEdit,
     type WorkbookEditState,
 } from "../core/fastxlsx/writeCellValue";
 import type { EditorPanelState, EditorRenderModel, WorkbookSnapshot } from "../core/model/types";
@@ -59,6 +60,7 @@ type WebviewMessage =
     | { type: "pendingEditStateChanged"; hasPendingEdits: boolean }
     | { type: "undoSheetEdit" }
     | { type: "redoSheetEdit" }
+    | { type: "toggleViewLock"; rowCount: number; columnCount: number }
     | { type: "reload" };
 
 export interface XlsxEditorPanelController {
@@ -81,6 +83,8 @@ interface WebviewStrings {
     visibleRows: string;
     readOnly: string;
     save: string;
+    lockView: string;
+    unlockView: string;
     addSheet: string;
     deleteSheet: string;
     renameSheet: string;
@@ -164,6 +168,8 @@ function getWebviewStrings(): WebviewStrings {
             visibleRows: "可见行",
             readOnly: "只读",
             save: "保存",
+            lockView: "锁定视图",
+            unlockView: "取消锁定视图",
             addSheet: "添加工作表",
             deleteSheet: "删除工作表",
             renameSheet: "重命名工作表",
@@ -219,6 +225,8 @@ function getWebviewStrings(): WebviewStrings {
         visibleRows: "Visible rows",
         readOnly: "Read-only",
         save: "Save",
+        lockView: "Lock View",
+        unlockView: "Unlock View",
         addSheet: "Add Sheet",
         deleteSheet: "Delete Sheet",
         renameSheet: "Rename Sheet",
@@ -263,11 +271,13 @@ interface StructuralSnapshot {
     sheetEntries: WorkingSheetEntry[];
     pendingCellEdits: CellEdit[];
     pendingSheetEdits: SheetEdit[];
+    pendingViewEdits: SheetViewEdit[];
 }
 
 interface StructuralHistoryEntry {
     before: StructuralSnapshot;
     after: StructuralSnapshot;
+    resetPendingHistory: boolean;
 }
 
 function cloneCellEdit(edit: CellEdit): CellEdit {
@@ -278,14 +288,53 @@ function cloneSheetEdit(edit: SheetEdit): SheetEdit {
     return { ...edit };
 }
 
+function cloneViewEdit(edit: SheetViewEdit): SheetViewEdit {
+    return {
+        ...edit,
+        freezePane: edit.freezePane ? { ...edit.freezePane } : null,
+    };
+}
+
 function cloneSheetSnapshot(
     sheet: WorkbookSnapshot["sheets"][number]
 ): WorkbookSnapshot["sheets"][number] {
     return {
         ...sheet,
         mergedRanges: [...sheet.mergedRanges],
+        freezePane: sheet.freezePane ? { ...sheet.freezePane } : null,
         cells: { ...sheet.cells },
     };
+}
+
+function createFreezePaneSnapshot(
+    columnCount: number,
+    rowCount: number
+): WorkbookSnapshot["sheets"][number]["freezePane"] {
+    if (columnCount <= 0 && rowCount <= 0) {
+        return null;
+    }
+
+    return {
+        columnCount,
+        rowCount,
+        topLeftCell: getCellAddress(rowCount + 1, columnCount + 1),
+        activePane:
+            rowCount > 0 && columnCount > 0
+                ? "bottomRight"
+                : rowCount > 0
+                  ? "bottomLeft"
+                  : "topRight",
+    };
+}
+
+function areFreezePaneCountsEqual(
+    left: WorkbookSnapshot["sheets"][number]["freezePane"],
+    right: WorkbookSnapshot["sheets"][number]["freezePane"]
+): boolean {
+    return (
+        (left?.columnCount ?? 0) === (right?.columnCount ?? 0) &&
+        (left?.rowCount ?? 0) === (right?.rowCount ?? 0)
+    );
 }
 
 function cloneSheetEntry(entry: WorkingSheetEntry): WorkingSheetEntry {
@@ -346,6 +395,7 @@ export class XlsxEditorPanel {
     private hasWarnedPendingExternalChange = false;
     private pendingCellEdits: CellEdit[] = [];
     private pendingSheetEdits: SheetEdit[] = [];
+    private pendingViewEdits: SheetViewEdit[] = [];
     private workingSheetEntries: WorkingSheetEntry[] = [];
     private sheetUndoStack: StructuralHistoryEntry[] = [];
     private sheetRedoStack: StructuralHistoryEntry[] = [];
@@ -782,6 +832,9 @@ export class XlsxEditorPanel {
                 case "redoSheetEdit":
                     await this.redoStructuralEdit();
                     return;
+                case "toggleViewLock":
+                    await this.toggleViewLock(message.columnCount, message.rowCount);
+                    return;
                 case "reload":
                     if (this.document.hasPendingEdits()) {
                         await this.controller.onRequestRevert();
@@ -834,6 +887,7 @@ export class XlsxEditorPanel {
         return {
             cellEdits: this.pendingCellEdits.map(cloneCellEdit),
             sheetEdits: this.pendingSheetEdits.map(cloneSheetEdit),
+            viewEdits: this.pendingViewEdits.map(cloneViewEdit),
         };
     }
 
@@ -843,6 +897,7 @@ export class XlsxEditorPanel {
             sheetEntries: this.workingSheetEntries.map(cloneSheetEntry),
             pendingCellEdits: this.pendingCellEdits.map(cloneCellEdit),
             pendingSheetEdits: this.pendingSheetEdits.map(cloneSheetEdit),
+            pendingViewEdits: this.pendingViewEdits.map(cloneViewEdit),
         };
     }
 
@@ -853,21 +908,68 @@ export class XlsxEditorPanel {
         );
         this.pendingCellEdits = snapshot.pendingCellEdits.map(cloneCellEdit);
         this.pendingSheetEdits = snapshot.pendingSheetEdits.map(cloneSheetEdit);
+        this.pendingViewEdits = snapshot.pendingViewEdits.map(cloneViewEdit);
     }
 
-    private async commitStructuralMutation(mutate: () => void): Promise<void> {
+    private async commitStructuralMutation(
+        mutate: () => void,
+        { resetPendingHistory = true }: { resetPendingHistory?: boolean } = {}
+    ): Promise<void> {
         const before = this.captureStructuralSnapshot();
         mutate();
         this.workingSheetEntries = reindexWorkingSheetEntries(this.workingSheetEntries);
         const after = this.captureStructuralSnapshot();
-        this.sheetUndoStack.push({ before, after });
+        this.sheetUndoStack.push({ before, after, resetPendingHistory });
         this.sheetRedoStack.length = 0;
         await this.syncPendingState();
         await this.render(undefined, {
             useModelSelection: true,
             replacePendingEdits: this.pendingCellEdits,
-            resetPendingHistory: true,
+            resetPendingHistory,
         });
+    }
+
+    private getOriginalSheetSnapshot(
+        sheetKey: string
+    ): WorkbookSnapshot["sheets"][number] | undefined {
+        return this.workbook?.sheets.find((_sheet, index) => `sheet:${index}` === sheetKey);
+    }
+
+    private updatePendingViewLock(
+        sheetKey: string,
+        sheetName: string,
+        freezePane: WorkbookSnapshot["sheets"][number]["freezePane"]
+    ): void {
+        const originalFreezePane = this.getOriginalSheetSnapshot(sheetKey)?.freezePane ?? null;
+        const nextFreezePane = freezePane ?? null;
+
+        if (areFreezePaneCountsEqual(originalFreezePane, nextFreezePane)) {
+            this.pendingViewEdits = this.pendingViewEdits.filter(
+                (edit) => edit.sheetKey !== sheetKey
+            );
+            return;
+        }
+
+        const nextEdit: SheetViewEdit = {
+            sheetKey,
+            sheetName,
+            freezePane: nextFreezePane
+                ? {
+                      columnCount: nextFreezePane.columnCount,
+                      rowCount: nextFreezePane.rowCount,
+                  }
+                : null,
+        };
+
+        const existingIndex = this.pendingViewEdits.findIndex((edit) => edit.sheetKey === sheetKey);
+        if (existingIndex >= 0) {
+            this.pendingViewEdits = this.pendingViewEdits.map((edit, index) =>
+                index === existingIndex ? nextEdit : edit
+            );
+            return;
+        }
+
+        this.pendingViewEdits = [...this.pendingViewEdits, nextEdit];
     }
 
     private findSheetEntry(sheetKey: string): WorkingSheetEntry | undefined {
@@ -944,6 +1046,58 @@ export class XlsxEditorPanel {
         ];
     }
 
+    private updatePendingViewRename(sheetKey: string, nextName: string): void {
+        this.pendingViewEdits = this.pendingViewEdits.map((edit) =>
+            edit.sheetKey === sheetKey ? { ...edit, sheetName: nextName } : edit
+        );
+    }
+
+    private async toggleViewLock(columnCount: number, rowCount: number): Promise<void> {
+        const workbook = this.getWorkingWorkbook();
+        const activeEntry = this.getActiveSheetEntry();
+        if (!workbook || workbook.isReadonly || !activeEntry) {
+            return;
+        }
+
+        const isLocked = Boolean(
+            activeEntry.sheet.freezePane &&
+            (activeEntry.sheet.freezePane.columnCount > 0 ||
+                activeEntry.sheet.freezePane.rowCount > 0)
+        );
+
+        const nextColumnCount = Math.max(
+            0,
+            Math.min(columnCount, Math.max(activeEntry.sheet.columnCount - 1, 0))
+        );
+        const nextRowCount = Math.max(
+            0,
+            Math.min(rowCount, Math.max(activeEntry.sheet.rowCount - 1, 0))
+        );
+
+        if (!isLocked && nextColumnCount === 0 && nextRowCount === 0) {
+            return;
+        }
+
+        await this.commitStructuralMutation(
+            () => {
+                const entry = this.getActiveSheetEntry();
+                if (!entry) {
+                    return;
+                }
+
+                const nextFreezePane = isLocked
+                    ? null
+                    : createFreezePaneSnapshot(nextColumnCount, nextRowCount);
+                entry.sheet = {
+                    ...entry.sheet,
+                    freezePane: nextFreezePane,
+                };
+                this.updatePendingViewLock(entry.key, entry.sheet.name, nextFreezePane);
+            },
+            { resetPendingHistory: false }
+        );
+    }
+
     private async undoStructuralEdit(): Promise<void> {
         const entry = this.sheetUndoStack.pop();
         if (!entry) {
@@ -956,7 +1110,7 @@ export class XlsxEditorPanel {
         await this.render(undefined, {
             useModelSelection: true,
             replacePendingEdits: this.pendingCellEdits,
-            resetPendingHistory: true,
+            resetPendingHistory: entry.resetPendingHistory,
         });
     }
 
@@ -972,7 +1126,7 @@ export class XlsxEditorPanel {
         await this.render(undefined, {
             useModelSelection: true,
             replacePendingEdits: this.pendingCellEdits,
-            resetPendingHistory: true,
+            resetPendingHistory: entry.resetPendingHistory,
         });
     }
 
@@ -1080,6 +1234,9 @@ export class XlsxEditorPanel {
             this.pendingCellEdits = this.pendingCellEdits.filter(
                 (edit) => edit.sheetName !== deletedEntry.sheet.name
             );
+            this.pendingViewEdits = this.pendingViewEdits.filter(
+                (edit) => edit.sheetKey !== sheetKey
+            );
 
             const pendingAddIndex = this.pendingSheetEdits.findIndex(
                 (edit) => edit.type === "addSheet" && edit.sheetKey === sheetKey
@@ -1150,6 +1307,7 @@ export class XlsxEditorPanel {
                 edit.sheetName === previousName ? { ...edit, sheetName: trimmedName } : edit
             );
             this.updatePendingRename(sheetKey, previousName, trimmedName);
+            this.updatePendingViewRename(sheetKey, trimmedName);
             this.state = setActiveEditorSheet(
                 this.getWorkingWorkbook()!,
                 {
@@ -1322,6 +1480,7 @@ export class XlsxEditorPanel {
         if (clearPendingEdits) {
             this.pendingCellEdits = [];
             this.pendingSheetEdits = [];
+            this.pendingViewEdits = [];
             this.sheetUndoStack.length = 0;
             this.sheetRedoStack.length = 0;
         }

@@ -4,7 +4,7 @@
   "displayName": "%extension.displayName%",
   "description": "%extension.description%",
   "icon": "media/icon.png",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "license": "MIT",
   "homepage": "https://github.com/codetypess/vscode-xlsx-diff#readme",
   "repository": {

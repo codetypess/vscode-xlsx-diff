@@ -28,13 +28,15 @@ function createSheet(
     cells: CellSnapshot[],
     rowCount = 1,
     columnCount = 1,
-    mergedRanges: string[] = []
+    mergedRanges: string[] = [],
+    freezePane: SheetSnapshot["freezePane"] = null
 ): SheetSnapshot {
     return {
         name,
         rowCount,
         columnCount,
         mergedRanges,
+        freezePane,
         cells: Object.fromEntries(cells.map((cell) => [cell.key, cell])),
         signature: `${name}-signature`,
     };
@@ -144,5 +146,28 @@ suite("Editor render model", () => {
         assert.strictEqual(renderModel.page.rows[0].cells[0].value, "");
         assert.strictEqual(renderModel.page.rows[1].cells[1].value, "value");
         assert.strictEqual(renderModel.summary.totalNonEmptyCells, 2);
+    });
+
+    test("surfaces freeze pane state for the active sheet", () => {
+        const workbook = createWorkbook({}, [
+            createSheet("Sheet1", [createCell(3, 3, "value")], 10, 10, [], {
+                columnCount: 1,
+                rowCount: 2,
+                topLeftCell: "B3",
+                activePane: "bottomRight",
+            }),
+        ]);
+
+        const renderModel = createEditorRenderModel(
+            workbook,
+            createInitialEditorPanelState(workbook)
+        );
+
+        assert.deepStrictEqual(renderModel.activeSheet.freezePane, {
+            columnCount: 1,
+            rowCount: 2,
+            topLeftCell: "B3",
+            activePane: "bottomRight",
+        });
     });
 });
