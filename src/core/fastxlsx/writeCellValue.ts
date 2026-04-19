@@ -1,13 +1,13 @@
-import { copyFile, mkdir } from 'node:fs/promises';
-import * as path from 'node:path';
-import * as vscode from 'vscode';
-import { getCellAddress } from '../model/cells';
+import { copyFile, mkdir } from "node:fs/promises";
+import * as path from "node:path";
+import * as vscode from "vscode";
+import { getCellAddress } from "../model/cells";
 
 export interface CellEdit {
-	sheetName: string;
-	rowNumber: number;
-	columnNumber: number;
-	value: string;
+    sheetName: string;
+    rowNumber: number;
+    columnNumber: number;
+    value: string;
 }
 
 /**
@@ -15,13 +15,13 @@ export interface CellEdit {
  * Only local `file://` URIs are supported; read-only/git URIs must be rejected before calling.
  */
 export async function writeCellValue(
-	fileUri: vscode.Uri,
-	sheetName: string,
-	rowNumber: number,
-	columnNumber: number,
-	value: string,
+    fileUri: vscode.Uri,
+    sheetName: string,
+    rowNumber: number,
+    columnNumber: number,
+    value: string
 ): Promise<void> {
-	await writeCellValues(fileUri, [{ sheetName, rowNumber, columnNumber, value }]);
+    await writeCellValues(fileUri, [{ sheetName, rowNumber, columnNumber, value }]);
 }
 
 /**
@@ -29,36 +29,36 @@ export async function writeCellValue(
  * Only local `file://` URIs are supported.
  */
 export async function writeCellValues(fileUri: vscode.Uri, edits: CellEdit[]): Promise<void> {
-	await writeCellValuesToDestination(fileUri, fileUri, edits);
+    await writeCellValuesToDestination(fileUri, fileUri, edits);
 }
 
 export async function writeCellValuesToDestination(
-	sourceUri: vscode.Uri,
-	destinationUri: vscode.Uri,
-	edits: CellEdit[],
+    sourceUri: vscode.Uri,
+    destinationUri: vscode.Uri,
+    edits: CellEdit[]
 ): Promise<void> {
-	if (sourceUri.scheme !== 'file' || destinationUri.scheme !== 'file') {
-		throw new Error('Cell editing is only supported for local files.');
-	}
+    if (sourceUri.scheme !== "file" || destinationUri.scheme !== "file") {
+        throw new Error("Cell editing is only supported for local files.");
+    }
 
-	await mkdir(path.dirname(destinationUri.fsPath), { recursive: true });
+    await mkdir(path.dirname(destinationUri.fsPath), { recursive: true });
 
-	if (sourceUri.fsPath !== destinationUri.fsPath) {
-		await copyFile(sourceUri.fsPath, destinationUri.fsPath);
-	}
+    if (sourceUri.fsPath !== destinationUri.fsPath) {
+        await copyFile(sourceUri.fsPath, destinationUri.fsPath);
+    }
 
-	if (edits.length === 0) {
-		return;
-	}
+    if (edits.length === 0) {
+        return;
+    }
 
-	const { Workbook } = await import('fastxlsx');
-	const workbook = await Workbook.open(destinationUri.fsPath);
+    const { Workbook } = await import("fastxlsx");
+    const workbook = await Workbook.open(destinationUri.fsPath);
 
-	for (const edit of edits) {
-		const sheet = workbook.getSheet(edit.sheetName);
-		const address = getCellAddress(edit.rowNumber, edit.columnNumber);
-		sheet.cell(address).setValue(edit.value);
-	}
+    for (const edit of edits) {
+        const sheet = workbook.getSheet(edit.sheetName);
+        const address = getCellAddress(edit.rowNumber, edit.columnNumber);
+        sheet.cell(address).setValue(edit.value);
+    }
 
-	await workbook.save(destinationUri.fsPath);
+    await workbook.save(destinationUri.fsPath);
 }
