@@ -21,6 +21,7 @@ type OutgoingMessage =
     | { type: "setSheet"; sheetKey: string }
     | { type: "addSheet" }
     | { type: "deleteSheet"; sheetKey: string }
+    | { type: "renameSheet"; sheetKey: string }
     | { type: "prevPage" }
     | { type: "nextPage" }
     | {
@@ -42,6 +43,8 @@ type OutgoingMessage =
       }
     | { type: "requestSave" }
     | { type: "pendingEditStateChanged"; hasPendingEdits: boolean }
+    | { type: "undoSheetEdit" }
+    | { type: "redoSheetEdit" }
     | { type: "reload" };
 
 type IncomingMessage =
@@ -116,6 +119,17 @@ interface ScrollState {
     left: number;
 }
 
+interface TabContextMenuState {
+    sheetKey: string;
+    x: number;
+    y: number;
+}
+
+interface SelectionDragState {
+    anchorCell: CellPosition;
+    pointerId: number;
+}
+
 type ViewState =
     | { kind: "loading"; message: string }
     | { kind: "error"; message: string }
@@ -153,6 +167,7 @@ const DEFAULT_STRINGS = {
     save: "Save",
     addSheet: "Add Sheet",
     deleteSheet: "Delete Sheet",
+    renameSheet: "Rename Sheet",
     selectedCell: "Selected cell",
     noCellSelected: "None",
     totalSheets: "Sheets",
@@ -187,6 +202,9 @@ let gotoReference = "";
 let lastPendingEditsSyncKey: string | null = null;
 let viewRevision = 0;
 let setViewState: React.Dispatch<React.SetStateAction<ViewState>> | null = null;
+let tabContextMenu: TabContextMenuState | null = null;
+let selectionDragState: SelectionDragState | null = null;
+let suppressNextCellClick = false;
 let searchOptions: SearchOptions = {
     isRegexp: false,
     matchCase: false,
@@ -329,6 +347,10 @@ function getSelectionStartCell(): CellPosition | null {
     };
 }
 
+function isActiveSelectionCell(rowNumber: number, columnNumber: number): boolean {
+    return selectedCell?.rowNumber === rowNumber && selectedCell.columnNumber === columnNumber;
+}
+
 function getEffectiveCellValue(rowNumber: number, columnNumber: number): string {
     if (!model) {
         return "";
@@ -407,6 +429,92 @@ function getSelectedCellAddress(): string {
 
     const cell = getCellView(selectedCell.rowNumber, selectedCell.columnNumber);
     return cell?.address ?? getCellAddressLabel(selectedCell.rowNumber, selectedCell.columnNumber);
+}
+
+function closeTabContextMenu({ refresh = true }: { refresh?: boolean } = {}): void {
+    if (!tabContextMenu) {
+        return;
+    }
+
+    tabContextMenu = null;
+    if (refresh) {
+        renderApp({ commitEditing: false });
+    }
+}
+
+function openTabContextMenu(sheetKey: string, x: number, y: number): void {
+    tabContextMenu = { sheetKey, x, y };
+    renderApp({ commitEditing: false });
+}
+
+function requestAddSheet(): void {
+    closeTabContextMenu({ refresh: false });
+    vscode.postMessage({ type: "addSheet" });
+}
+
+function requestDeleteSheet(sheetKey: string): void {
+    closeTabContextMenu({ refresh: false });
+    vscode.postMessage({ type: "deleteSheet", sheetKey });
+}
+
+function requestRenameSheet(sheetKey: string): void {
+    closeTabContextMenu({ refresh: false });
+    vscode.postMessage({ type: "renameSheet", sheetKey });
+}
+
+function getCellPositionFromElement(element: Element | null): CellPosition | null {
+    const cell = element?.closest<HTMLElement>('[data-role="grid-cell"]');
+    if (!cell) {
+        return null;
+    }
+
+    const rowNumber = Number(cell.dataset.rowNumber);
+    const columnNumber = Number(cell.dataset.columnNumber);
+    if (!Number.isInteger(rowNumber) || !Number.isInteger(columnNumber)) {
+        return null;
+    }
+
+    return { rowNumber, columnNumber };
+}
+
+function startSelectionDrag(pointerId: number, anchorCell: CellPosition): void {
+    selectionDragState = {
+        anchorCell,
+        pointerId,
+    };
+    suppressNextCellClick = false;
+}
+
+function stopSelectionDrag(pointerId?: number): void {
+    if (!selectionDragState) {
+        return;
+    }
+
+    if (pointerId !== undefined && selectionDragState.pointerId !== pointerId) {
+        return;
+    }
+
+    selectionDragState = null;
+    if (selectedCell) {
+        syncSelectedCellToHost();
+    }
+}
+
+function updateSelectionDrag(targetCell: CellPosition): void {
+    if (!selectionDragState) {
+        return;
+    }
+
+    if (isActiveSelectionCell(targetCell.rowNumber, targetCell.columnNumber)) {
+        return;
+    }
+
+    suppressNextCellClick = true;
+    setSelectedCellLocal(targetCell, {
+        reveal: false,
+        syncHost: false,
+        anchorCell: selectionDragState.anchorCell,
+    });
 }
 
 function clampScrollPosition(value: number, maxValue: number): number {
@@ -704,6 +812,11 @@ function applyHistoryEntry(entry: HistoryEntry, direction: "undo" | "redo"): voi
 function undoPendingEdits(): void {
     const entry = undoStack.pop();
     if (!entry) {
+        if (model?.canUndoStructuralEdits) {
+            vscode.postMessage({ type: "undoSheetEdit" });
+            return;
+        }
+
         renderApp({ commitEditing: false });
         return;
     }
@@ -716,6 +829,11 @@ function undoPendingEdits(): void {
 function redoPendingEdits(): void {
     const entry = redoStack.pop();
     if (!entry) {
+        if (model?.canRedoStructuralEdits) {
+            vscode.postMessage({ type: "redoSheetEdit" });
+            return;
+        }
+
         renderApp({ commitEditing: false });
         return;
     }
@@ -1239,6 +1357,8 @@ function SearchToggle({
 
 function EditorToolbar({ currentModel }: { currentModel: EditorRenderModel }): React.ReactElement {
     const hasPendingEdits = pendingEdits.size > 0 || currentModel.hasPendingEdits;
+    const canUndo = undoStack.length > 0 || currentModel.canUndoStructuralEdits;
+    const canRedo = redoStack.length > 0 || currentModel.canRedoStructuralEdits;
 
     return (
         <header className="toolbar toolbar--editor">
@@ -1344,14 +1464,14 @@ function EditorToolbar({ currentModel }: { currentModel: EditorRenderModel }): R
             <div className="toolbar__group">
                 <ToolbarButton
                     actionLabel={STRINGS.undo}
-                    disabled={!currentModel.canEdit || undoStack.length === 0 || isSaving}
+                    disabled={!currentModel.canEdit || !canUndo || isSaving}
                     icon="codicon-redo"
                     iconMirrored
                     onClick={undoPendingEdits}
                 />
                 <ToolbarButton
                     actionLabel={STRINGS.redo}
-                    disabled={!currentModel.canEdit || redoStack.length === 0 || isSaving}
+                    disabled={!currentModel.canEdit || !canRedo || isSaving}
                     icon="codicon-redo"
                     onClick={redoPendingEdits}
                 />
@@ -1449,7 +1569,28 @@ function GridCell({
             data-role="grid-cell"
             data-row-number={row.rowNumber}
             title={getCellTooltip(cell.address, value, formula)}
+            onPointerDown={(event) => {
+                if (event.button !== 0) {
+                    return;
+                }
+
+                closeTabContextMenu({ refresh: false });
+                startSelectionDrag(event.pointerId, { rowNumber: row.rowNumber, columnNumber });
+                setSelectedCellLocal(
+                    { rowNumber: row.rowNumber, columnNumber },
+                    {
+                        syncHost: false,
+                        anchorCell: { rowNumber: row.rowNumber, columnNumber },
+                    }
+                );
+            }}
             onClick={(event) => {
+                if (suppressNextCellClick) {
+                    suppressNextCellClick = false;
+                    event.preventDefault();
+                    return;
+                }
+
                 if (editingCell) {
                     finishEdit({ mode: "commit", refresh: false });
                 }
@@ -1611,7 +1752,18 @@ function Tabs({
     pendingSummary: PendingSummary;
 }): React.ReactElement {
     return (
-        <div className="tabs">
+        <div
+            className="tabs"
+            onContextMenu={(event) => {
+                const target = event.target;
+                if (target instanceof HTMLElement && target.closest('[data-role="sheet-tab"]')) {
+                    return;
+                }
+
+                event.preventDefault();
+                openTabContextMenu(currentModel.activeSheet.key, event.clientX, event.clientY);
+            }}
+        >
             {currentModel.sheets.map((sheet: EditorSheetTabView) => {
                 const hasPending = pendingSummary.sheetKeys.has(sheet.key);
 
@@ -1619,45 +1771,65 @@ function Tabs({
                     <button
                         key={sheet.key}
                         className={classNames(["tab", sheet.isActive && "is-active"])}
+                        data-role="sheet-tab"
                         title={sheet.label}
                         type="button"
                         onClick={() =>
                             vscode.postMessage({ type: "setSheet", sheetKey: sheet.key })
                         }
+                        onContextMenu={(event) => {
+                            event.preventDefault();
+                            openTabContextMenu(sheet.key, event.clientX, event.clientY);
+                        }}
                     >
                         {hasPending ? <PendingMarker extraClass="tab__marker" /> : null}
                         <span className="tab__label">{sheet.label}</span>
                     </button>
                 );
             })}
-            {currentModel.canEdit ? (
-                <>
-                    <button
-                        className={classNames(["tab", "tab--action"])}
-                        title={STRINGS.addSheet}
-                        type="button"
-                        onClick={() => vscode.postMessage({ type: "addSheet" })}
-                    >
-                        <span className="codicon codicon-add tab__icon" aria-hidden />
-                        <span className="tab__label">{STRINGS.addSheet}</span>
-                    </button>
-                    <button
-                        className={classNames(["tab", "tab--action", "tab--danger"])}
-                        disabled={currentModel.sheets.length <= 1}
-                        title={STRINGS.deleteSheet}
-                        type="button"
-                        onClick={() =>
-                            vscode.postMessage({
-                                type: "deleteSheet",
-                                sheetKey: currentModel.activeSheet.key,
-                            })
-                        }
-                    >
-                        <span className="codicon codicon-trash tab__icon" aria-hidden />
-                        <span className="tab__label">{STRINGS.deleteSheet}</span>
-                    </button>
-                </>
-            ) : null}
+        </div>
+    );
+}
+
+function TabContextMenu({
+    currentModel,
+}: {
+    currentModel: EditorRenderModel;
+}): React.ReactElement | null {
+    if (!tabContextMenu || !currentModel.canEdit) {
+        return null;
+    }
+
+    const { sheetKey } = tabContextMenu;
+    const menuStyle: React.CSSProperties = {
+        left: Math.max(8, Math.min(tabContextMenu.x, window.innerWidth - 188)),
+        top: Math.max(8, Math.min(tabContextMenu.y, window.innerHeight - 132)),
+    };
+    const disableDelete = currentModel.sheets.length <= 1;
+
+    return (
+        <div className="context-menu" data-role="tab-context-menu" style={menuStyle}>
+            <button className="context-menu__item" type="button" onClick={requestAddSheet}>
+                <span className="codicon codicon-add context-menu__icon" aria-hidden />
+                <span>{STRINGS.addSheet}</span>
+            </button>
+            <button
+                className="context-menu__item"
+                type="button"
+                onClick={() => requestRenameSheet(sheetKey)}
+            >
+                <span className="codicon codicon-edit context-menu__icon" aria-hidden />
+                <span>{STRINGS.renameSheet}</span>
+            </button>
+            <button
+                className="context-menu__item context-menu__item--danger"
+                disabled={disableDelete}
+                type="button"
+                onClick={() => requestDeleteSheet(sheetKey)}
+            >
+                <span className="codicon codicon-trash context-menu__icon" aria-hidden />
+                <span>{STRINGS.deleteSheet}</span>
+            </button>
         </div>
     );
 }
@@ -1711,6 +1883,7 @@ function EditorApp({ view }: { view: Extract<ViewState, { kind: "app" }> }): Rea
                 <EditorPane currentModel={view.model} pendingSummary={pendingSummary} />
             </section>
             <Status currentModel={view.model} pendingSummary={pendingSummary} />
+            <TabContextMenu currentModel={view.model} />
         </div>
     );
 }
@@ -1803,6 +1976,12 @@ window.addEventListener("message", (event: MessageEvent<IncomingMessage>) => {
 
 document.addEventListener("keydown", (event: KeyboardEvent) => {
     const isTextInputContext = isTextInputTarget(event.target);
+
+    if (event.key === "Escape" && tabContextMenu) {
+        event.preventDefault();
+        closeTabContextMenu();
+        return;
+    }
 
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
         event.preventDefault();
@@ -1927,6 +2106,52 @@ document.addEventListener("copy", (event: ClipboardEvent) => {
 
     event.preventDefault();
     event.clipboardData?.setData("text/plain", text);
+});
+
+document.addEventListener("pointerdown", (event: PointerEvent) => {
+    if (!tabContextMenu) {
+        return;
+    }
+
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) {
+        closeTabContextMenu();
+        return;
+    }
+
+    if (target.closest('[data-role="tab-context-menu"]')) {
+        return;
+    }
+
+    closeTabContextMenu();
+});
+
+document.addEventListener("pointermove", (event: PointerEvent) => {
+    if (!selectionDragState || selectionDragState.pointerId !== event.pointerId) {
+        return;
+    }
+
+    if ((event.buttons & 1) === 0) {
+        stopSelectionDrag(event.pointerId);
+        return;
+    }
+
+    const targetCell = getCellPositionFromElement(
+        document.elementFromPoint(event.clientX, event.clientY)
+    );
+    if (!targetCell) {
+        return;
+    }
+
+    updateSelectionDrag(targetCell);
+});
+
+document.addEventListener("pointerup", (event: PointerEvent) => {
+    stopSelectionDrag(event.pointerId);
+});
+
+document.addEventListener("pointercancel", (event: PointerEvent) => {
+    stopSelectionDrag(event.pointerId);
 });
 
 document.addEventListener("paste", (event: ClipboardEvent) => {

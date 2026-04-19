@@ -31,12 +31,21 @@ suite("Workbook edit writer", () => {
                 sheetEdits: [
                     {
                         type: "addSheet",
+                        sheetKey: "added-sheet",
                         sheetName: "Added",
                         targetIndex: 1,
                     },
                     {
+                        type: "renameSheet",
+                        sheetKey: "added-sheet",
+                        sheetName: "Added",
+                        nextSheetName: "Renamed",
+                    },
+                    {
                         type: "deleteSheet",
+                        sheetKey: "legacy-sheet",
                         sheetName: "Legacy",
+                        targetIndex: 2,
                     },
                 ],
                 cellEdits: [
@@ -47,7 +56,7 @@ suite("Workbook edit writer", () => {
                         value: "updated",
                     },
                     {
-                        sheetName: "Added",
+                        sheetName: "Renamed",
                         rowNumber: 2,
                         columnNumber: 2,
                         value: "new",
@@ -64,7 +73,7 @@ suite("Workbook edit writer", () => {
             const snapshot = await loadWorkbookSnapshot(destinationPath);
             assert.deepStrictEqual(
                 snapshot.sheets.map((sheet) => sheet.name),
-                ["Base", "Added"]
+                ["Base", "Renamed"]
             );
             assert.strictEqual(snapshot.sheets[0]?.cells["1:1"]?.displayValue, "updated");
             assert.strictEqual(snapshot.sheets[1]?.cells["2:2"]?.displayValue, "new");
@@ -82,6 +91,7 @@ suite("Workbook edit writer", () => {
                 sheetEdits: [
                     {
                         type: "addSheet",
+                        sheetKey: "sheet-2",
                         sheetName: "Sheet2",
                         targetIndex: 1,
                     },
@@ -93,6 +103,7 @@ suite("Workbook edit writer", () => {
         assert.deepStrictEqual(document.getPendingState().sheetEdits, [
             {
                 type: "addSheet",
+                sheetKey: "sheet-2",
                 sheetName: "Sheet2",
                 targetIndex: 1,
             },

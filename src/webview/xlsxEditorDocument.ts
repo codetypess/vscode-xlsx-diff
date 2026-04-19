@@ -49,12 +49,24 @@ function areSheetEditsEqual(left: readonly SheetEdit[], right: readonly SheetEdi
 
     return left.every((edit, index) => {
         const other = right[index];
-        if (edit.type !== other.type || edit.sheetName !== other.sheetName) {
+        if (
+            edit.type !== other.type ||
+            edit.sheetKey !== other.sheetKey ||
+            edit.sheetName !== other.sheetName
+        ) {
             return false;
         }
 
         if (edit.type === "addSheet" && other.type === "addSheet") {
             return edit.targetIndex === other.targetIndex;
+        }
+
+        if (edit.type === "deleteSheet" && other.type === "deleteSheet") {
+            return edit.targetIndex === other.targetIndex;
+        }
+
+        if (edit.type === "renameSheet" && other.type === "renameSheet") {
+            return edit.nextSheetName === other.nextSheetName;
         }
 
         return true;

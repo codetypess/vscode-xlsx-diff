@@ -12,16 +12,26 @@ export interface CellEdit {
 
 export interface AddSheetEdit {
     type: "addSheet";
+    sheetKey: string;
     sheetName: string;
     targetIndex: number;
 }
 
 export interface DeleteSheetEdit {
     type: "deleteSheet";
+    sheetKey: string;
     sheetName: string;
+    targetIndex: number;
 }
 
-export type SheetEdit = AddSheetEdit | DeleteSheetEdit;
+export interface RenameSheetEdit {
+    type: "renameSheet";
+    sheetKey: string;
+    sheetName: string;
+    nextSheetName: string;
+}
+
+export type SheetEdit = AddSheetEdit | DeleteSheetEdit | RenameSheetEdit;
 
 export interface WorkbookEditState {
     cellEdits: CellEdit[];
@@ -87,6 +97,11 @@ export async function writeWorkbookEditsToDestination(
         if (edit.type === "addSheet") {
             workbook.addSheet(edit.sheetName);
             workbook.moveSheet(edit.sheetName, edit.targetIndex);
+            continue;
+        }
+
+        if (edit.type === "renameSheet") {
+            workbook.renameSheet(edit.sheetName, edit.nextSheetName);
             continue;
         }
 

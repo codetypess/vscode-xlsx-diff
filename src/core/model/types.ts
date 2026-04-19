@@ -123,6 +123,8 @@ export interface EditorRenderModel {
     sheets: EditorSheetTabView[];
     canPrevPage: boolean;
     canNextPage: boolean;
+    canUndoStructuralEdits: boolean;
+    canRedoStructuralEdits: boolean;
 }
 
 export interface SheetDiffModel {

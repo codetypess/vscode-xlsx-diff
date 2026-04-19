@@ -13,7 +13,7 @@ import { getHtmlLanguageTag, isChineseDisplayLanguage } from "../displayLanguage
 import {
     createEditorRenderModel,
     createInitialEditorPanelState,
-    getEditorSheetKey,
+    type EditorSheetEntry,
     moveEditorPageCursor,
     normalizeEditorPanelState,
     setActiveEditorSheet,
@@ -34,6 +34,7 @@ type WebviewMessage =
     | { type: "setSheet"; sheetKey: string }
     | { type: "addSheet" }
     | { type: "deleteSheet"; sheetKey: string }
+    | { type: "renameSheet"; sheetKey: string }
     | { type: "setPage"; page: number }
     | { type: "prevPage" }
     | { type: "nextPage" }
@@ -56,6 +57,8 @@ type WebviewMessage =
       }
     | { type: "requestSave" }
     | { type: "pendingEditStateChanged"; hasPendingEdits: boolean }
+    | { type: "undoSheetEdit" }
+    | { type: "redoSheetEdit" }
     | { type: "reload" };
 
 export interface XlsxEditorPanelController {
@@ -80,6 +83,13 @@ interface WebviewStrings {
     save: string;
     addSheet: string;
     deleteSheet: string;
+    renameSheet: string;
+    renameSheetPrompt: string;
+    renameSheetTitle: string;
+    sheetNameEmpty: string;
+    sheetNameDuplicate: string;
+    sheetNameTooLong: string;
+    sheetNameInvalidChars: string;
     undo: string;
     redo: string;
     searchPlaceholder: string;
@@ -156,6 +166,13 @@ function getWebviewStrings(): WebviewStrings {
             save: "保存",
             addSheet: "添加工作表",
             deleteSheet: "删除工作表",
+            renameSheet: "重命名工作表",
+            renameSheetPrompt: "输入新的工作表名称",
+            renameSheetTitle: "重命名工作表",
+            sheetNameEmpty: "工作表名称不能为空。",
+            sheetNameDuplicate: "工作表名称已存在。",
+            sheetNameTooLong: "工作表名称不能超过 31 个字符。",
+            sheetNameInvalidChars: "工作表名称不能包含 \\ / ? * [ ] : 等字符。",
             totalSheets: "总工作表",
             totalRows: "总行数",
             nonEmptyCells: "非空单元格",
@@ -204,6 +221,13 @@ function getWebviewStrings(): WebviewStrings {
         save: "Save",
         addSheet: "Add Sheet",
         deleteSheet: "Delete Sheet",
+        renameSheet: "Rename Sheet",
+        renameSheetPrompt: "Enter a new sheet name",
+        renameSheetTitle: "Rename Sheet",
+        sheetNameEmpty: "Sheet name cannot be empty.",
+        sheetNameDuplicate: "A sheet with this name already exists.",
+        sheetNameTooLong: "Sheet names must be 31 characters or fewer.",
+        sheetNameInvalidChars: "Sheet names cannot contain \\ / ? * [ ] or :.",
         totalSheets: "Sheets",
         totalRows: "Rows",
         nonEmptyCells: "Non-empty cells",
@@ -228,6 +252,70 @@ function getWebviewStrings(): WebviewStrings {
         searchMatchCase: "Match Case",
         searchWholeWord: "Match Whole Word",
     };
+}
+
+interface WorkingSheetEntry extends EditorSheetEntry {
+    sheet: WorkbookSnapshot["sheets"][number];
+}
+
+interface StructuralSnapshot {
+    state: EditorPanelState;
+    sheetEntries: WorkingSheetEntry[];
+    pendingCellEdits: CellEdit[];
+    pendingSheetEdits: SheetEdit[];
+}
+
+interface StructuralHistoryEntry {
+    before: StructuralSnapshot;
+    after: StructuralSnapshot;
+}
+
+function cloneCellEdit(edit: CellEdit): CellEdit {
+    return { ...edit };
+}
+
+function cloneSheetEdit(edit: SheetEdit): SheetEdit {
+    return { ...edit };
+}
+
+function cloneSheetSnapshot(
+    sheet: WorkbookSnapshot["sheets"][number]
+): WorkbookSnapshot["sheets"][number] {
+    return {
+        ...sheet,
+        mergedRanges: [...sheet.mergedRanges],
+        cells: { ...sheet.cells },
+    };
+}
+
+function cloneSheetEntry(entry: WorkingSheetEntry): WorkingSheetEntry {
+    return {
+        key: entry.key,
+        index: entry.index,
+        sheet: cloneSheetSnapshot(entry.sheet),
+    };
+}
+
+function cloneEditorState(state: EditorPanelState): EditorPanelState {
+    return {
+        ...state,
+        selectedCell: state.selectedCell ? { ...state.selectedCell } : null,
+    };
+}
+
+function reindexWorkingSheetEntries(sheetEntries: WorkingSheetEntry[]): WorkingSheetEntry[] {
+    return sheetEntries.map((entry, index) => ({
+        ...entry,
+        index,
+    }));
+}
+
+function createWorkingSheetEntries(workbook: WorkbookSnapshot): WorkingSheetEntry[] {
+    return workbook.sheets.map((sheet, index) => ({
+        key: `sheet:${index}`,
+        index,
+        sheet: cloneSheetSnapshot(sheet),
+    }));
 }
 
 export class XlsxEditorPanel {
@@ -258,6 +346,10 @@ export class XlsxEditorPanel {
     private hasWarnedPendingExternalChange = false;
     private pendingCellEdits: CellEdit[] = [];
     private pendingSheetEdits: SheetEdit[] = [];
+    private workingSheetEntries: WorkingSheetEntry[] = [];
+    private sheetUndoStack: StructuralHistoryEntry[] = [];
+    private sheetRedoStack: StructuralHistoryEntry[] = [];
+    private nextNewSheetId = 1;
 
     private constructor(
         panel: vscode.WebviewPanel,
@@ -531,10 +623,15 @@ export class XlsxEditorPanel {
                     }
                     return;
                 case "setSheet":
-                    if (!this.workbook) {
+                    if (!this.getWorkingWorkbook()) {
                         return;
                     }
-                    this.state = setActiveEditorSheet(this.workbook, this.state, message.sheetKey);
+                    this.state = setActiveEditorSheet(
+                        this.getWorkingWorkbook()!,
+                        this.state,
+                        message.sheetKey,
+                        this.getSheetEntries()
+                    );
                     await this.render();
                     return;
                 case "addSheet":
@@ -543,29 +640,47 @@ export class XlsxEditorPanel {
                 case "deleteSheet":
                     await this.deletePendingSheet(message.sheetKey);
                     return;
+                case "renameSheet":
+                    await this.renamePendingSheet(message.sheetKey);
+                    return;
                 case "setPage":
-                    if (!this.workbook) {
+                    if (!this.getWorkingWorkbook()) {
                         return;
                     }
-                    this.state = setEditorCurrentPage(this.workbook, this.state, message.page);
+                    this.state = setEditorCurrentPage(
+                        this.getWorkingWorkbook()!,
+                        this.state,
+                        message.page,
+                        this.getSheetEntries()
+                    );
                     await this.render();
                     return;
                 case "prevPage":
-                    if (!this.workbook) {
+                    if (!this.getWorkingWorkbook()) {
                         return;
                     }
-                    this.state = moveEditorPageCursor(this.workbook, this.state, -1);
+                    this.state = moveEditorPageCursor(
+                        this.getWorkingWorkbook()!,
+                        this.state,
+                        -1,
+                        this.getSheetEntries()
+                    );
                     await this.render();
                     return;
                 case "nextPage":
-                    if (!this.workbook) {
+                    if (!this.getWorkingWorkbook()) {
                         return;
                     }
-                    this.state = moveEditorPageCursor(this.workbook, this.state, 1);
+                    this.state = moveEditorPageCursor(
+                        this.getWorkingWorkbook()!,
+                        this.state,
+                        1,
+                        this.getSheetEntries()
+                    );
                     await this.render();
                     return;
                 case "search": {
-                    if (!this.workbook) {
+                    if (!this.getWorkingWorkbook()) {
                         return;
                     }
 
@@ -595,7 +710,7 @@ export class XlsxEditorPanel {
                     return;
                 }
                 case "gotoCell":
-                    if (!this.workbook) {
+                    if (!this.getWorkingWorkbook()) {
                         return;
                     }
 
@@ -609,14 +724,15 @@ export class XlsxEditorPanel {
                     await this.render();
                     return;
                 case "selectCell":
-                    if (!this.workbook) {
+                    if (!this.getWorkingWorkbook()) {
                         return;
                     }
                     this.state = setSelectedEditorCell(
-                        this.workbook,
+                        this.getWorkingWorkbook()!,
                         this.state,
                         message.rowNumber,
-                        message.columnNumber
+                        message.columnNumber,
+                        this.getSheetEntries()
                     );
                     return;
                 case "pendingEditStateChanged":
@@ -630,9 +746,9 @@ export class XlsxEditorPanel {
                     }
 
                     const cellEdits: CellEdit[] = message.edits.flatMap((edit) => {
-                        const sheet = this.workbook!.sheets.find(
-                            (candidate) => getEditorSheetKey(candidate) === edit.sheetKey
-                        );
+                        const sheet = this.getSheetEntries().find(
+                            (candidate) => candidate.key === edit.sheetKey
+                        )?.sheet;
 
                         return sheet
                             ? [
@@ -660,6 +776,12 @@ export class XlsxEditorPanel {
                     this.suppressAutoRefreshUntil = Date.now() + 2000;
                     await this.controller.onRequestSave();
                     return;
+                case "undoSheetEdit":
+                    await this.undoStructuralEdit();
+                    return;
+                case "redoSheetEdit":
+                    await this.redoStructuralEdit();
+                    return;
                 case "reload":
                     if (this.document.hasPendingEdits()) {
                         await this.controller.onRequestRevert();
@@ -675,16 +797,29 @@ export class XlsxEditorPanel {
     }
 
     private revealCell(sheetKey: string, rowNumber: number, columnNumber: number): void {
-        if (!this.workbook) {
+        const workbook = this.getWorkingWorkbook();
+        if (!workbook) {
             return;
         }
 
         this.state = setSelectedEditorCell(
-            this.workbook,
-            setActiveEditorSheet(this.workbook, this.state, sheetKey),
+            workbook,
+            setActiveEditorSheet(workbook, this.state, sheetKey, this.getSheetEntries()),
             rowNumber,
-            columnNumber
+            columnNumber,
+            this.getSheetEntries()
         );
+    }
+
+    private getWorkingWorkbook(): WorkbookSnapshot | null {
+        if (!this.workbook) {
+            return null;
+        }
+
+        return {
+            ...this.workbook,
+            sheets: this.workingSheetEntries.map((entry) => entry.sheet),
+        };
     }
 
     private getSheetEntries(): Array<{
@@ -692,22 +827,153 @@ export class XlsxEditorPanel {
         index: number;
         sheet: WorkbookSnapshot["sheets"][number];
     }> {
-        if (!this.workbook) {
-            return [];
-        }
-
-        return this.workbook.sheets.map((sheet, index) => ({
-            key: getEditorSheetKey(sheet),
-            index,
-            sheet,
-        }));
+        return this.workingSheetEntries;
     }
 
     private createPendingState(): WorkbookEditState {
         return {
-            cellEdits: this.pendingCellEdits,
-            sheetEdits: this.pendingSheetEdits,
+            cellEdits: this.pendingCellEdits.map(cloneCellEdit),
+            sheetEdits: this.pendingSheetEdits.map(cloneSheetEdit),
         };
+    }
+
+    private captureStructuralSnapshot(): StructuralSnapshot {
+        return {
+            state: cloneEditorState(this.state),
+            sheetEntries: this.workingSheetEntries.map(cloneSheetEntry),
+            pendingCellEdits: this.pendingCellEdits.map(cloneCellEdit),
+            pendingSheetEdits: this.pendingSheetEdits.map(cloneSheetEdit),
+        };
+    }
+
+    private restoreStructuralSnapshot(snapshot: StructuralSnapshot): void {
+        this.state = cloneEditorState(snapshot.state);
+        this.workingSheetEntries = reindexWorkingSheetEntries(
+            snapshot.sheetEntries.map(cloneSheetEntry)
+        );
+        this.pendingCellEdits = snapshot.pendingCellEdits.map(cloneCellEdit);
+        this.pendingSheetEdits = snapshot.pendingSheetEdits.map(cloneSheetEdit);
+    }
+
+    private async commitStructuralMutation(mutate: () => void): Promise<void> {
+        const before = this.captureStructuralSnapshot();
+        mutate();
+        this.workingSheetEntries = reindexWorkingSheetEntries(this.workingSheetEntries);
+        const after = this.captureStructuralSnapshot();
+        this.sheetUndoStack.push({ before, after });
+        this.sheetRedoStack.length = 0;
+        await this.syncPendingState();
+        await this.render(undefined, {
+            useModelSelection: true,
+            replacePendingEdits: this.pendingCellEdits,
+            resetPendingHistory: true,
+        });
+    }
+
+    private findSheetEntry(sheetKey: string): WorkingSheetEntry | undefined {
+        return this.workingSheetEntries.find((entry) => entry.key === sheetKey);
+    }
+
+    private getActiveSheetEntry(): WorkingSheetEntry | undefined {
+        return this.workingSheetEntries.find((entry) => entry.key === this.state.activeSheetKey);
+    }
+
+    private getNextWorkingSheetKey(): string {
+        const key = `sheet:new:${this.nextNewSheetId}`;
+        this.nextNewSheetId += 1;
+        return key;
+    }
+
+    private validateSheetName(value: string, currentSheetKey?: string): string | undefined {
+        const trimmed = value.trim();
+        const strings = getWebviewStrings();
+
+        if (!trimmed) {
+            return strings.sheetNameEmpty;
+        }
+
+        if (trimmed.length > 31) {
+            return strings.sheetNameTooLong;
+        }
+
+        if (/[\\/:?*\[\]]/.test(trimmed)) {
+            return strings.sheetNameInvalidChars;
+        }
+
+        if (
+            this.workingSheetEntries.some(
+                (entry) =>
+                    entry.key !== currentSheetKey &&
+                    entry.sheet.name.toLocaleLowerCase() === trimmed.toLocaleLowerCase()
+            )
+        ) {
+            return strings.sheetNameDuplicate;
+        }
+
+        return undefined;
+    }
+
+    private updatePendingRename(sheetKey: string, previousName: string, nextName: string): void {
+        const addSheetEdit = this.pendingSheetEdits.find(
+            (edit) => edit.type === "addSheet" && edit.sheetKey === sheetKey
+        );
+        if (addSheetEdit?.type === "addSheet") {
+            addSheetEdit.sheetName = nextName;
+            this.pendingSheetEdits = this.pendingSheetEdits.filter(
+                (edit) => !(edit.type === "renameSheet" && edit.sheetKey === sheetKey)
+            );
+            return;
+        }
+
+        const renameEdit = this.pendingSheetEdits.find(
+            (edit) => edit.type === "renameSheet" && edit.sheetKey === sheetKey
+        );
+        if (renameEdit?.type === "renameSheet") {
+            renameEdit.nextSheetName = nextName;
+            return;
+        }
+
+        this.pendingSheetEdits = [
+            ...this.pendingSheetEdits,
+            {
+                type: "renameSheet",
+                sheetKey,
+                sheetName: previousName,
+                nextSheetName: nextName,
+            },
+        ];
+    }
+
+    private async undoStructuralEdit(): Promise<void> {
+        const entry = this.sheetUndoStack.pop();
+        if (!entry) {
+            return;
+        }
+
+        this.restoreStructuralSnapshot(entry.before);
+        this.sheetRedoStack.push(entry);
+        await this.syncPendingState();
+        await this.render(undefined, {
+            useModelSelection: true,
+            replacePendingEdits: this.pendingCellEdits,
+            resetPendingHistory: true,
+        });
+    }
+
+    private async redoStructuralEdit(): Promise<void> {
+        const entry = this.sheetRedoStack.pop();
+        if (!entry) {
+            return;
+        }
+
+        this.restoreStructuralSnapshot(entry.after);
+        this.sheetUndoStack.push(entry);
+        await this.syncPendingState();
+        await this.render(undefined, {
+            useModelSelection: true,
+            replacePendingEdits: this.pendingCellEdits,
+            resetPendingHistory: true,
+        });
     }
 
     private async syncPendingState(): Promise<void> {
@@ -724,7 +990,7 @@ export class XlsxEditorPanel {
 
     private getNewSheetName(): string {
         const baseName = isChineseDisplayLanguage() ? "工作表" : "Sheet";
-        const existingNames = new Set(this.workbook?.sheets.map((sheet) => sheet.name) ?? []);
+        const existingNames = new Set(this.workingSheetEntries.map((entry) => entry.sheet.name));
 
         let suffix = 1;
         while (existingNames.has(`${baseName}${suffix}`)) {
@@ -735,109 +1001,164 @@ export class XlsxEditorPanel {
     }
 
     private getInsertSheetIndex(): number {
-        if (!this.workbook || this.workbook.sheets.length === 0) {
+        if (this.workingSheetEntries.length === 0) {
             return 0;
         }
 
-        const activeSheetIndex = this.workbook.sheets.findIndex(
-            (sheet) => getEditorSheetKey(sheet) === this.state.activeSheetKey
+        const activeSheetIndex = this.workingSheetEntries.findIndex(
+            (sheet) => sheet.key === this.state.activeSheetKey
         );
 
-        return activeSheetIndex >= 0 ? activeSheetIndex + 1 : this.workbook.sheets.length;
+        return activeSheetIndex >= 0 ? activeSheetIndex + 1 : this.workingSheetEntries.length;
     }
 
     private async addPendingSheet(): Promise<void> {
-        if (!this.workbook || this.workbook.isReadonly) {
+        const workbook = this.getWorkingWorkbook();
+        if (!workbook || workbook.isReadonly) {
             return;
         }
 
         const sheetName = this.getNewSheetName();
         const targetIndex = this.getInsertSheetIndex();
-        this.workbook = {
-            ...this.workbook,
-            sheets: [
-                ...this.workbook.sheets.slice(0, targetIndex),
-                {
+        await this.commitStructuralMutation(() => {
+            const sheetKey = this.getNextWorkingSheetKey();
+            const newEntry: WorkingSheetEntry = {
+                key: sheetKey,
+                index: targetIndex,
+                sheet: {
                     name: sheetName,
                     rowCount: DEFAULT_PAGE_SIZE,
                     columnCount: 26,
                     mergedRanges: [],
                     cells: {},
-                    signature: `pending:${sheetName}`,
+                    signature: `pending:${sheetKey}:${sheetName}`,
                 },
-                ...this.workbook.sheets.slice(targetIndex),
-            ],
-        };
-
-        this.pendingSheetEdits = [
-            ...this.pendingSheetEdits,
-            {
-                type: "addSheet",
-                sheetName,
-                targetIndex,
-            },
-        ];
-        this.state = setActiveEditorSheet(this.workbook, this.state, sheetName);
-        await this.syncPendingState();
-        await this.render(undefined, {
-            useModelSelection: true,
-            replacePendingEdits: this.pendingCellEdits,
-            resetPendingHistory: true,
+            };
+            this.workingSheetEntries = [
+                ...this.workingSheetEntries.slice(0, targetIndex),
+                newEntry,
+                ...this.workingSheetEntries.slice(targetIndex),
+            ];
+            this.pendingSheetEdits = [
+                ...this.pendingSheetEdits,
+                {
+                    type: "addSheet",
+                    sheetKey,
+                    sheetName,
+                    targetIndex,
+                },
+            ];
+            this.state = setActiveEditorSheet(
+                this.getWorkingWorkbook()!,
+                this.state,
+                sheetKey,
+                this.getSheetEntries()
+            );
         });
     }
 
     private async deletePendingSheet(sheetKey: string): Promise<void> {
-        if (!this.workbook || this.workbook.isReadonly || this.workbook.sheets.length <= 1) {
+        const workbook = this.getWorkingWorkbook();
+        if (!workbook || workbook.isReadonly || this.workingSheetEntries.length <= 1) {
             return;
         }
 
-        const targetIndex = this.workbook.sheets.findIndex(
-            (sheet) => getEditorSheetKey(sheet) === sheetKey
-        );
+        const targetIndex = this.workingSheetEntries.findIndex((sheet) => sheet.key === sheetKey);
         if (targetIndex < 0) {
             return;
         }
 
-        const [deletedSheet] = this.workbook.sheets.slice(targetIndex, targetIndex + 1);
-        if (!deletedSheet) {
+        const deletedEntry = this.workingSheetEntries[targetIndex];
+        if (!deletedEntry) {
             return;
         }
 
-        this.workbook = {
-            ...this.workbook,
-            sheets: this.workbook.sheets.filter((sheet) => sheet.name !== deletedSheet.name),
-        };
-        this.pendingCellEdits = this.pendingCellEdits.filter(
-            (edit) => edit.sheetName !== deletedSheet.name
-        );
-
-        const pendingAddIndex = this.pendingSheetEdits.findIndex(
-            (edit) => edit.type === "addSheet" && edit.sheetName === deletedSheet.name
-        );
-        if (pendingAddIndex >= 0) {
-            this.pendingSheetEdits = this.pendingSheetEdits.filter(
-                (_edit, index) => index !== pendingAddIndex
+        await this.commitStructuralMutation(() => {
+            this.workingSheetEntries = this.workingSheetEntries.filter(
+                (entry) => entry.key !== sheetKey
             );
-        } else {
-            this.pendingSheetEdits = [
-                ...this.pendingSheetEdits,
-                {
-                    type: "deleteSheet",
-                    sheetName: deletedSheet.name,
-                },
-            ];
+            this.pendingCellEdits = this.pendingCellEdits.filter(
+                (edit) => edit.sheetName !== deletedEntry.sheet.name
+            );
+
+            const pendingAddIndex = this.pendingSheetEdits.findIndex(
+                (edit) => edit.type === "addSheet" && edit.sheetKey === sheetKey
+            );
+            if (pendingAddIndex >= 0) {
+                this.pendingSheetEdits = this.pendingSheetEdits.filter(
+                    (edit) => edit.sheetKey !== sheetKey
+                );
+            } else {
+                this.pendingSheetEdits = [
+                    ...this.pendingSheetEdits,
+                    {
+                        type: "deleteSheet",
+                        sheetKey,
+                        sheetName: deletedEntry.sheet.name,
+                        targetIndex,
+                    },
+                ];
+            }
+
+            const fallbackSheet =
+                this.workingSheetEntries[Math.max(0, targetIndex - 1)] ??
+                this.workingSheetEntries[0];
+            this.state = fallbackSheet
+                ? setActiveEditorSheet(
+                      this.getWorkingWorkbook()!,
+                      this.state,
+                      fallbackSheet.key,
+                      this.getSheetEntries()
+                  )
+                : createInitialEditorPanelState(this.getWorkingWorkbook()!, this.getSheetEntries());
+        });
+    }
+
+    private async renamePendingSheet(sheetKey: string): Promise<void> {
+        const workbook = this.getWorkingWorkbook();
+        const targetEntry = this.findSheetEntry(sheetKey);
+        if (!workbook || workbook.isReadonly || !targetEntry) {
+            return;
         }
 
-        const fallbackSheet =
-            this.workbook.sheets[Math.max(0, targetIndex - 1)] ?? this.workbook.sheets[0];
-        this.state = fallbackSheet
-            ? setActiveEditorSheet(this.workbook, this.state, fallbackSheet.name)
-            : createInitialEditorPanelState(this.workbook);
-        await this.syncPendingState();
-        await this.render(undefined, {
-            useModelSelection: true,
-            replacePendingEdits: this.pendingCellEdits,
-            resetPendingHistory: true,
+        const strings = getWebviewStrings();
+        const nextName = await vscode.window.showInputBox({
+            prompt: strings.renameSheetPrompt,
+            title: strings.renameSheetTitle,
+            value: targetEntry.sheet.name,
+            validateInput: (value) => this.validateSheetName(value, sheetKey),
+        });
+
+        const trimmedName = nextName?.trim();
+        if (!trimmedName || trimmedName === targetEntry.sheet.name) {
+            return;
+        }
+
+        await this.commitStructuralMutation(() => {
+            const entry = this.findSheetEntry(sheetKey);
+            if (!entry) {
+                return;
+            }
+
+            const previousName = entry.sheet.name;
+            entry.sheet = {
+                ...entry.sheet,
+                name: trimmedName,
+                signature: `pending:${sheetKey}:${trimmedName}`,
+            };
+            this.pendingCellEdits = this.pendingCellEdits.map((edit) =>
+                edit.sheetName === previousName ? { ...edit, sheetName: trimmedName } : edit
+            );
+            this.updatePendingRename(sheetKey, previousName, trimmedName);
+            this.state = setActiveEditorSheet(
+                this.getWorkingWorkbook()!,
+                {
+                    ...this.state,
+                    activeSheetKey: sheetKey,
+                },
+                sheetKey,
+                this.getSheetEntries()
+            );
         });
     }
 
@@ -847,7 +1168,8 @@ export class XlsxEditorPanel {
         options: SearchOptions
     ): { sheetKey: string; rowNumber: number; columnNumber: number } | null {
         const normalizedQuery = query.trim();
-        if (!this.workbook || !normalizedQuery) {
+        const workbook = this.getWorkingWorkbook();
+        if (!workbook || !normalizedQuery) {
             return null;
         }
 
@@ -995,21 +1317,32 @@ export class XlsxEditorPanel {
         this.workbook = await loadWorkbookSnapshot(this.document.getReadUri());
         this.workbook.filePath = this.workbookUri.fsPath;
         this.workbook.fileName = getWorkbookResourceName(this.workbookUri);
+        this.workingSheetEntries = createWorkingSheetEntries(this.workbook);
+        this.nextNewSheetId = 1;
         if (clearPendingEdits) {
             this.pendingCellEdits = [];
             this.pendingSheetEdits = [];
+            this.sheetUndoStack.length = 0;
+            this.sheetRedoStack.length = 0;
         }
-        this.state = this.workbook.sheets.length
+        this.state = this.workingSheetEntries.length
             ? normalizeEditorPanelState(
-                  this.workbook,
+                  this.getWorkingWorkbook()!,
                   this.state.activeSheetKey
                       ? this.state
-                      : createInitialEditorPanelState(this.workbook)
+                      : createInitialEditorPanelState(
+                            this.getWorkingWorkbook()!,
+                            this.getSheetEntries()
+                        ),
+                  this.getSheetEntries()
               )
-            : createInitialEditorPanelState(this.workbook);
+            : createInitialEditorPanelState(this.getWorkingWorkbook()!, this.getSheetEntries());
 
-        const renderModel = createEditorRenderModel(this.workbook, this.state, {
+        const renderModel = createEditorRenderModel(this.getWorkingWorkbook()!, this.state, {
             hasPendingEdits: clearPendingEdits ? false : this.document.hasPendingEdits(),
+            sheetEntries: this.getSheetEntries(),
+            canUndoStructuralEdits: this.sheetUndoStack.length > 0,
+            canRedoStructuralEdits: this.sheetRedoStack.length > 0,
         });
 
         if (clearPendingEdits) {
@@ -1043,10 +1376,18 @@ export class XlsxEditorPanel {
             return;
         }
 
+        const workbook = this.getWorkingWorkbook();
+        if (!workbook) {
+            return;
+        }
+
         const payload =
             renderModel ??
-            createEditorRenderModel(this.workbook, this.state, {
+            createEditorRenderModel(workbook, this.state, {
                 hasPendingEdits: this.document.hasPendingEdits(),
+                sheetEntries: this.getSheetEntries(),
+                canUndoStructuralEdits: this.sheetUndoStack.length > 0,
+                canRedoStructuralEdits: this.sheetRedoStack.length > 0,
             });
         this.panel.title = payload.title;
 
@@ -1064,7 +1405,9 @@ export class XlsxEditorPanel {
             useModelSelection,
             replacePendingEdits:
                 replacePendingEdits?.map((edit) => ({
-                    sheetKey: edit.sheetName,
+                    sheetKey:
+                        this.getSheetEntries().find((entry) => entry.sheet.name === edit.sheetName)
+                            ?.key ?? edit.sheetName,
                     rowNumber: edit.rowNumber,
                     columnNumber: edit.columnNumber,
                     value: edit.value,

@@ -14,6 +14,12 @@ import {
     type WorkbookSnapshot,
 } from "../core/model/types";
 
+export interface EditorSheetEntry {
+    key: string;
+    sheet: SheetSnapshot;
+    index: number;
+}
+
 function getUntitledSheetLabel(): string {
     return isChineseDisplayLanguage() ? "未命名工作表" : "Untitled Sheet";
 }
@@ -66,6 +72,13 @@ function getSheetEntries(workbook: WorkbookSnapshot): Array<{
         sheet,
         index,
     }));
+}
+
+function resolveSheetEntries(
+    workbook: WorkbookSnapshot,
+    sheetEntriesOverride?: EditorSheetEntry[]
+): EditorSheetEntry[] {
+    return sheetEntriesOverride ?? getSheetEntries(workbook);
 }
 
 function getDefaultSelectedCell(sheet: SheetSnapshot, currentPage = 1): EditorSelectedCell | null {
@@ -226,21 +239,25 @@ function getWorkbookSummary(workbook: WorkbookSnapshot): {
     );
 }
 
-export function createInitialEditorPanelState(workbook: WorkbookSnapshot): EditorPanelState {
-    const firstSheet = workbook.sheets[0];
+export function createInitialEditorPanelState(
+    workbook: WorkbookSnapshot,
+    sheetEntriesOverride?: EditorSheetEntry[]
+): EditorPanelState {
+    const firstSheet = resolveSheetEntries(workbook, sheetEntriesOverride)[0];
 
     return {
-        activeSheetKey: firstSheet ? getEditorSheetKey(firstSheet) : null,
+        activeSheetKey: firstSheet?.key ?? null,
         currentPage: 1,
-        selectedCell: firstSheet ? getDefaultSelectedCell(firstSheet) : null,
+        selectedCell: firstSheet ? getDefaultSelectedCell(firstSheet.sheet) : null,
     };
 }
 
 export function normalizeEditorPanelState(
     workbook: WorkbookSnapshot,
-    state: EditorPanelState
+    state: EditorPanelState,
+    sheetEntriesOverride?: EditorSheetEntry[]
 ): EditorPanelState {
-    const sheetEntries = getSheetEntries(workbook);
+    const sheetEntries = resolveSheetEntries(workbook, sheetEntriesOverride);
     const activeSheetEntry =
         sheetEntries.find((entry) => entry.key === state.activeSheetKey) ?? sheetEntries[0] ?? null;
 
@@ -267,27 +284,35 @@ export function normalizeEditorPanelState(
 export function setActiveEditorSheet(
     workbook: WorkbookSnapshot,
     state: EditorPanelState,
-    sheetKey: string
+    sheetKey: string,
+    sheetEntriesOverride?: EditorSheetEntry[]
 ): EditorPanelState {
-    const sheetEntry = getSheetEntries(workbook).find((entry) => entry.key === sheetKey);
+    const sheetEntry = resolveSheetEntries(workbook, sheetEntriesOverride).find(
+        (entry) => entry.key === sheetKey
+    );
     if (!sheetEntry) {
         return state;
     }
 
-    return normalizeEditorPanelState(workbook, {
-        activeSheetKey: sheetEntry.key,
-        currentPage: 1,
-        selectedCell: getDefaultSelectedCell(sheetEntry.sheet),
-    });
+    return normalizeEditorPanelState(
+        workbook,
+        {
+            activeSheetKey: sheetEntry.key,
+            currentPage: 1,
+            selectedCell: getDefaultSelectedCell(sheetEntry.sheet),
+        },
+        sheetEntriesOverride
+    );
 }
 
 export function setEditorCurrentPage(
     workbook: WorkbookSnapshot,
     state: EditorPanelState,
-    currentPage: number
+    currentPage: number,
+    sheetEntriesOverride?: EditorSheetEntry[]
 ): EditorPanelState {
-    const normalizedState = normalizeEditorPanelState(workbook, state);
-    const sheetEntry = getSheetEntries(workbook).find(
+    const normalizedState = normalizeEditorPanelState(workbook, state, sheetEntriesOverride);
+    const sheetEntry = resolveSheetEntries(workbook, sheetEntriesOverride).find(
         (entry) => entry.key === normalizedState.activeSheetKey
     );
 
@@ -297,20 +322,29 @@ export function setEditorCurrentPage(
 
     const nextPage = clampPage(sheetEntry.sheet, currentPage);
 
-    return normalizeEditorPanelState(workbook, {
-        ...normalizedState,
-        currentPage: nextPage,
-        selectedCell: getSelectionForPage(sheetEntry.sheet, nextPage, normalizedState.selectedCell),
-    });
+    return normalizeEditorPanelState(
+        workbook,
+        {
+            ...normalizedState,
+            currentPage: nextPage,
+            selectedCell: getSelectionForPage(
+                sheetEntry.sheet,
+                nextPage,
+                normalizedState.selectedCell
+            ),
+        },
+        sheetEntriesOverride
+    );
 }
 
 export function moveEditorPageCursor(
     workbook: WorkbookSnapshot,
     state: EditorPanelState,
-    direction: -1 | 1
+    direction: -1 | 1,
+    sheetEntriesOverride?: EditorSheetEntry[]
 ): EditorPanelState {
-    const normalizedState = normalizeEditorPanelState(workbook, state);
-    const sheetEntries = getSheetEntries(workbook);
+    const normalizedState = normalizeEditorPanelState(workbook, state, sheetEntriesOverride);
+    const sheetEntries = resolveSheetEntries(workbook, sheetEntriesOverride);
     const activeSheetIndex = sheetEntries.findIndex(
         (entry) => entry.key === normalizedState.activeSheetKey
     );
@@ -326,11 +360,21 @@ export function moveEditorPageCursor(
     );
 
     if (direction < 0 && normalizedState.currentPage > 1) {
-        return setEditorCurrentPage(workbook, normalizedState, normalizedState.currentPage - 1);
+        return setEditorCurrentPage(
+            workbook,
+            normalizedState,
+            normalizedState.currentPage - 1,
+            sheetEntriesOverride
+        );
     }
 
     if (direction > 0 && normalizedState.currentPage < totalPages) {
-        return setEditorCurrentPage(workbook, normalizedState, normalizedState.currentPage + 1);
+        return setEditorCurrentPage(
+            workbook,
+            normalizedState,
+            normalizedState.currentPage + 1,
+            sheetEntriesOverride
+        );
     }
 
     const adjacentSheet =
@@ -342,21 +386,26 @@ export function moveEditorPageCursor(
 
     const targetPage = direction < 0 ? clampPage(adjacentSheet.sheet, Number.MAX_SAFE_INTEGER) : 1;
 
-    return normalizeEditorPanelState(workbook, {
-        activeSheetKey: adjacentSheet.key,
-        currentPage: targetPage,
-        selectedCell: getDefaultSelectedCell(adjacentSheet.sheet, targetPage),
-    });
+    return normalizeEditorPanelState(
+        workbook,
+        {
+            activeSheetKey: adjacentSheet.key,
+            currentPage: targetPage,
+            selectedCell: getDefaultSelectedCell(adjacentSheet.sheet, targetPage),
+        },
+        sheetEntriesOverride
+    );
 }
 
 export function setSelectedEditorCell(
     workbook: WorkbookSnapshot,
     state: EditorPanelState,
     rowNumber: number,
-    columnNumber: number
+    columnNumber: number,
+    sheetEntriesOverride?: EditorSheetEntry[]
 ): EditorPanelState {
-    const normalizedState = normalizeEditorPanelState(workbook, state);
-    const sheetEntry = getSheetEntries(workbook).find(
+    const normalizedState = normalizeEditorPanelState(workbook, state, sheetEntriesOverride);
+    const sheetEntry = resolveSheetEntries(workbook, sheetEntriesOverride).find(
         (entry) => entry.key === normalizedState.activeSheetKey
     );
 
@@ -373,20 +422,29 @@ export function setSelectedEditorCell(
         return normalizedState;
     }
 
-    return normalizeEditorPanelState(workbook, {
-        ...normalizedState,
-        currentPage: getCellPage(selectedCell.rowNumber),
-        selectedCell,
-    });
+    return normalizeEditorPanelState(
+        workbook,
+        {
+            ...normalizedState,
+            currentPage: getCellPage(selectedCell.rowNumber),
+            selectedCell,
+        },
+        sheetEntriesOverride
+    );
 }
 
 export function createEditorRenderModel(
     workbook: WorkbookSnapshot,
     state: EditorPanelState,
-    options: { hasPendingEdits?: boolean } = {}
+    options: {
+        hasPendingEdits?: boolean;
+        sheetEntries?: EditorSheetEntry[];
+        canUndoStructuralEdits?: boolean;
+        canRedoStructuralEdits?: boolean;
+    } = {}
 ): EditorRenderModel {
-    const normalizedState = normalizeEditorPanelState(workbook, state);
-    const sheetEntries = getSheetEntries(workbook);
+    const normalizedState = normalizeEditorPanelState(workbook, state, options.sheetEntries);
+    const sheetEntries = resolveSheetEntries(workbook, options.sheetEntries);
     const file = createWorkbookFileView(workbook);
     const hasPendingEdits = options.hasPendingEdits ?? false;
 
@@ -420,6 +478,8 @@ export function createEditorRenderModel(
             sheets: [],
             canPrevPage: false,
             canNextPage: false,
+            canUndoStructuralEdits: options.canUndoStructuralEdits ?? false,
+            canRedoStructuralEdits: options.canRedoStructuralEdits ?? false,
         };
     }
 
@@ -484,5 +544,7 @@ export function createEditorRenderModel(
         canPrevPage: normalizedState.currentPage > 1 || sheetIndex > 0,
         canNextPage:
             normalizedState.currentPage < totalPages || sheetIndex < sheetEntries.length - 1,
+        canUndoStructuralEdits: options.canUndoStructuralEdits ?? false,
+        canRedoStructuralEdits: options.canRedoStructuralEdits ?? false,
     };
 }
