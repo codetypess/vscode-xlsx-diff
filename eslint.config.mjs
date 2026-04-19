@@ -1,7 +1,7 @@
 import typescriptEslint from "typescript-eslint";
 
 export default [{
-    files: ["**/*.{ts,mts}"],
+    files: ["**/*.{ts,tsx,mts}"],
 }, {
     plugins: {
         "@typescript-eslint": typescriptEslint.plugin,

@@ -178,6 +178,10 @@ body {
     opacity: 1;
 }
 
+.toolbar__button-icon--flip {
+    transform: scaleX(-1);
+}
+
 .toolbar__button:hover:enabled {
     background: var(--vscode-button-secondaryHoverBackground);
 }

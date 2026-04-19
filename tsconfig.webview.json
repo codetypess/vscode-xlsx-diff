@@ -8,6 +8,7 @@
 			"DOM",
 			"DOM.Iterable"
 		],
+		"jsx": "react-jsx",
 		"strict": true,
 		"noImplicitReturns": true,
 		"noFallthroughCasesInSwitch": true
@@ -15,6 +16,7 @@
 	"include": [
 		"src/webview/panel.ts",
 		"src/webview/editorPanel.ts",
+		"src/webview/**/*.tsx",
 		"src/core/model/types.ts"
 	]
 }
