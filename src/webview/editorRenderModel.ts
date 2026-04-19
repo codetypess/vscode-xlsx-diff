@@ -48,8 +48,8 @@ function formatModifiedTime(value: string): string {
     }).format(new Date(value));
 }
 
-export function getEditorSheetKey(sheet: SheetSnapshot, index: number): string {
-    return `${index}:${sheet.name}`;
+export function getEditorSheetKey(sheet: SheetSnapshot): string {
+    return sheet.name;
 }
 
 function getSheetLabel(sheet: SheetSnapshot): string {
@@ -62,7 +62,7 @@ function getSheetEntries(workbook: WorkbookSnapshot): Array<{
     index: number;
 }> {
     return workbook.sheets.map((sheet, index) => ({
-        key: getEditorSheetKey(sheet, index),
+        key: getEditorSheetKey(sheet),
         sheet,
         index,
     }));
@@ -230,7 +230,7 @@ export function createInitialEditorPanelState(workbook: WorkbookSnapshot): Edito
     const firstSheet = workbook.sheets[0];
 
     return {
-        activeSheetKey: firstSheet ? getEditorSheetKey(firstSheet, 0) : null,
+        activeSheetKey: firstSheet ? getEditorSheetKey(firstSheet) : null,
         currentPage: 1,
         selectedCell: firstSheet ? getDefaultSelectedCell(firstSheet) : null,
     };

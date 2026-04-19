@@ -19,6 +19,8 @@ declare function acquireVsCodeApi(): VsCodeApi;
 type OutgoingMessage =
     | { type: "ready" }
     | { type: "setSheet"; sheetKey: string }
+    | { type: "addSheet" }
+    | { type: "deleteSheet"; sheetKey: string }
     | { type: "prevPage" }
     | { type: "nextPage" }
     | {
@@ -51,6 +53,13 @@ type IncomingMessage =
           silent?: boolean;
           clearPendingEdits?: boolean;
           useModelSelection?: boolean;
+          replacePendingEdits?: Array<{
+              sheetKey: string;
+              rowNumber: number;
+              columnNumber: number;
+              value: string;
+          }>;
+          resetPendingHistory?: boolean;
       };
 
 interface SearchOptions {
@@ -62,6 +71,13 @@ interface SearchOptions {
 interface CellPosition {
     rowNumber: number;
     columnNumber: number;
+}
+
+interface CellRange {
+    startRow: number;
+    endRow: number;
+    startColumn: number;
+    endColumn: number;
 }
 
 interface EditingCell extends CellPosition {
@@ -135,6 +151,8 @@ const DEFAULT_STRINGS = {
     visibleRows: "Visible rows",
     readOnly: "Read-only",
     save: "Save",
+    addSheet: "Add Sheet",
+    deleteSheet: "Delete Sheet",
     selectedCell: "Selected cell",
     noCellSelected: "None",
     totalSheets: "Sheets",
@@ -158,6 +176,7 @@ const redoStack: HistoryEntry[] = [];
 
 let model: EditorRenderModel | null = null;
 let selectedCell: CellPosition | null = null;
+let selectionAnchorCell: CellPosition | null = null;
 let editingCell: EditingCell | null = null;
 let isSaving = false;
 let lastPendingNotification: boolean | null = null;
@@ -253,13 +272,141 @@ function canEditCellAt(rowNumber: number, columnNumber: number): boolean {
     return isGridCellEditable(getCellView(rowNumber, columnNumber));
 }
 
-function getSelectedCellAddress(): string {
+function getCellAddressLabel(rowNumber: number, columnNumber: number): string {
+    return `${getColumnLabel(columnNumber)}${rowNumber}`;
+}
+
+function getSelectionRange(): CellRange | null {
     if (!selectedCell) {
+        return null;
+    }
+
+    const anchor = selectionAnchorCell ?? selectedCell;
+    return {
+        startRow: Math.min(anchor.rowNumber, selectedCell.rowNumber),
+        endRow: Math.max(anchor.rowNumber, selectedCell.rowNumber),
+        startColumn: Math.min(anchor.columnNumber, selectedCell.columnNumber),
+        endColumn: Math.max(anchor.columnNumber, selectedCell.columnNumber),
+    };
+}
+
+function hasExpandedSelection(range: CellRange | null = getSelectionRange()): boolean {
+    return Boolean(
+        range && (range.startRow !== range.endRow || range.startColumn !== range.endColumn)
+    );
+}
+
+function isRowInSelection(rowNumber: number): boolean {
+    const range = getSelectionRange();
+    return Boolean(range && rowNumber >= range.startRow && rowNumber <= range.endRow);
+}
+
+function isColumnInSelection(columnNumber: number): boolean {
+    const range = getSelectionRange();
+    return Boolean(range && columnNumber >= range.startColumn && columnNumber <= range.endColumn);
+}
+
+function isCellInSelection(rowNumber: number, columnNumber: number): boolean {
+    const range = getSelectionRange();
+    return Boolean(
+        range &&
+        rowNumber >= range.startRow &&
+        rowNumber <= range.endRow &&
+        columnNumber >= range.startColumn &&
+        columnNumber <= range.endColumn
+    );
+}
+
+function getSelectionStartCell(): CellPosition | null {
+    const range = getSelectionRange();
+    if (!range) {
+        return null;
+    }
+
+    return {
+        rowNumber: range.startRow,
+        columnNumber: range.startColumn,
+    };
+}
+
+function getEffectiveCellValue(rowNumber: number, columnNumber: number): string {
+    if (!model) {
+        return "";
+    }
+
+    return (
+        pendingEdits.get(getPendingEditKey(model.activeSheet.key, rowNumber, columnNumber))
+            ?.value ?? getCellModelValue(rowNumber, columnNumber)
+    );
+}
+
+function serializeSelectionToClipboard(): string | null {
+    const range = getSelectionRange();
+    if (!range) {
+        return null;
+    }
+
+    const rows: string[] = [];
+    for (let rowNumber = range.startRow; rowNumber <= range.endRow; rowNumber += 1) {
+        const cells: string[] = [];
+        for (
+            let columnNumber = range.startColumn;
+            columnNumber <= range.endColumn;
+            columnNumber += 1
+        ) {
+            cells.push(getEffectiveCellValue(rowNumber, columnNumber));
+        }
+
+        rows.push(cells.join("\t"));
+    }
+
+    return rows.join("\n");
+}
+
+function getGridWidth(grid: string[][]): number {
+    return grid.reduce((maxWidth, row) => Math.max(maxWidth, row.length), 0);
+}
+
+function getPasteGridForSelection(grid: string[][], selectionRange: CellRange): string[][] {
+    if (!hasExpandedSelection(selectionRange)) {
+        return grid;
+    }
+
+    const selectionHeight = selectionRange.endRow - selectionRange.startRow + 1;
+    const selectionWidth = selectionRange.endColumn - selectionRange.startColumn + 1;
+    const gridWidth = getGridWidth(grid);
+
+    if (grid.length === 1 && gridWidth === 1) {
+        const value = grid[0]?.[0] ?? "";
+        return Array.from({ length: selectionHeight }, () =>
+            Array.from({ length: selectionWidth }, () => value)
+        );
+    }
+
+    if (grid.length === selectionHeight && gridWidth === selectionWidth) {
+        return Array.from({ length: selectionHeight }, (_, rowIndex) =>
+            Array.from(
+                { length: selectionWidth },
+                (_, columnIndex) => grid[rowIndex]?.[columnIndex] ?? ""
+            )
+        );
+    }
+
+    return grid;
+}
+
+function getSelectedCellAddress(): string {
+    const range = getSelectionRange();
+    if (!range || !selectedCell) {
         return STRINGS.noCellSelected;
     }
 
+    if (hasExpandedSelection(range)) {
+        return `${getCellAddressLabel(range.startRow, range.startColumn)}:${getCellAddressLabel(range.endRow, range.endColumn)}`;
+    }
+
     const cell = getCellView(selectedCell.rowNumber, selectedCell.columnNumber);
-    return cell?.address ?? `${getColumnLabel(selectedCell.columnNumber)}${selectedCell.rowNumber}`;
+    return cell?.address ?? getCellAddressLabel(selectedCell.rowNumber, selectedCell.columnNumber);
 }
 
 function clampScrollPosition(value: number, maxValue: number): number {
@@ -364,12 +511,15 @@ function setSelectedCellLocal(
     {
         reveal = false,
         syncHost = true,
+        anchorCell,
     }: {
         reveal?: boolean;
         syncHost?: boolean;
+        anchorCell?: CellPosition | null;
     } = {}
 ): void {
     selectedCell = nextCell;
+    selectionAnchorCell = nextCell ? (anchorCell ?? nextCell) : null;
     suppressAutoSelection = nextCell === null;
     clearBrowserTextSelection();
 
@@ -401,6 +551,7 @@ function prepareSelectionForRender({
             rowNumber: model.selection.rowNumber,
             columnNumber: model.selection.columnNumber,
         };
+        selectionAnchorCell = selectedCell;
         suppressAutoSelection = false;
         pendingSelectionAfterRender = null;
         syncSelectedCellToHost();
@@ -412,6 +563,7 @@ function prepareSelectionForRender({
             rowNumber: pendingSelectionAfterRender.rowNumber,
             columnNumber: pendingSelectionAfterRender.columnNumber,
         };
+        selectionAnchorCell = selectedCell;
         suppressAutoSelection = false;
         shouldReveal = pendingSelectionAfterRender.reveal;
         pendingSelectionAfterRender = null;
@@ -422,6 +574,9 @@ function prepareSelectionForRender({
     pendingSelectionAfterRender = null;
 
     if (isCellVisible(selectedCell)) {
+        if (!isCellVisible(selectionAnchorCell)) {
+            selectionAnchorCell = selectedCell;
+        }
         syncSelectedCellToHost();
         return shouldReveal;
     }
@@ -440,6 +595,7 @@ function prepareSelectionForRender({
           : null;
 
     if (selectedCell) {
+        selectionAnchorCell = selectedCell;
         suppressAutoSelection = false;
         syncSelectedCellToHost();
     }
@@ -622,6 +778,7 @@ function finishEdit({
 
     if (clearSelection) {
         selectedCell = null;
+        selectionAnchorCell = null;
         suppressAutoSelection = true;
     }
 
@@ -631,17 +788,38 @@ function finishEdit({
 }
 
 function clearSelectedCellValue(): void {
-    if (
-        !model ||
-        !selectedCell ||
-        !canEditCellAt(selectedCell.rowNumber, selectedCell.columnNumber)
-    ) {
+    const range = getSelectionRange();
+    if (!model || !range) {
         return;
     }
 
-    commitEdit(model.activeSheet.key, selectedCell.rowNumber, selectedCell.columnNumber, "", {
-        revealSelection: true,
-    });
+    const changes: PendingEditChange[] = [];
+    for (let rowNumber = range.startRow; rowNumber <= range.endRow; rowNumber += 1) {
+        for (
+            let columnNumber = range.startColumn;
+            columnNumber <= range.endColumn;
+            columnNumber += 1
+        ) {
+            if (!canEditCellAt(rowNumber, columnNumber)) {
+                continue;
+            }
+
+            const modelValue = getCellModelValue(rowNumber, columnNumber);
+            changes.push({
+                sheetKey: model.activeSheet.key,
+                rowNumber,
+                columnNumber,
+                modelValue,
+                beforeValue:
+                    pendingEdits.get(
+                        getPendingEditKey(model.activeSheet.key, rowNumber, columnNumber)
+                    )?.value ?? modelValue,
+                afterValue: "",
+            });
+        }
+    }
+
+    applyEditChanges(changes, { revealSelection: true });
 }
 
 function isClearSelectedCellKey(event: KeyboardEvent): boolean {
@@ -686,23 +864,26 @@ function normalizePastedRows(text: string): string[][] {
 }
 
 function applyPastedGrid(grid: string[][]): void {
-    if (!model || !selectedCell || grid.length === 0 || !model.canEdit) {
+    const selectionRange = getSelectionRange();
+    const anchorCell = getSelectionStartCell();
+    if (!model || !selectionRange || !anchorCell || grid.length === 0 || !model.canEdit) {
         return;
     }
 
+    const pasteGrid = getPasteGridForSelection(grid, selectionRange);
     const maxRow = model.activeSheet.rowCount;
     const maxColumn = model.activeSheet.columnCount;
     const changes: PendingEditChange[] = [];
 
-    for (let rowOffset = 0; rowOffset < grid.length; rowOffset += 1) {
-        const targetRow = selectedCell.rowNumber + rowOffset;
+    for (let rowOffset = 0; rowOffset < pasteGrid.length; rowOffset += 1) {
+        const targetRow = anchorCell.rowNumber + rowOffset;
         if (targetRow > maxRow) {
             break;
         }
 
-        const values = grid[rowOffset] ?? [];
+        const values = pasteGrid[rowOffset] ?? [];
         for (let columnOffset = 0; columnOffset < values.length; columnOffset += 1) {
-            const targetColumn = selectedCell.columnNumber + columnOffset;
+            const targetColumn = anchorCell.columnNumber + columnOffset;
             if (targetColumn > maxColumn) {
                 break;
             }
@@ -740,6 +921,7 @@ function startEditCell(rowNumber: number, columnNumber: number, currentValue: st
 
     clearBrowserTextSelection();
     selectedCell = { rowNumber, columnNumber };
+    selectionAnchorCell = selectedCell;
     suppressAutoSelection = false;
     editingCell = {
         sheetKey: model.activeSheet.key,
@@ -771,6 +953,7 @@ function getSelectionBounds(): {
 
 function ensureSelection(): CellPosition | null {
     if (selectedCell) {
+        selectionAnchorCell ??= selectedCell;
         suppressAutoSelection = false;
         return selectedCell;
     }
@@ -780,6 +963,7 @@ function ensureSelection(): CellPosition | null {
             rowNumber: model.selection.rowNumber,
             columnNumber: model.selection.columnNumber,
         };
+        selectionAnchorCell = selectedCell;
         suppressAutoSelection = false;
         return selectedCell;
     }
@@ -789,6 +973,7 @@ function ensureSelection(): CellPosition | null {
             rowNumber: model.page.rows[0].rowNumber,
             columnNumber: 1,
         };
+        selectionAnchorCell = selectedCell;
         suppressAutoSelection = false;
         return selectedCell;
     }
@@ -796,7 +981,11 @@ function ensureSelection(): CellPosition | null {
     return null;
 }
 
-function moveSelection(rowDelta: number, columnDelta: number): void {
+function moveSelection(
+    rowDelta: number,
+    columnDelta: number,
+    { extend = false }: { extend?: boolean } = {}
+): void {
     const selection = ensureSelection();
     const bounds = getSelectionBounds();
     if (!selection || !bounds) {
@@ -812,7 +1001,13 @@ function moveSelection(rowDelta: number, columnDelta: number): void {
         Math.min(bounds.maxColumn, selection.columnNumber + columnDelta)
     );
 
-    setSelectedCellLocal({ rowNumber: nextRow, columnNumber: nextColumn }, { reveal: true });
+    setSelectedCellLocal(
+        { rowNumber: nextRow, columnNumber: nextColumn },
+        {
+            reveal: true,
+            anchorCell: extend ? (selectionAnchorCell ?? selection) : undefined,
+        }
+    );
 }
 
 function moveSelectionByPage(direction: -1 | 1): void {
@@ -1228,10 +1423,11 @@ function GridCell({
     const value = pendingEdit ? pendingEdit.value : cell.value;
     const formula = pendingEdit ? null : cell.formula;
     const editable = isGridCellEditable(cell);
-    const isSelected =
+    const isPrimarySelection =
         selectedCell?.rowNumber === row.rowNumber && selectedCell.columnNumber === columnNumber;
-    const isActiveRow = selectedCell?.rowNumber === row.rowNumber;
-    const isActiveColumn = selectedCell?.columnNumber === columnNumber;
+    const isSelected = isCellInSelection(row.rowNumber, columnNumber);
+    const isActiveRow = isRowInSelection(row.rowNumber);
+    const isActiveColumn = isColumnInSelection(columnNumber);
     const isEditing =
         editingCell?.rowNumber === row.rowNumber && editingCell.columnNumber === columnNumber;
 
@@ -1240,7 +1436,8 @@ function GridCell({
             aria-selected={isSelected}
             className={classNames([
                 "grid__cell",
-                isSelected && "grid__cell--selected",
+                isSelected && "grid__cell--selected-range",
+                isPrimarySelection && "grid__cell--selected",
                 isActiveRow && "grid__cell--active-row",
                 isActiveColumn && "grid__cell--active-column",
                 !editable && "grid__cell--locked",
@@ -1252,14 +1449,20 @@ function GridCell({
             data-role="grid-cell"
             data-row-number={row.rowNumber}
             title={getCellTooltip(cell.address, value, formula)}
-            onClick={() => {
+            onClick={(event) => {
                 if (editingCell) {
                     finishEdit({ mode: "commit", refresh: false });
                 }
 
                 setSelectedCellLocal(
                     { rowNumber: row.rowNumber, columnNumber },
-                    { syncHost: true }
+                    {
+                        syncHost: true,
+                        anchorCell:
+                            event.shiftKey && selectedCell
+                                ? (selectionAnchorCell ?? selectedCell)
+                                : undefined,
+                    }
                 );
             }}
             onDoubleClick={(event) => {
@@ -1301,7 +1504,7 @@ function EditorTable({
                     {currentModel.page.columns.map((column, index) => {
                         const columnNumber = index + 1;
                         const hasPending = pendingSummary.columns.has(columnNumber);
-                        const isActiveColumn = selectedCell?.columnNumber === columnNumber;
+                        const isActiveColumn = isColumnInSelection(columnNumber);
 
                         return (
                             <th
@@ -1326,7 +1529,7 @@ function EditorTable({
             <tbody>
                 {currentModel.page.rows.map((row) => {
                     const hasPending = pendingSummary.rows.has(row.rowNumber);
-                    const isActiveRow = selectedCell?.rowNumber === row.rowNumber;
+                    const isActiveRow = isRowInSelection(row.rowNumber);
 
                     return (
                         <tr
@@ -1427,6 +1630,34 @@ function Tabs({
                     </button>
                 );
             })}
+            {currentModel.canEdit ? (
+                <>
+                    <button
+                        className={classNames(["tab", "tab--action"])}
+                        title={STRINGS.addSheet}
+                        type="button"
+                        onClick={() => vscode.postMessage({ type: "addSheet" })}
+                    >
+                        <span className="codicon codicon-add tab__icon" aria-hidden />
+                        <span className="tab__label">{STRINGS.addSheet}</span>
+                    </button>
+                    <button
+                        className={classNames(["tab", "tab--action", "tab--danger"])}
+                        disabled={currentModel.sheets.length <= 1}
+                        title={STRINGS.deleteSheet}
+                        type="button"
+                        onClick={() =>
+                            vscode.postMessage({
+                                type: "deleteSheet",
+                                sheetKey: currentModel.activeSheet.key,
+                            })
+                        }
+                    >
+                        <span className="codicon codicon-trash tab__icon" aria-hidden />
+                        <span className="tab__label">{STRINGS.deleteSheet}</span>
+                    </button>
+                </>
+            ) : null}
         </div>
     );
 }
@@ -1539,8 +1770,27 @@ window.addEventListener("message", (event: MessageEvent<IncomingMessage>) => {
             undoStack.length = 0;
             redoStack.length = 0;
             editingCell = null;
+            selectionAnchorCell = selectedCell;
             lastPendingNotification = null;
             lastPendingEditsSyncKey = serializePendingEdits([]);
+            notifyPendingEditState();
+        } else if (message.replacePendingEdits) {
+            pendingEdits.clear();
+            for (const edit of message.replacePendingEdits) {
+                pendingEdits.set(
+                    getPendingEditKey(edit.sheetKey, edit.rowNumber, edit.columnNumber),
+                    edit
+                );
+            }
+
+            if (message.resetPendingHistory) {
+                undoStack.length = 0;
+                redoStack.length = 0;
+                editingCell = null;
+            }
+
+            lastPendingNotification = null;
+            lastPendingEditsSyncKey = serializePendingEdits(Array.from(pendingEdits.values()));
             notifyPendingEditState();
         }
 
@@ -1598,6 +1848,27 @@ document.addEventListener("keydown", (event: KeyboardEvent) => {
         return;
     }
 
+    if (!event.altKey && !event.ctrlKey && !event.metaKey && event.shiftKey) {
+        switch (event.key) {
+            case "ArrowUp":
+                event.preventDefault();
+                moveSelection(-1, 0, { extend: true });
+                return;
+            case "ArrowDown":
+                event.preventDefault();
+                moveSelection(1, 0, { extend: true });
+                return;
+            case "ArrowLeft":
+                event.preventDefault();
+                moveSelection(0, -1, { extend: true });
+                return;
+            case "ArrowRight":
+                event.preventDefault();
+                moveSelection(0, 1, { extend: true });
+                return;
+        }
+    }
+
     if (isClearSelectedCellKey(event) && selectedCell) {
         event.preventDefault();
         clearSelectedCellValue();
@@ -1642,6 +1913,20 @@ document.addEventListener("keydown", (event: KeyboardEvent) => {
             moveSelectionByPage(1);
             return;
     }
+});
+
+document.addEventListener("copy", (event: ClipboardEvent) => {
+    if (isTextInputTarget(event.target) || editingCell || !model || !selectedCell) {
+        return;
+    }
+
+    const text = serializeSelectionToClipboard();
+    if (!text) {
+        return;
+    }
+
+    event.preventDefault();
+    event.clipboardData?.setData("text/plain", text);
 });
 
 document.addEventListener("paste", (event: ClipboardEvent) => {

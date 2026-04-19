@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import { WEBVIEW_TYPE_EDITOR_PANEL } from "../constants";
-import { type CellEdit } from "../core/fastxlsx/writeCellValue";
+import { type WorkbookEditState } from "../core/fastxlsx/writeCellValue";
 import { XlsxEditorDocument } from "./xlsxEditorDocument";
 import { XlsxEditorPanel } from "./xlsxEditorPanel";
 
@@ -45,8 +45,8 @@ export class XlsxCustomEditorProvider
         _token: vscode.CancellationToken
     ): Promise<void> {
         await XlsxEditorPanel.resolveCustomEditor(this.extensionUri, document, webviewPanel, {
-            onPendingEditsChanged: async (edits: CellEdit[]) => {
-                if (!document.replacePendingEdits(edits)) {
+            onPendingStateChanged: async (state: WorkbookEditState) => {
+                if (!document.replacePendingState(state)) {
                     return;
                 }
 

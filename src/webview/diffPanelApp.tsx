@@ -408,7 +408,7 @@ function getSelectedCellElements(): HTMLElement[] {
 
     return Array.from(
         document.querySelectorAll<HTMLElement>(
-            `.pane[data-side="${selectedCell.side}"] [data-role="grid-cell"][data-row-number="${selectedCell.rowNumber}"][data-column-number="${selectedCell.columnNumber}"]`
+            `[data-role="grid-cell"][data-row-number="${selectedCell.rowNumber}"][data-column-number="${selectedCell.columnNumber}"]`
         )
     );
 }
@@ -987,9 +987,7 @@ function GridCell({
     const highlighted = shouldHighlightCell(cell, side, row.isHighlighted);
     const editable = canEditCell(cell.status, side);
     const isSelected =
-        selectedCell?.side === side &&
-        selectedCell.rowNumber === row.rowNumber &&
-        selectedCell.columnNumber === columnNumber;
+        selectedCell?.rowNumber === row.rowNumber && selectedCell.columnNumber === columnNumber;
     const isEditing =
         editingCell?.side === side &&
         editingCell.rowNumber === row.rowNumber &&

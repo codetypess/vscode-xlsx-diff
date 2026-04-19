@@ -1,5 +1,10 @@
 import * as vscode from "vscode";
-import { type CellEdit, writeCellValuesToDestination } from "../core/fastxlsx/writeCellValue";
+import {
+    type CellEdit,
+    type SheetEdit,
+    type WorkbookEditState,
+    writeWorkbookEditsToDestination,
+} from "../core/fastxlsx/writeCellValue";
 
 function getCellEditKey(edit: CellEdit): string {
     return `${edit.sheetName}:${edit.rowNumber}:${edit.columnNumber}`;
@@ -37,8 +42,28 @@ function areCellEditsEqual(left: readonly CellEdit[], right: readonly CellEdit[]
     });
 }
 
+function areSheetEditsEqual(left: readonly SheetEdit[], right: readonly SheetEdit[]): boolean {
+    if (left.length !== right.length) {
+        return false;
+    }
+
+    return left.every((edit, index) => {
+        const other = right[index];
+        if (edit.type !== other.type || edit.sheetName !== other.sheetName) {
+            return false;
+        }
+
+        if (edit.type === "addSheet" && other.type === "addSheet") {
+            return edit.targetIndex === other.targetIndex;
+        }
+
+        return true;
+    });
+}
+
 export class XlsxEditorDocument implements vscode.CustomDocument {
     private readonly pendingEdits = new Map<string, CellEdit>();
+    private pendingSheetEdits: SheetEdit[] = [];
     private backupUri: vscode.Uri | null;
     private shouldMarkDirtyFromBackup: boolean;
 
@@ -57,7 +82,11 @@ export class XlsxEditorDocument implements vscode.CustomDocument {
     }
 
     public hasPendingEdits(): boolean {
-        return this.pendingEdits.size > 0 || this.backupUri !== null;
+        return (
+            this.pendingEdits.size > 0 ||
+            this.pendingSheetEdits.length > 0 ||
+            this.backupUri !== null
+        );
     }
 
     public consumeInitialDirtyState(): boolean {
@@ -73,10 +102,21 @@ export class XlsxEditorDocument implements vscode.CustomDocument {
         return [...this.pendingEdits.values()].sort(compareCellEdits);
     }
 
-    public replacePendingEdits(edits: readonly CellEdit[]): boolean {
-        const normalizedEdits = [...edits].sort(compareCellEdits);
-        const currentEdits = this.getPendingEdits();
-        if (areCellEditsEqual(currentEdits, normalizedEdits)) {
+    public getPendingState(): WorkbookEditState {
+        return {
+            cellEdits: this.getPendingEdits(),
+            sheetEdits: [...this.pendingSheetEdits],
+        };
+    }
+
+    public replacePendingState(state: Readonly<WorkbookEditState>): boolean {
+        const normalizedEdits = [...state.cellEdits].sort(compareCellEdits);
+        const normalizedSheetEdits = [...state.sheetEdits];
+        const currentState = this.getPendingState();
+        if (
+            areCellEditsEqual(currentState.cellEdits, normalizedEdits) &&
+            areSheetEditsEqual(currentState.sheetEdits, normalizedSheetEdits)
+        ) {
             return false;
         }
 
@@ -85,11 +125,14 @@ export class XlsxEditorDocument implements vscode.CustomDocument {
             this.pendingEdits.set(getCellEditKey(edit), edit);
         }
 
+        this.pendingSheetEdits = normalizedSheetEdits;
+
         return true;
     }
 
     public markSaved(): void {
         this.pendingEdits.clear();
+        this.pendingSheetEdits = [];
         this.backupUri = null;
         this.shouldMarkDirtyFromBackup = false;
     }
@@ -99,6 +142,10 @@ export class XlsxEditorDocument implements vscode.CustomDocument {
     }
 
     public async saveTo(destination: vscode.Uri): Promise<void> {
-        await writeCellValuesToDestination(this.getReadUri(), destination, this.getPendingEdits());
+        await writeWorkbookEditsToDestination(
+            this.getReadUri(),
+            destination,
+            this.getPendingState()
+        );
     }
 }

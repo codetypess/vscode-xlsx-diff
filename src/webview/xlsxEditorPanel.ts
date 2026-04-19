@@ -3,7 +3,11 @@ import * as vscode from "vscode";
 import { DEFAULT_PAGE_SIZE } from "../constants";
 import { getColumnNumber } from "../core/model/cells";
 import { loadWorkbookSnapshot } from "../core/fastxlsx/loadWorkbookSnapshot";
-import { type CellEdit } from "../core/fastxlsx/writeCellValue";
+import {
+    type CellEdit,
+    type SheetEdit,
+    type WorkbookEditState,
+} from "../core/fastxlsx/writeCellValue";
 import type { EditorPanelState, EditorRenderModel, WorkbookSnapshot } from "../core/model/types";
 import { getHtmlLanguageTag, isChineseDisplayLanguage } from "../displayLanguage";
 import {
@@ -28,6 +32,8 @@ interface SearchOptions {
 type WebviewMessage =
     | { type: "ready" }
     | { type: "setSheet"; sheetKey: string }
+    | { type: "addSheet" }
+    | { type: "deleteSheet"; sheetKey: string }
     | { type: "setPage"; page: number }
     | { type: "prevPage" }
     | { type: "nextPage" }
@@ -53,7 +59,7 @@ type WebviewMessage =
     | { type: "reload" };
 
 export interface XlsxEditorPanelController {
-    onPendingEditsChanged(edits: CellEdit[]): Promise<void> | void;
+    onPendingStateChanged(state: WorkbookEditState): Promise<void> | void;
     onRequestSave(): Promise<void> | void;
     onRequestRevert(): Promise<void> | void;
 }
@@ -72,6 +78,8 @@ interface WebviewStrings {
     visibleRows: string;
     readOnly: string;
     save: string;
+    addSheet: string;
+    deleteSheet: string;
     undo: string;
     redo: string;
     searchPlaceholder: string;
@@ -146,6 +154,8 @@ function getWebviewStrings(): WebviewStrings {
             visibleRows: "可见行",
             readOnly: "只读",
             save: "保存",
+            addSheet: "添加工作表",
+            deleteSheet: "删除工作表",
             totalSheets: "总工作表",
             totalRows: "总行数",
             nonEmptyCells: "非空单元格",
@@ -192,6 +202,8 @@ function getWebviewStrings(): WebviewStrings {
         visibleRows: "Visible rows",
         readOnly: "Read-only",
         save: "Save",
+        addSheet: "Add Sheet",
+        deleteSheet: "Delete Sheet",
         totalSheets: "Sheets",
         totalRows: "Rows",
         nonEmptyCells: "Non-empty cells",
@@ -244,6 +256,8 @@ export class XlsxEditorPanel {
     private autoRefreshTimer: ReturnType<typeof setTimeout> | undefined;
     private suppressAutoRefreshUntil = 0;
     private hasWarnedPendingExternalChange = false;
+    private pendingCellEdits: CellEdit[] = [];
+    private pendingSheetEdits: SheetEdit[] = [];
 
     private constructor(
         panel: vscode.WebviewPanel,
@@ -523,6 +537,12 @@ export class XlsxEditorPanel {
                     this.state = setActiveEditorSheet(this.workbook, this.state, message.sheetKey);
                     await this.render();
                     return;
+                case "addSheet":
+                    await this.addPendingSheet();
+                    return;
+                case "deleteSheet":
+                    await this.deletePendingSheet(message.sheetKey);
+                    return;
                 case "setPage":
                     if (!this.workbook) {
                         return;
@@ -611,8 +631,7 @@ export class XlsxEditorPanel {
 
                     const cellEdits: CellEdit[] = message.edits.flatMap((edit) => {
                         const sheet = this.workbook!.sheets.find(
-                            (candidate, index) =>
-                                getEditorSheetKey(candidate, index) === edit.sheetKey
+                            (candidate) => getEditorSheetKey(candidate) === edit.sheetKey
                         );
 
                         return sheet
@@ -627,7 +646,11 @@ export class XlsxEditorPanel {
                             : [];
                     });
 
-                    await this.controller.onPendingEditsChanged(cellEdits);
+                    this.pendingCellEdits = cellEdits;
+                    await this.controller.onPendingStateChanged({
+                        cellEdits: this.pendingCellEdits,
+                        sheetEdits: this.pendingSheetEdits,
+                    });
                     if (cellEdits.length === 0 && !this.document.hasPendingEdits()) {
                         this.hasWarnedPendingExternalChange = false;
                     }
@@ -674,10 +697,148 @@ export class XlsxEditorPanel {
         }
 
         return this.workbook.sheets.map((sheet, index) => ({
-            key: getEditorSheetKey(sheet, index),
+            key: getEditorSheetKey(sheet),
             index,
             sheet,
         }));
+    }
+
+    private createPendingState(): WorkbookEditState {
+        return {
+            cellEdits: this.pendingCellEdits,
+            sheetEdits: this.pendingSheetEdits,
+        };
+    }
+
+    private async syncPendingState(): Promise<void> {
+        await this.controller.onPendingStateChanged(this.createPendingState());
+
+        if (
+            this.pendingCellEdits.length === 0 &&
+            this.pendingSheetEdits.length === 0 &&
+            !this.document.hasPendingEdits()
+        ) {
+            this.hasWarnedPendingExternalChange = false;
+        }
+    }
+
+    private getNewSheetName(): string {
+        const baseName = isChineseDisplayLanguage() ? "工作表" : "Sheet";
+        const existingNames = new Set(this.workbook?.sheets.map((sheet) => sheet.name) ?? []);
+
+        let suffix = 1;
+        while (existingNames.has(`${baseName}${suffix}`)) {
+            suffix += 1;
+        }
+
+        return `${baseName}${suffix}`;
+    }
+
+    private getInsertSheetIndex(): number {
+        if (!this.workbook || this.workbook.sheets.length === 0) {
+            return 0;
+        }
+
+        const activeSheetIndex = this.workbook.sheets.findIndex(
+            (sheet) => getEditorSheetKey(sheet) === this.state.activeSheetKey
+        );
+
+        return activeSheetIndex >= 0 ? activeSheetIndex + 1 : this.workbook.sheets.length;
+    }
+
+    private async addPendingSheet(): Promise<void> {
+        if (!this.workbook || this.workbook.isReadonly) {
+            return;
+        }
+
+        const sheetName = this.getNewSheetName();
+        const targetIndex = this.getInsertSheetIndex();
+        this.workbook = {
+            ...this.workbook,
+            sheets: [
+                ...this.workbook.sheets.slice(0, targetIndex),
+                {
+                    name: sheetName,
+                    rowCount: DEFAULT_PAGE_SIZE,
+                    columnCount: 26,
+                    mergedRanges: [],
+                    cells: {},
+                    signature: `pending:${sheetName}`,
+                },
+                ...this.workbook.sheets.slice(targetIndex),
+            ],
+        };
+
+        this.pendingSheetEdits = [
+            ...this.pendingSheetEdits,
+            {
+                type: "addSheet",
+                sheetName,
+                targetIndex,
+            },
+        ];
+        this.state = setActiveEditorSheet(this.workbook, this.state, sheetName);
+        await this.syncPendingState();
+        await this.render(undefined, {
+            useModelSelection: true,
+            replacePendingEdits: this.pendingCellEdits,
+            resetPendingHistory: true,
+        });
+    }
+
+    private async deletePendingSheet(sheetKey: string): Promise<void> {
+        if (!this.workbook || this.workbook.isReadonly || this.workbook.sheets.length <= 1) {
+            return;
+        }
+
+        const targetIndex = this.workbook.sheets.findIndex(
+            (sheet) => getEditorSheetKey(sheet) === sheetKey
+        );
+        if (targetIndex < 0) {
+            return;
+        }
+
+        const [deletedSheet] = this.workbook.sheets.slice(targetIndex, targetIndex + 1);
+        if (!deletedSheet) {
+            return;
+        }
+
+        this.workbook = {
+            ...this.workbook,
+            sheets: this.workbook.sheets.filter((sheet) => sheet.name !== deletedSheet.name),
+        };
+        this.pendingCellEdits = this.pendingCellEdits.filter(
+            (edit) => edit.sheetName !== deletedSheet.name
+        );
+
+        const pendingAddIndex = this.pendingSheetEdits.findIndex(
+            (edit) => edit.type === "addSheet" && edit.sheetName === deletedSheet.name
+        );
+        if (pendingAddIndex >= 0) {
+            this.pendingSheetEdits = this.pendingSheetEdits.filter(
+                (_edit, index) => index !== pendingAddIndex
+            );
+        } else {
+            this.pendingSheetEdits = [
+                ...this.pendingSheetEdits,
+                {
+                    type: "deleteSheet",
+                    sheetName: deletedSheet.name,
+                },
+            ];
+        }
+
+        const fallbackSheet =
+            this.workbook.sheets[Math.max(0, targetIndex - 1)] ?? this.workbook.sheets[0];
+        this.state = fallbackSheet
+            ? setActiveEditorSheet(this.workbook, this.state, fallbackSheet.name)
+            : createInitialEditorPanelState(this.workbook);
+        await this.syncPendingState();
+        await this.render(undefined, {
+            useModelSelection: true,
+            replacePendingEdits: this.pendingCellEdits,
+            resetPendingHistory: true,
+        });
     }
 
     private findSearchMatch(
@@ -834,6 +995,10 @@ export class XlsxEditorPanel {
         this.workbook = await loadWorkbookSnapshot(this.document.getReadUri());
         this.workbook.filePath = this.workbookUri.fsPath;
         this.workbook.fileName = getWorkbookResourceName(this.workbookUri);
+        if (clearPendingEdits) {
+            this.pendingCellEdits = [];
+            this.pendingSheetEdits = [];
+        }
         this.state = this.workbook.sheets.length
             ? normalizeEditorPanelState(
                   this.workbook,
@@ -864,7 +1029,15 @@ export class XlsxEditorPanel {
             silent = false,
             clearPendingEdits = false,
             useModelSelection = true,
-        }: { silent?: boolean; clearPendingEdits?: boolean; useModelSelection?: boolean } = {}
+            replacePendingEdits,
+            resetPendingHistory = false,
+        }: {
+            silent?: boolean;
+            clearPendingEdits?: boolean;
+            useModelSelection?: boolean;
+            replacePendingEdits?: CellEdit[];
+            resetPendingHistory?: boolean;
+        } = {}
     ): Promise<void> {
         if (!this.workbook) {
             return;
@@ -889,6 +1062,14 @@ export class XlsxEditorPanel {
             silent,
             clearPendingEdits,
             useModelSelection,
+            replacePendingEdits:
+                replacePendingEdits?.map((edit) => ({
+                    sheetKey: edit.sheetName,
+                    rowNumber: edit.rowNumber,
+                    columnNumber: edit.columnNumber,
+                    value: edit.value,
+                })) ?? undefined,
+            resetPendingHistory,
         });
     }
 }
