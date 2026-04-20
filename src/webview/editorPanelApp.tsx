@@ -1,7 +1,7 @@
 import * as React from "react";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
-import { DEFAULT_PAGE_SIZE } from "../constants";
+import { DEFAULT_EDITOR_WINDOW_OVERSCAN, DEFAULT_PAGE_SIZE } from "../constants";
 import type {
     EditorGridCellView,
     EditorGridRowView,
@@ -23,6 +23,7 @@ type OutgoingMessage =
     | { type: "addSheet" }
     | { type: "deleteSheet"; sheetKey: string }
     | { type: "renameSheet"; sheetKey: string }
+    | { type: "setViewportStartRow"; rowNumber: number }
     | { type: "prevPage" }
     | { type: "nextPage" }
     | {
@@ -213,11 +214,14 @@ let selectionDragState: SelectionDragState | null = null;
 let suppressNextCellClick = false;
 let frozenPaneLayoutFrame = 0;
 let isSyncingFrozenPaneScroll = false;
+let lastRequestedViewportStartRow: number | null = null;
 let searchOptions: SearchOptions = {
     isRegexp: false,
     matchCase: false,
     wholeWord: false,
 };
+
+const ESTIMATED_EDITOR_ROW_HEIGHT = 28;
 
 function getPendingEditKey(sheetKey: string, rowNumber: number, columnNumber: number): string {
     return `${sheetKey}:${rowNumber}:${columnNumber}`;
@@ -302,6 +306,73 @@ function getRenderableRows(currentModel: EditorRenderModel | null): EditorGridRo
     }
 
     return rows;
+}
+
+function getTopSpacerHeight(currentModel: EditorRenderModel): number {
+    if (hasLockedView(currentModel.activeSheet.freezePane) || currentModel.page.startRow <= 1) {
+        return 0;
+    }
+
+    return Math.max(0, (currentModel.page.startRow - 1) * ESTIMATED_EDITOR_ROW_HEIGHT);
+}
+
+function getBottomSpacerHeight(currentModel: EditorRenderModel): number {
+    if (
+        hasLockedView(currentModel.activeSheet.freezePane) ||
+        currentModel.page.endRow <= 0 ||
+        currentModel.page.endRow >= currentModel.page.totalRows
+    ) {
+        return 0;
+    }
+
+    return Math.max(
+        0,
+        (currentModel.page.totalRows - currentModel.page.endRow) * ESTIMATED_EDITOR_ROW_HEIGHT
+    );
+}
+
+function getMaxViewportStartRow(currentModel: EditorRenderModel | null): number {
+    if (!currentModel) {
+        return 1;
+    }
+
+    return Math.max(currentModel.page.totalRows - DEFAULT_PAGE_SIZE + 1, 1);
+}
+
+function requestViewportStartRow(rowNumber: number): void {
+    if (!model || hasLockedView(model.activeSheet.freezePane)) {
+        return;
+    }
+
+    const clampedRowNumber = Math.max(1, Math.min(rowNumber, getMaxViewportStartRow(model)));
+    if (clampedRowNumber === model.page.startRow || clampedRowNumber === lastRequestedViewportStartRow) {
+        return;
+    }
+
+    lastRequestedViewportStartRow = clampedRowNumber;
+    vscode.postMessage({ type: "setViewportStartRow", rowNumber: clampedRowNumber });
+}
+
+function maybeRequestViewportForScroll(pane: HTMLElement): void {
+    if (!model || hasLockedView(model.activeSheet.freezePane)) {
+        return;
+    }
+
+    if (model.page.totalRows <= model.page.visibleRowCount) {
+        return;
+    }
+
+    const firstVisibleRow = Math.max(1, Math.floor(pane.scrollTop / ESTIMATED_EDITOR_ROW_HEIGHT) + 1);
+    const nextStartRow = Math.max(
+        1,
+        Math.min(getMaxViewportStartRow(model), firstVisibleRow - DEFAULT_EDITOR_WINDOW_OVERSCAN)
+    );
+
+    if (Math.abs(nextStartRow - model.page.startRow) < Math.max(8, DEFAULT_EDITOR_WINDOW_OVERSCAN / 2)) {
+        return;
+    }
+
+    requestViewportStartRow(nextStartRow);
 }
 
 function hasFrozenRowGap(currentModel: EditorRenderModel | null): boolean {
@@ -2242,6 +2313,8 @@ function GridSectionTable({
     includeHeader,
     includeRowHeaders,
     split = false,
+    topSpacerHeight = 0,
+    bottomSpacerHeight = 0,
 }: {
     currentModel: EditorRenderModel;
     pendingSummary: PendingSummary;
@@ -2250,6 +2323,8 @@ function GridSectionTable({
     includeHeader: boolean;
     includeRowHeaders: boolean;
     split?: boolean;
+    topSpacerHeight?: number;
+    bottomSpacerHeight?: number;
 }): React.ReactElement | null {
     const hasHeader = includeHeader && (includeRowHeaders || columnNumbers.length > 0);
     const hasBody = rows.length > 0 && (includeRowHeaders || columnNumbers.length > 0);
@@ -2285,6 +2360,15 @@ function GridSectionTable({
                 </thead>
             ) : null}
             <tbody>
+                {topSpacerHeight > 0 ? (
+                    <tr aria-hidden="true" className="grid__spacer-row">
+                        <td
+                            className="grid__spacer-cell"
+                            colSpan={columnNumbers.length + (includeRowHeaders ? 1 : 0)}
+                            style={{ height: `${topSpacerHeight}px` }}
+                        />
+                    </tr>
+                ) : null}
                 {rows.map((row) => (
                     <tr
                         key={`${row.rowNumber}:${includeRowHeaders ? "row" : "cell"}:${columnNumbers[0] ?? 0}`}
@@ -2304,6 +2388,15 @@ function GridSectionTable({
                         ))}
                     </tr>
                 ))}
+                {bottomSpacerHeight > 0 ? (
+                    <tr aria-hidden="true" className="grid__spacer-row">
+                        <td
+                            className="grid__spacer-cell"
+                            colSpan={columnNumbers.length + (includeRowHeaders ? 1 : 0)}
+                            style={{ height: `${bottomSpacerHeight}px` }}
+                        />
+                    </tr>
+                ) : null}
             </tbody>
         </table>
     );
@@ -2328,6 +2421,8 @@ function EditorTable({
             columnNumbers={currentModel.page.columns.map((_, index) => index + 1)}
             includeHeader={true}
             includeRowHeaders={true}
+            topSpacerHeight={getTopSpacerHeight(currentModel)}
+            bottomSpacerHeight={getBottomSpacerHeight(currentModel)}
         />
     );
 }
@@ -2452,7 +2547,10 @@ function EditorPane({
             ) : viewLocked ? (
                 <FrozenEditorTable currentModel={currentModel} pendingSummary={pendingSummary} />
             ) : (
-                <div className="pane__table">
+                <div
+                    className="pane__table"
+                    onScroll={(event) => maybeRequestViewportForScroll(event.currentTarget)}
+                >
                     <EditorTable currentModel={currentModel} pendingSummary={pendingSummary} />
                 </div>
             )}
@@ -2672,6 +2770,7 @@ window.addEventListener("message", (event: MessageEvent<IncomingMessage>) => {
 
     if (message.type === "render") {
         model = message.payload;
+        lastRequestedViewportStartRow = message.payload.page.startRow;
         isSaving = false;
 
         if (message.clearPendingEdits) {

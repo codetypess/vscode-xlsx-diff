@@ -1,4 +1,4 @@
-import { DEFAULT_PAGE_SIZE } from "../constants";
+import { DEFAULT_EDITOR_WINDOW_SIZE, DEFAULT_PAGE_SIZE } from "../constants";
 import { createCellKey, getColumnLabel } from "../core/model/cells";
 import { isChineseDisplayLanguage } from "../displayLanguage";
 import {
@@ -97,9 +97,26 @@ function getDefaultSelectedCell(sheet: SheetSnapshot, currentPage = 1): EditorSe
     };
 }
 
+function getPageStartRow(currentPage: number): number {
+    return Math.max(1, (currentPage - 1) * DEFAULT_PAGE_SIZE + 1);
+}
+
 function clampPage(sheet: SheetSnapshot, currentPage: number): number {
     const totalPages = Math.max(1, Math.ceil(Math.max(sheet.rowCount, 1) / DEFAULT_PAGE_SIZE));
     return Math.min(Math.max(currentPage, 1), totalPages);
+}
+
+function clampViewportStartRow(sheet: SheetSnapshot, viewportStartRow: number): number {
+    if (sheet.rowCount <= 0) {
+        return 1;
+    }
+
+    const maxStartRow = Math.max(sheet.rowCount - DEFAULT_EDITOR_WINDOW_SIZE + 1, 1);
+    return Math.min(Math.max(Math.trunc(viewportStartRow), 1), maxStartRow);
+}
+
+function isSheetViewLocked(sheet: SheetSnapshot): boolean {
+    return Boolean(sheet.freezePane && (sheet.freezePane.columnCount > 0 || sheet.freezePane.rowCount > 0));
 }
 
 function clampSelectedCell(
@@ -207,12 +224,24 @@ function createRowsForRange(
 function createPageRows(
     sheet: SheetSnapshot,
     currentPage: number,
+    viewportStartRow: number,
     selectedCell: EditorSelectedCell | null,
     columns: string[]
 ): EditorGridRowView[] {
+    if (!isSheetViewLocked(sheet)) {
+        const startRow = clampViewportStartRow(sheet, viewportStartRow);
+        return createRowsForRange(
+            sheet,
+            startRow,
+            Math.min(sheet.rowCount, startRow + DEFAULT_EDITOR_WINDOW_SIZE - 1),
+            selectedCell,
+            columns
+        );
+    }
+
     return createRowsForRange(
         sheet,
-        (currentPage - 1) * DEFAULT_PAGE_SIZE + 1,
+        getPageStartRow(currentPage),
         Math.min(sheet.rowCount, currentPage * DEFAULT_PAGE_SIZE),
         selectedCell,
         columns
@@ -279,6 +308,7 @@ export function createInitialEditorPanelState(
     return {
         activeSheetKey: firstSheet?.key ?? null,
         currentPage: 1,
+        viewportStartRow: 1,
         selectedCell: firstSheet ? getDefaultSelectedCell(firstSheet.sheet) : null,
     };
 }
@@ -296,10 +326,15 @@ export function normalizeEditorPanelState(
         return {
             activeSheetKey: null,
             currentPage: 1,
+            viewportStartRow: 1,
             selectedCell: null,
         };
     }
 
+    const viewportStartRow = clampViewportStartRow(
+        activeSheetEntry.sheet,
+        state.viewportStartRow || getPageStartRow(state.currentPage)
+    );
     const currentPage = clampPage(activeSheetEntry.sheet, state.currentPage);
     const selectedCell =
         clampSelectedCell(activeSheetEntry.sheet, state.selectedCell) ??
@@ -308,6 +343,7 @@ export function normalizeEditorPanelState(
     return {
         activeSheetKey: activeSheetEntry.key,
         currentPage,
+        viewportStartRow,
         selectedCell,
     };
 }
@@ -330,6 +366,7 @@ export function setActiveEditorSheet(
         {
             activeSheetKey: sheetEntry.key,
             currentPage: 1,
+            viewportStartRow: 1,
             selectedCell: getDefaultSelectedCell(sheetEntry.sheet),
         },
         sheetEntriesOverride
@@ -358,6 +395,7 @@ export function setEditorCurrentPage(
         {
             ...normalizedState,
             currentPage: nextPage,
+            viewportStartRow: getPageStartRow(nextPage),
             selectedCell: getSelectionForPage(
                 sheetEntry.sheet,
                 nextPage,
@@ -422,7 +460,35 @@ export function moveEditorPageCursor(
         {
             activeSheetKey: adjacentSheet.key,
             currentPage: targetPage,
+            viewportStartRow: getPageStartRow(targetPage),
             selectedCell: getDefaultSelectedCell(adjacentSheet.sheet, targetPage),
+        },
+        sheetEntriesOverride
+    );
+}
+
+export function setEditorViewportStartRow(
+    workbook: WorkbookSnapshot,
+    state: EditorPanelState,
+    viewportStartRow: number,
+    sheetEntriesOverride?: EditorSheetEntry[]
+): EditorPanelState {
+    const normalizedState = normalizeEditorPanelState(workbook, state, sheetEntriesOverride);
+    const sheetEntry = resolveSheetEntries(workbook, sheetEntriesOverride).find(
+        (entry) => entry.key === normalizedState.activeSheetKey
+    );
+
+    if (!sheetEntry) {
+        return normalizedState;
+    }
+
+    const nextViewportStartRow = clampViewportStartRow(sheetEntry.sheet, viewportStartRow);
+    return normalizeEditorPanelState(
+        workbook,
+        {
+            ...normalizedState,
+            currentPage: getCellPage(nextViewportStartRow),
+            viewportStartRow: nextViewportStartRow,
         },
         sheetEntriesOverride
     );
@@ -458,6 +524,12 @@ export function setSelectedEditorCell(
         {
             ...normalizedState,
             currentPage: getCellPage(selectedCell.rowNumber),
+            viewportStartRow:
+                selectedCell.rowNumber < normalizedState.viewportStartRow ||
+                selectedCell.rowNumber >=
+                    normalizedState.viewportStartRow + DEFAULT_EDITOR_WINDOW_SIZE
+                    ? getPageStartRow(getCellPage(selectedCell.rowNumber))
+                    : normalizedState.viewportStartRow,
             selectedCell,
         },
         sheetEntriesOverride
@@ -504,6 +576,8 @@ export function createEditorRenderModel(
                 totalRows: 0,
                 visibleRowCount: 0,
                 rangeLabel: "No rows",
+                startRow: 0,
+                endRow: 0,
                 columns: [],
                 frozenRows: [],
                 rows: [],
@@ -526,6 +600,7 @@ export function createEditorRenderModel(
     const pageRows = createPageRows(
         activeSheet,
         normalizedState.currentPage,
+        normalizedState.viewportStartRow,
         normalizedState.selectedCell,
         columns
     );
@@ -572,6 +647,8 @@ export function createEditorRenderModel(
                 pageRows.length === 0
                     ? "No rows"
                     : `${pageRows[0].rowNumber}-${pageRows[pageRows.length - 1].rowNumber}`,
+            startRow: pageRows[0]?.rowNumber ?? 0,
+            endRow: pageRows[pageRows.length - 1]?.rowNumber ?? 0,
             columns,
             frozenRows,
             rows: pageRows,

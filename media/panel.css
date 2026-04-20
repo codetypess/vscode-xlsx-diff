@@ -549,6 +549,16 @@ body {
     user-select: none;
 }
 
+.grid__spacer-row {
+    pointer-events: none;
+}
+
+.grid__spacer-cell {
+    padding: 0;
+    border: 0;
+    background: transparent;
+}
+
 .grid__cell--locked {
     cursor: not-allowed;
     background: color-mix(in srgb, var(--vscode-editor-background) 92%, white 8%);

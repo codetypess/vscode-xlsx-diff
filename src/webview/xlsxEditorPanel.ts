@@ -19,6 +19,7 @@ import {
     normalizeEditorPanelState,
     setActiveEditorSheet,
     setEditorCurrentPage,
+    setEditorViewportStartRow,
     setSelectedEditorCell,
 } from "./editorRenderModel";
 import { hasLockedView } from "./viewLock";
@@ -38,6 +39,7 @@ type WebviewMessage =
     | { type: "deleteSheet"; sheetKey: string }
     | { type: "renameSheet"; sheetKey: string }
     | { type: "setPage"; page: number }
+    | { type: "setViewportStartRow"; rowNumber: number }
     | { type: "prevPage" }
     | { type: "nextPage" }
     | {
@@ -385,6 +387,7 @@ export class XlsxEditorPanel {
     private state: EditorPanelState = {
         activeSheetKey: null,
         currentPage: 1,
+        viewportStartRow: 1,
         selectedCell: null,
     };
     private isWebviewReady = false;
@@ -702,6 +705,18 @@ export class XlsxEditorPanel {
                         this.getWorkingWorkbook()!,
                         this.state,
                         message.page,
+                        this.getSheetEntries()
+                    );
+                    await this.render();
+                    return;
+                case "setViewportStartRow":
+                    if (!this.getWorkingWorkbook()) {
+                        return;
+                    }
+                    this.state = setEditorViewportStartRow(
+                        this.getWorkingWorkbook()!,
+                        this.state,
+                        message.rowNumber,
                         this.getSheetEntries()
                     );
                     await this.render();
@@ -1337,17 +1352,8 @@ export class XlsxEditorPanel {
             return null;
         }
 
-        const pageStartRow = (this.state.currentPage - 1) * DEFAULT_PAGE_SIZE + 1;
-        const pageEndRow = Math.min(
-            activeSheetEntry.sheet.rowCount,
-            this.state.currentPage * DEFAULT_PAGE_SIZE
-        );
         const matches = Object.values(activeSheetEntry.sheet.cells)
             .filter((cell) => {
-                if (cell.rowNumber < pageStartRow || cell.rowNumber > pageEndRow) {
-                    return false;
-                }
-
                 const value = cell.displayValue;
                 const formula = cell.formula ?? "";
                 return pattern.test(value) || pattern.test(formula);
@@ -1372,10 +1378,10 @@ export class XlsxEditorPanel {
 
         const selectionOnCurrentPage =
             this.state.selectedCell &&
-            this.state.selectedCell.rowNumber >= pageStartRow &&
-            this.state.selectedCell.rowNumber <= pageEndRow;
+            this.state.selectedCell.rowNumber >= 1 &&
+            this.state.selectedCell.rowNumber <= activeSheetEntry.sheet.rowCount;
         const anchor = {
-            rowNumber: selectionOnCurrentPage ? this.state.selectedCell!.rowNumber : pageStartRow,
+            rowNumber: selectionOnCurrentPage ? this.state.selectedCell!.rowNumber : 1,
             columnNumber: selectionOnCurrentPage ? this.state.selectedCell!.columnNumber : 0,
         };
         const compare = (

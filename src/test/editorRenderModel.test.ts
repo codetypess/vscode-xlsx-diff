@@ -9,6 +9,7 @@ import {
     moveEditorPageCursor,
     setActiveEditorSheet,
     setSelectedEditorCell,
+    setEditorViewportStartRow,
 } from "../webview/editorRenderModel";
 
 function createCell(rowNumber: number, columnNumber: number, displayValue: string): CellSnapshot {
@@ -107,6 +108,24 @@ suite("Editor render model", () => {
         assert.strictEqual(renderModel.selection?.address, "R205C1");
         assert.strictEqual(renderModel.page.rows[0].rowNumber, 201);
         assert.strictEqual(renderModel.page.rows[4].cells[0].isSelected, true);
+    });
+
+    test("renders a sliding row window when viewport start row changes", () => {
+        const workbook = createWorkbook({}, [
+            createSheet("Sheet1", [createCell(240, 1, "tail")], 400, 1),
+        ]);
+
+        const state = setEditorViewportStartRow(
+            workbook,
+            createInitialEditorPanelState(workbook),
+            121
+        );
+        const renderModel = createEditorRenderModel(workbook, state);
+
+        assert.strictEqual(renderModel.page.startRow, 121);
+        assert.strictEqual(renderModel.page.rows[0]?.rowNumber, 121);
+        assert.strictEqual(renderModel.page.endRow, 320);
+        assert.strictEqual(renderModel.page.rows[renderModel.page.rows.length - 1]?.rowNumber, 320);
     });
 
     test("moves page navigation across sheet boundaries", () => {

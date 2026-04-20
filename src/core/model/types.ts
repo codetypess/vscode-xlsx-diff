@@ -83,6 +83,8 @@ export interface EditorPageSlice {
     totalRows: number;
     visibleRowCount: number;
     rangeLabel: string;
+    startRow: number;
+    endRow: number;
     columns: string[];
     frozenRows: EditorGridRowView[];
     rows: EditorGridRowView[];
@@ -91,6 +93,7 @@ export interface EditorPageSlice {
 export interface EditorPanelState {
     activeSheetKey: string | null;
     currentPage: number;
+    viewportStartRow: number;
     selectedCell: EditorSelectedCell | null;
 }
 
