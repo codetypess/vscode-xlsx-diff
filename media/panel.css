@@ -416,6 +416,7 @@ body {
 }
 
 .grid {
+    --grid-column-max-width: 240px;
     width: max-content;
     min-width: 100%;
     border-collapse: separate;
@@ -521,6 +522,8 @@ body {
     align-items: center;
     gap: 6px;
     min-height: 18px;
+    max-width: calc(var(--grid-column-max-width) - 14px);
+    overflow: hidden;
 }
 
 .grid__row-label {
@@ -531,7 +534,7 @@ body {
 .grid__column {
     padding: 4px 7px;
     min-width: 108px;
-    max-width: 240px;
+    max-width: var(--grid-column-max-width);
     text-align: left;
     user-select: none;
 }
@@ -544,6 +547,7 @@ body {
     background: var(--vscode-editor-background);
     padding: 3px 7px;
     line-height: 1.25;
+    max-width: var(--grid-column-max-width);
     position: relative;
     cursor: pointer;
     user-select: none;
@@ -593,6 +597,7 @@ body {
     align-items: flex-start;
     gap: 6px;
     min-height: 18px;
+    max-width: calc(var(--grid-column-max-width) - 14px);
     max-height: calc(1.25em * 2);
     overflow: hidden;
 }

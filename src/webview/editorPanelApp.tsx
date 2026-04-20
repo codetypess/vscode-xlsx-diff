@@ -230,21 +230,11 @@ let searchOptions: SearchOptions = {
 };
 
 const ESTIMATED_EDITOR_ROW_HEIGHT = 28;
+const EDITOR_COLUMN_MIN_WIDTH = 108;
+const EDITOR_COLUMN_MAX_WIDTH = 240;
 
 function getViewportShiftRowCount(): number {
     return Math.max(1, DEFAULT_EDITOR_WINDOW_SIZE - DEFAULT_EDITOR_WINDOW_OVERSCAN * 2);
-}
-
-function convertPointsToPixels(points: number): number {
-    return Math.max(1, (points * 96) / 72);
-}
-
-function convertExcelColumnWidthToPixels(width: number): number {
-    const maxDigitWidth = 7;
-    return Math.max(
-        1,
-        Math.trunc(((256 * width + Math.trunc(128 / maxDigitWidth)) / 256) * maxDigitWidth)
-    );
 }
 
 function getPendingEditKey(sheetKey: string, rowNumber: number, columnNumber: number): string {
@@ -332,33 +322,10 @@ function getRenderableRows(currentModel: EditorRenderModel | null): EditorGridRo
     return rows;
 }
 
-function getExplicitRowHeightPixels(
-    currentModel: EditorRenderModel | null,
-    rowNumber: number
-): number | null {
-    const rowHeight = currentModel?.activeSheet.rowHeights[rowNumber];
-    return typeof rowHeight === "number" && rowHeight > 0 ? convertPointsToPixels(rowHeight) : null;
-}
-
-function getExplicitColumnWidthPixels(
-    currentModel: EditorRenderModel | null,
-    columnNumber: number
-): number | null {
-    const columnWidth = currentModel?.activeSheet.columnWidths[columnNumber];
-    return typeof columnWidth === "number" && columnWidth > 0
-        ? convertExcelColumnWidthToPixels(columnWidth)
-        : null;
-}
-
 function getApproximateRowHeight(
     currentModel: EditorRenderModel | null,
     rowNumber: number
 ): number {
-    const explicitRowHeight = getExplicitRowHeightPixels(currentModel, rowNumber);
-    if (explicitRowHeight !== null) {
-        return explicitRowHeight;
-    }
-
     return rowHeightByNumber.get(rowNumber) ?? ESTIMATED_EDITOR_ROW_HEIGHT;
 }
 
@@ -965,9 +932,60 @@ function restorePaneScrollState(scrollState: ScrollState | null): void {
     }
 }
 
-function getExplicitPixelSize(element: HTMLElement, name: "explicitWidth" | "explicitHeight"): number | null {
-    const value = Number(element.dataset[name]);
-    return Number.isFinite(value) && value > 0 ? value : null;
+function clampGridColumnWidth(width: number): number {
+    return Math.max(EDITOR_COLUMN_MIN_WIDTH, Math.min(width, EDITOR_COLUMN_MAX_WIDTH));
+}
+
+function getNaturalGridColumnWidth(columnNumber: number): number | null {
+    let width = 0;
+
+    for (const element of document.querySelectorAll<HTMLElement>(`[data-column-number="${columnNumber}"]`)) {
+        width = Math.max(width, Math.ceil(element.getBoundingClientRect().width));
+    }
+
+    return width > 0 ? clampGridColumnWidth(width) : null;
+}
+
+function setGridColumnWidths(): void {
+    const columnElements = Array.from(
+        document.querySelectorAll<HTMLElement>('[data-role="grid-column-col"][data-column-number]')
+    );
+    const measuredWidths = new Map<number, number>();
+
+    for (const column of columnElements) {
+        const columnNumber = Number(column.dataset.columnNumber);
+        if (!Number.isInteger(columnNumber)) {
+            continue;
+        }
+
+        column.style.width = "";
+    }
+
+    for (const column of columnElements) {
+        const columnNumber = Number(column.dataset.columnNumber);
+        if (!Number.isInteger(columnNumber) || measuredWidths.has(columnNumber)) {
+            continue;
+        }
+
+        const width = getNaturalGridColumnWidth(columnNumber);
+        if (width !== null) {
+            measuredWidths.set(columnNumber, width);
+        }
+    }
+
+    for (const column of columnElements) {
+        const columnNumber = Number(column.dataset.columnNumber);
+        if (!Number.isInteger(columnNumber)) {
+            continue;
+        }
+
+        const width = measuredWidths.get(columnNumber);
+        if (!width) {
+            continue;
+        }
+
+        column.style.width = `${width}px`;
+    }
 }
 
 function cacheRenderedRowHeights(): void {
@@ -1200,13 +1218,7 @@ function syncFrozenPaneRowHeights(): void {
     }
 
     for (const [rowNumber, rows] of rowGroups) {
-        const explicitRowHeight = rows.reduce<number | null>((height, row) => {
-            const nextHeight = getExplicitPixelSize(row, "explicitHeight");
-            return nextHeight !== null ? nextHeight : height;
-        }, null);
-        const rowHeight =
-            explicitRowHeight ??
-            Math.ceil(Math.max(...rows.map((row) => row.getBoundingClientRect().height)));
+        const rowHeight = Math.ceil(Math.max(...rows.map((row) => row.getBoundingClientRect().height)));
         if (rowHeight <= 0) {
             continue;
         }
@@ -1217,7 +1229,7 @@ function syncFrozenPaneRowHeights(): void {
     }
 }
 
-function syncFrozenPaneColumnWidths(): void {
+function syncGridColumnWidths(): void {
     const rowHeaderColumns = Array.from(
         document.querySelectorAll<HTMLElement>('[data-role="grid-row-header-col"]')
     );
@@ -1234,56 +1246,7 @@ function syncFrozenPaneColumnWidths(): void {
     for (const column of rowHeaderColumns) {
         column.style.width = `${rowHeaderWidth}px`;
     }
-
-    const columnElements = Array.from(
-        document.querySelectorAll<HTMLElement>('[data-role="grid-column-col"][data-column-number]')
-    );
-    const widthByColumnNumber = new Map<number, number>();
-    const explicitWidthByColumnNumber = new Map<number, number>();
-
-    for (const column of columnElements) {
-        const columnNumber = Number(column.dataset.columnNumber);
-        if (Number.isInteger(columnNumber)) {
-            const explicitWidth = getExplicitPixelSize(column, "explicitWidth");
-            if (explicitWidth !== null) {
-                explicitWidthByColumnNumber.set(columnNumber, explicitWidth);
-            }
-        }
-
-        column.style.width = "";
-    }
-
-    for (const element of document.querySelectorAll<HTMLElement>('[data-column-number]')) {
-        const columnNumber = Number(element.dataset.columnNumber);
-        if (!Number.isInteger(columnNumber)) {
-            continue;
-        }
-
-        if (explicitWidthByColumnNumber.has(columnNumber)) {
-            continue;
-        }
-
-        const nextWidth = Math.ceil(element.getBoundingClientRect().width);
-        const currentWidth = widthByColumnNumber.get(columnNumber) ?? 0;
-        if (nextWidth > currentWidth) {
-            widthByColumnNumber.set(columnNumber, nextWidth);
-        }
-    }
-
-    for (const column of columnElements) {
-        const columnNumber = Number(column.dataset.columnNumber);
-        if (!Number.isInteger(columnNumber)) {
-            continue;
-        }
-
-        const width =
-            explicitWidthByColumnNumber.get(columnNumber) ?? widthByColumnNumber.get(columnNumber);
-        if (!width) {
-            continue;
-        }
-
-        column.style.width = `${width}px`;
-    }
+    setGridColumnWidths();
 }
 
 function scheduleFrozenPaneLayoutSync({
@@ -1297,7 +1260,7 @@ function scheduleFrozenPaneLayoutSync({
 
     frozenPaneLayoutFrame = requestAnimationFrame(() => {
         frozenPaneLayoutFrame = 0;
-        syncFrozenPaneColumnWidths();
+        syncGridColumnWidths();
         syncFrozenPaneRowHeights();
         cacheRenderedRowHeights();
         if (revealSelection) {
@@ -2489,15 +2452,6 @@ function GridColumnHeaderCell({
 }): React.ReactElement {
     const hasPending = pendingSummary.columns.has(columnNumber);
     const isActiveColumn = isColumnInSelection(columnNumber);
-    const explicitColumnWidth = getExplicitColumnWidthPixels(currentModel, columnNumber);
-    const explicitColumnWidthStyle =
-        explicitColumnWidth === null
-            ? undefined
-            : {
-                  width: `${explicitColumnWidth}px`,
-                  minWidth: `${explicitColumnWidth}px`,
-                  maxWidth: `${explicitColumnWidth}px`,
-              };
 
     return (
         <th
@@ -2509,7 +2463,6 @@ function GridColumnHeaderCell({
                 isActiveColumn && "grid__column--active",
             ])}
             data-column-number={columnNumber}
-            style={explicitColumnWidthStyle}
         >
             <span className="grid__column-label">
                 {hasPending ? <PendingMarker /> : null}
@@ -2578,25 +2531,13 @@ function GridSectionTable({
         <table className={classNames(["grid", split && "grid--split"])}>
             <colgroup>
                 {includeRowHeaders ? <col data-role="grid-row-header-col" /> : null}
-                {columnNumbers.map((columnNumber) => {
-                    const explicitColumnWidth = getExplicitColumnWidthPixels(
-                        currentModel,
-                        columnNumber
-                    );
-                    return (
-                        <col
-                            key={columnNumber}
-                            data-column-number={columnNumber}
-                            data-explicit-width={explicitColumnWidth ?? undefined}
-                            data-role="grid-column-col"
-                            style={
-                                explicitColumnWidth === null
-                                    ? undefined
-                                    : { width: `${explicitColumnWidth}px` }
-                            }
-                        />
-                    );
-                })}
+                {columnNumbers.map((columnNumber) => (
+                    <col
+                        key={columnNumber}
+                        data-column-number={columnNumber}
+                        data-role="grid-column-col"
+                    />
+                ))}
             </colgroup>
             {includeHeader ? (
                 <thead>
@@ -2624,18 +2565,11 @@ function GridSectionTable({
                     </tr>
                 ) : null}
                 {rows.map((row) => {
-                    const explicitRowHeight = getExplicitRowHeightPixels(currentModel, row.rowNumber);
                     return (
                         <tr
                             key={`${row.rowNumber}:${includeRowHeaders ? "row" : "cell"}:${columnNumbers[0] ?? 0}`}
-                            data-explicit-height={explicitRowHeight ?? undefined}
                             data-role="grid-row"
                             data-row-number={row.rowNumber}
-                            style={
-                                explicitRowHeight === null
-                                    ? undefined
-                                    : { height: `${explicitRowHeight}px` }
-                            }
                         >
                             {includeRowHeaders ? (
                                 <GridRowHeaderCell pendingSummary={pendingSummary} row={row} />
@@ -2968,6 +2902,7 @@ function EditorApp({ view }: { view: Extract<ViewState, { kind: "app" }> }): Rea
         }
 
         applyFrozenPaneLayout(view.model.activeSheet.freezePane);
+        syncGridColumnWidths();
         cacheRenderedRowHeights();
         if (view.revealSelection) {
             revealSelectedCell();
@@ -3027,7 +2962,12 @@ function Root(): React.ReactElement {
 window.addEventListener("resize", () => {
     if (hasLockedView(model?.activeSheet.freezePane)) {
         scheduleFrozenPaneLayoutSync();
+        return;
     }
+
+    requestAnimationFrame(() => {
+        syncGridColumnWidths();
+    });
 });
 
 window.addEventListener("message", (event: MessageEvent<IncomingMessage>) => {

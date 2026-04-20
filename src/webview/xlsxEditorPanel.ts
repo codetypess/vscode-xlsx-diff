@@ -305,8 +305,6 @@ function cloneSheetSnapshot(
         ...sheet,
         mergedRanges: [...sheet.mergedRanges],
         freezePane: sheet.freezePane ? { ...sheet.freezePane } : null,
-        rowHeights: { ...sheet.rowHeights },
-        columnWidths: { ...sheet.columnWidths },
         cells: { ...sheet.cells },
     };
 }
@@ -1198,8 +1196,6 @@ export class XlsxEditorPanel {
                     rowCount: DEFAULT_PAGE_SIZE,
                     columnCount: 26,
                     mergedRanges: [],
-                    rowHeights: {},
-                    columnWidths: {},
                     cells: {},
                     signature: `pending:${sheetKey}:${sheetName}`,
                 },

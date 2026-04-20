@@ -24,8 +24,6 @@ interface SheetReader {
     getDisplayValue(rowNumber: number, columnNumber: number): string | null;
     getFormula(rowNumber: number, columnNumber: number): string | null;
     getStyleId(rowNumber: number, columnNumber: number): number | null;
-    getRowHeight(rowNumber: number): number | null;
-    getColumnWidth(columnNumber: number): number | null;
     getMergedRanges(): string[];
     getFreezePane(): SheetFreezePaneSnapshot | null;
 }
@@ -52,18 +50,6 @@ function createSheetSignature(sheet: SheetSnapshot): string {
     hash.update(`${sheet.name}\n`);
     hash.update(`${sheet.rowCount}:${sheet.columnCount}\n`);
 
-    for (const [rowNumber, rowHeight] of Object.entries(sheet.rowHeights).sort(
-        ([left], [right]) => Number(left) - Number(right)
-    )) {
-        hash.update(`row:${rowNumber}:${rowHeight}\n`);
-    }
-
-    for (const [columnNumber, columnWidth] of Object.entries(sheet.columnWidths).sort(
-        ([left], [right]) => Number(left) - Number(right)
-    )) {
-        hash.update(`col:${columnNumber}:${columnWidth}\n`);
-    }
-
     for (const mergedRange of sheet.mergedRanges) {
         hash.update(`merge:${mergedRange}\n`);
     }
@@ -77,42 +63,10 @@ function createSheetSignature(sheet: SheetSnapshot): string {
     return hash.digest("hex");
 }
 
-function readExplicitRowHeights(sheet: SheetReader): Record<number, number> {
-    const rowHeights: Record<number, number> = {};
-
-    for (let rowNumber = 1; rowNumber <= sheet.rowCount; rowNumber += 1) {
-        const rowHeight = sheet.getRowHeight(rowNumber);
-        if (rowHeight === null) {
-            continue;
-        }
-
-        rowHeights[rowNumber] = rowHeight;
-    }
-
-    return rowHeights;
-}
-
-function readExplicitColumnWidths(sheet: SheetReader): Record<number, number> {
-    const columnWidths: Record<number, number> = {};
-
-    for (let columnNumber = 1; columnNumber <= sheet.columnCount; columnNumber += 1) {
-        const columnWidth = sheet.getColumnWidth(columnNumber);
-        if (columnWidth === null) {
-            continue;
-        }
-
-        columnWidths[columnNumber] = columnWidth;
-    }
-
-    return columnWidths;
-}
-
 function loadSheetSnapshot(workbook: WorkbookReader, sheetName: string): SheetSnapshot {
     const sheet = workbook.getSheet(sheetName);
     const cells: Record<string, CellSnapshot> = {};
     const freezePane = sheet.getFreezePane();
-    const rowHeights = readExplicitRowHeights(sheet);
-    const columnWidths = readExplicitColumnWidths(sheet);
 
     for (let rowNumber = 1; rowNumber <= sheet.rowCount; rowNumber += 1) {
         for (let columnNumber = 1; columnNumber <= sheet.columnCount; columnNumber += 1) {
@@ -124,6 +78,7 @@ function loadSheetSnapshot(workbook: WorkbookReader, sheetName: string): SheetSn
             }
 
             const key = createCellKey(rowNumber, columnNumber);
+            const styleId = sheet.getStyleId(rowNumber, columnNumber);
             cells[key] = {
                 key,
                 rowNumber,
@@ -131,7 +86,7 @@ function loadSheetSnapshot(workbook: WorkbookReader, sheetName: string): SheetSn
                 address: getCellAddress(rowNumber, columnNumber),
                 displayValue: displayValue ?? "",
                 formula,
-                styleId: sheet.getStyleId(rowNumber, columnNumber),
+                styleId,
             };
         }
     }
@@ -142,8 +97,6 @@ function loadSheetSnapshot(workbook: WorkbookReader, sheetName: string): SheetSn
         columnCount: sheet.columnCount,
         mergedRanges: [...sheet.getMergedRanges()].sort((left, right) => left.localeCompare(right)),
         freezePane: freezePane ? { ...freezePane } : null,
-        rowHeights,
-        columnWidths,
         cells,
         signature: "",
     };

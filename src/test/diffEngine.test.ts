@@ -27,8 +27,6 @@ function createSheet(
         rowCount,
         columnCount,
         mergedRanges: [],
-        rowHeights: {},
-        columnWidths: {},
         cells: Object.fromEntries(cells.map((cell) => [cell.key, cell])),
         signature,
     };

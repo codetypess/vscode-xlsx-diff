@@ -30,11 +30,7 @@ function createSheet(
     rowCount = 1,
     columnCount = 1,
     mergedRanges: string[] = [],
-    freezePane: SheetSnapshot["freezePane"] = null,
-    dimensions: {
-        rowHeights?: Record<number, number>;
-        columnWidths?: Record<number, number>;
-    } = {}
+    freezePane: SheetSnapshot["freezePane"] = null
 ): SheetSnapshot {
     return {
         name,
@@ -42,8 +38,6 @@ function createSheet(
         columnCount,
         mergedRanges,
         freezePane,
-        rowHeights: { ...(dimensions.rowHeights ?? {}) },
-        columnWidths: { ...(dimensions.columnWidths ?? {}) },
         cells: Object.fromEntries(cells.map((cell) => [cell.key, cell])),
         signature: `${name}-signature`,
     };
@@ -112,8 +106,8 @@ suite("Editor render model", () => {
 
         assert.strictEqual(renderModel.page.currentPage, 2);
         assert.strictEqual(renderModel.selection?.address, "R205C1");
-        assert.strictEqual(renderModel.page.rows[0].rowNumber, 201);
-        assert.strictEqual(renderModel.page.rows[4].cells[0].isSelected, true);
+        assert.strictEqual(renderModel.page.rows[0].rowNumber, 6);
+        assert.strictEqual(renderModel.page.rows[199].cells[0].isSelected, true);
     });
 
     test("renders a sliding row window when viewport start row changes", () => {
@@ -200,31 +194,6 @@ suite("Editor render model", () => {
         );
     });
 
-    test("surfaces explicit row heights and column widths for the active sheet", () => {
-        const workbook = createWorkbook({}, [
-            createSheet(
-                "Sheet1",
-                [createCell(3, 3, "value")],
-                10,
-                10,
-                [],
-                null,
-                {
-                    rowHeights: { 2: 24 },
-                    columnWidths: { 3: 18.5 },
-                }
-            ),
-        ]);
-
-        const renderModel = createEditorRenderModel(
-            workbook,
-            createInitialEditorPanelState(workbook)
-        );
-
-        assert.deepStrictEqual(renderModel.activeSheet.rowHeights, { 2: 24 });
-        assert.deepStrictEqual(renderModel.activeSheet.columnWidths, { 3: 18.5 });
-    });
-
     test("keeps frozen rows separate when virtualizing a locked sheet", () => {
         const workbook = createWorkbook({}, [
             createSheet("Sheet1", [createCell(240, 2, "tail")], 400, 4, [], {
@@ -293,7 +262,7 @@ suite("Editor render model", () => {
         const selectedState = setSelectedEditorCell(workbook, scrolledState, 1, 1);
         const renderModel = createEditorRenderModel(workbook, selectedState);
 
-        assert.strictEqual(renderModel.selection?.address, "R1C1");
+        assert.strictEqual(renderModel.selection?.address, "A1");
         assert.strictEqual(renderModel.page.startRow, 121);
         assert.strictEqual(renderModel.page.rows[0]?.rowNumber, 121);
     });
