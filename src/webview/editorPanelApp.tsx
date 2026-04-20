@@ -217,12 +217,17 @@ let tabContextMenu: TabContextMenuState | null = null;
 let selectionDragState: SelectionDragState | null = null;
 let suppressNextCellClick = false;
 let frozenPaneLayoutFrame = 0;
+let deferredGridLayoutTimer = 0;
 let isSyncingFrozenPaneScroll = false;
 let lastRequestedViewportStartRow: number | null = null;
 let queuedViewportStartRow: number | null = null;
 let lastObservedPaneScrollTop: number | null = null;
 let lastMeasuredSheetKey: string | null = null;
+let pendingViewportScrollFrame = 0;
+let pendingViewportScrollPane: HTMLElement | null = null;
+let lastScrollActivityAt = 0;
 const rowHeightByNumber = new Map<number, number>();
+const columnWidthByNumber = new Map<number, number>();
 let searchOptions: SearchOptions = {
     isRegexp: false,
     matchCase: false,
@@ -232,9 +237,22 @@ let searchOptions: SearchOptions = {
 const ESTIMATED_EDITOR_ROW_HEIGHT = 28;
 const EDITOR_COLUMN_MIN_WIDTH = 108;
 const EDITOR_COLUMN_MAX_WIDTH = 240;
+const ACTIVE_SCROLL_LAYOUT_DELAY_MS = 140;
 
 function getViewportShiftRowCount(): number {
     return Math.max(1, DEFAULT_EDITOR_WINDOW_SIZE - DEFAULT_EDITOR_WINDOW_OVERSCAN * 2);
+}
+
+function getNow(): number {
+    return globalThis.performance?.now() ?? Date.now();
+}
+
+function recordScrollActivity(): void {
+    lastScrollActivityAt = getNow();
+}
+
+function isActivelyScrolling(): boolean {
+    return getNow() - lastScrollActivityAt < ACTIVE_SCROLL_LAYOUT_DELAY_MS;
 }
 
 function getPendingEditKey(sheetKey: string, rowNumber: number, columnNumber: number): string {
@@ -519,6 +537,26 @@ function maybeRequestViewportForScroll(pane: HTMLElement): void {
     }
 
     requestViewportStartRow(currentStartRow - shiftRowCount);
+}
+
+function scheduleViewportRequestForScroll(pane: HTMLElement): void {
+    recordScrollActivity();
+    pendingViewportScrollPane = pane;
+
+    if (pendingViewportScrollFrame) {
+        return;
+    }
+
+    pendingViewportScrollFrame = requestAnimationFrame(() => {
+        pendingViewportScrollFrame = 0;
+        const nextPane = pendingViewportScrollPane;
+        pendingViewportScrollPane = null;
+        if (!nextPane) {
+            return;
+        }
+
+        maybeRequestViewportForScroll(nextPane);
+    });
 }
 
 function hasFrozenRowGap(currentModel: EditorRenderModel | null): boolean {
@@ -936,56 +974,221 @@ function clampGridColumnWidth(width: number): number {
     return Math.max(EDITOR_COLUMN_MIN_WIDTH, Math.min(width, EDITOR_COLUMN_MAX_WIDTH));
 }
 
-function getNaturalGridColumnWidth(columnNumber: number): number | null {
-    let width = 0;
+function applyCachedGridColumnWidths(): void {
+    for (const column of document.querySelectorAll<HTMLElement>(
+        '[data-role="grid-column-col"][data-column-number]'
+    )) {
+        const columnNumber = Number(column.dataset.columnNumber);
+        if (!Number.isInteger(columnNumber)) {
+            continue;
+        }
 
-    for (const element of document.querySelectorAll<HTMLElement>(`[data-column-number="${columnNumber}"]`)) {
-        width = Math.max(width, Math.ceil(element.getBoundingClientRect().width));
+        const width = columnWidthByNumber.get(columnNumber);
+        column.style.width = width ? `${width}px` : "";
     }
-
-    return width > 0 ? clampGridColumnWidth(width) : null;
 }
 
-function setGridColumnWidths(): void {
+function hasMeasuredVisibleGridColumnWidths(): boolean {
+    const columnElements = document.querySelectorAll<HTMLElement>(
+        '[data-role="grid-column-col"][data-column-number]'
+    );
+    if (columnElements.length === 0) {
+        return true;
+    }
+
+    for (const column of columnElements) {
+        const columnNumber = Number(column.dataset.columnNumber);
+        if (!Number.isInteger(columnNumber)) {
+            continue;
+        }
+
+        if (!columnWidthByNumber.has(columnNumber)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+function measureVisibleGridColumnWidths(): void {
     const columnElements = Array.from(
         document.querySelectorAll<HTMLElement>('[data-role="grid-column-col"][data-column-number]')
     );
-    const measuredWidths = new Map<number, number>();
 
     for (const column of columnElements) {
-        const columnNumber = Number(column.dataset.columnNumber);
-        if (!Number.isInteger(columnNumber)) {
-            continue;
-        }
-
         column.style.width = "";
     }
 
-    for (const column of columnElements) {
-        const columnNumber = Number(column.dataset.columnNumber);
-        if (!Number.isInteger(columnNumber) || measuredWidths.has(columnNumber)) {
-            continue;
-        }
-
-        const width = getNaturalGridColumnWidth(columnNumber);
-        if (width !== null) {
-            measuredWidths.set(columnNumber, width);
-        }
-    }
-
-    for (const column of columnElements) {
-        const columnNumber = Number(column.dataset.columnNumber);
+    for (const element of document.querySelectorAll<HTMLElement>(
+        'th.grid__column[data-column-number], td.grid__cell[data-column-number]'
+    )) {
+        const columnNumber = Number(element.dataset.columnNumber);
         if (!Number.isInteger(columnNumber)) {
             continue;
         }
 
-        const width = measuredWidths.get(columnNumber);
-        if (!width) {
+        const width = clampGridColumnWidth(Math.ceil(element.getBoundingClientRect().width));
+        if (width <= 0) {
             continue;
         }
 
-        column.style.width = `${width}px`;
+        columnWidthByNumber.set(
+            columnNumber,
+            Math.max(columnWidthByNumber.get(columnNumber) ?? 0, width)
+        );
     }
+
+    applyCachedGridColumnWidths();
+}
+
+function setGridColumnWidths({
+    measureColumns = true,
+}: {
+    measureColumns?: boolean;
+} = {}): void {
+    const rowHeaderColumns = Array.from(
+        document.querySelectorAll<HTMLElement>('[data-role="grid-row-header-col"]')
+    );
+    const rowHeaderCells = Array.from(
+        document.querySelectorAll<HTMLElement>('th.grid__row-number, td.grid__row-number')
+    );
+    for (const column of rowHeaderColumns) {
+        column.style.width = "";
+    }
+
+    const rowHeaderWidth = Math.ceil(
+        Math.max(56, ...rowHeaderCells.map((cell) => cell.getBoundingClientRect().width), 0)
+    );
+    for (const column of rowHeaderColumns) {
+        column.style.width = `${rowHeaderWidth}px`;
+    }
+
+    if (measureColumns || !hasMeasuredVisibleGridColumnWidths()) {
+        measureVisibleGridColumnWidths();
+        return;
+    }
+
+    applyCachedGridColumnWidths();
+}
+
+function cancelScheduledGridLayoutSync(): void {
+    if (frozenPaneLayoutFrame) {
+        cancelAnimationFrame(frozenPaneLayoutFrame);
+        frozenPaneLayoutFrame = 0;
+    }
+
+    if (deferredGridLayoutTimer) {
+        clearTimeout(deferredGridLayoutTimer);
+        deferredGridLayoutTimer = 0;
+    }
+
+    if (pendingViewportScrollFrame) {
+        cancelAnimationFrame(pendingViewportScrollFrame);
+        pendingViewportScrollFrame = 0;
+    }
+
+    pendingViewportScrollPane = null;
+}
+
+function performGridLayoutSync({
+    revealSelection = false,
+    viewLocked = false,
+    forceColumnMeasurement = false,
+}: {
+    revealSelection?: boolean;
+    viewLocked?: boolean;
+    forceColumnMeasurement?: boolean;
+} = {}): void {
+    const shouldMeasureColumns =
+        forceColumnMeasurement || !isActivelyScrolling() || !hasMeasuredVisibleGridColumnWidths();
+
+    setGridColumnWidths({ measureColumns: shouldMeasureColumns });
+    if (viewLocked) {
+        syncFrozenPaneRowHeights();
+    }
+    cacheRenderedRowHeights();
+    if (revealSelection) {
+        revealSelectedCell();
+    }
+
+    if (shouldMeasureColumns) {
+        return;
+    }
+
+    if (deferredGridLayoutTimer) {
+        clearTimeout(deferredGridLayoutTimer);
+    }
+
+    deferredGridLayoutTimer = window.setTimeout(() => {
+        deferredGridLayoutTimer = 0;
+        scheduleGridLayoutSync({ viewLocked, forceColumnMeasurement: true });
+    }, ACTIVE_SCROLL_LAYOUT_DELAY_MS);
+}
+
+function scheduleGridLayoutSync({
+    revealSelection = false,
+    viewLocked = false,
+    forceColumnMeasurement = false,
+}: {
+    revealSelection?: boolean;
+    viewLocked?: boolean;
+    forceColumnMeasurement?: boolean;
+} = {}): void {
+    if (frozenPaneLayoutFrame) {
+        cancelAnimationFrame(frozenPaneLayoutFrame);
+    }
+
+    frozenPaneLayoutFrame = requestAnimationFrame(() => {
+        frozenPaneLayoutFrame = 0;
+        performGridLayoutSync({
+            revealSelection,
+            viewLocked,
+            forceColumnMeasurement,
+        });
+    });
+}
+
+function resetGridMeasurementState(): void {
+    cancelScheduledGridLayoutSync();
+    lastObservedPaneScrollTop = null;
+    lastMeasuredSheetKey = null;
+    rowHeightByNumber.clear();
+    columnWidthByNumber.clear();
+}
+
+function scheduleGridMetricRefresh({
+    revealSelection = false,
+    viewLocked = false,
+    forceColumnMeasurement = false,
+}: {
+    revealSelection?: boolean;
+    viewLocked?: boolean;
+    forceColumnMeasurement?: boolean;
+} = {}): void {
+    clearFrozenPaneLayout();
+    scheduleGridLayoutSync({
+        revealSelection,
+        viewLocked,
+        forceColumnMeasurement,
+    });
+}
+
+function syncGridColumnWidths(): void {
+    setGridColumnWidths({ measureColumns: true });
+}
+
+function scheduleFrozenPaneLayoutSync({
+    revealSelection = false,
+    forceColumnMeasurement = false,
+}: {
+    revealSelection?: boolean;
+    forceColumnMeasurement?: boolean;
+} = {}): void {
+    scheduleGridMetricRefresh({
+        revealSelection,
+        viewLocked: hasLockedView(model?.activeSheet.freezePane),
+        forceColumnMeasurement,
+    });
 }
 
 function cacheRenderedRowHeights(): void {
@@ -1227,46 +1430,6 @@ function syncFrozenPaneRowHeights(): void {
             row.style.height = `${rowHeight}px`;
         }
     }
-}
-
-function syncGridColumnWidths(): void {
-    const rowHeaderColumns = Array.from(
-        document.querySelectorAll<HTMLElement>('[data-role="grid-row-header-col"]')
-    );
-    const rowHeaderCells = Array.from(
-        document.querySelectorAll<HTMLElement>('th.grid__row-number, td.grid__row-number')
-    );
-    for (const column of rowHeaderColumns) {
-        column.style.width = "";
-    }
-
-    const rowHeaderWidth = Math.ceil(
-        Math.max(56, ...rowHeaderCells.map((cell) => cell.getBoundingClientRect().width), 0)
-    );
-    for (const column of rowHeaderColumns) {
-        column.style.width = `${rowHeaderWidth}px`;
-    }
-    setGridColumnWidths();
-}
-
-function scheduleFrozenPaneLayoutSync({
-    revealSelection = false,
-}: {
-    revealSelection?: boolean;
-} = {}): void {
-    if (frozenPaneLayoutFrame) {
-        cancelAnimationFrame(frozenPaneLayoutFrame);
-    }
-
-    frozenPaneLayoutFrame = requestAnimationFrame(() => {
-        frozenPaneLayoutFrame = 0;
-        syncGridColumnWidths();
-        syncFrozenPaneRowHeights();
-        cacheRenderedRowHeights();
-        if (revealSelection) {
-            revealSelectedCell();
-        }
-    });
 }
 
 function getSelectedCellPaneName(
@@ -2000,17 +2163,13 @@ function updateView(view: ViewState): void {
 
 function renderLoading(message: string): void {
     queuedViewportStartRow = null;
-    lastObservedPaneScrollTop = null;
-    lastMeasuredSheetKey = null;
-    rowHeightByNumber.clear();
+    resetGridMeasurementState();
     updateView({ kind: "loading", message });
 }
 
 function renderError(message: string): void {
     queuedViewportStartRow = null;
-    lastObservedPaneScrollTop = null;
-    lastMeasuredSheetKey = null;
-    rowHeightByNumber.clear();
+    resetGridMeasurementState();
     updateView({ kind: "error", message });
 }
 
@@ -2676,7 +2835,7 @@ function FrozenEditorTable({
                     data-pane="bottom-left"
                     onScroll={(event) => {
                         syncFrozenPaneScroll("bottom-left", event.currentTarget);
-                        maybeRequestViewportForScroll(event.currentTarget);
+                        scheduleViewportRequestForScroll(event.currentTarget);
                     }}
                 >
                     <GridSectionTable
@@ -2697,7 +2856,7 @@ function FrozenEditorTable({
                     data-role="grid-scroll-main"
                     onScroll={(event) => {
                         syncFrozenPaneScroll("bottom-right", event.currentTarget);
-                        maybeRequestViewportForScroll(event.currentTarget);
+                        scheduleViewportRequestForScroll(event.currentTarget);
                     }}
                 >
                     <GridSectionTable
@@ -2758,7 +2917,7 @@ function EditorPane({
             ) : (
                 <div
                     className="pane__table"
-                    onScroll={(event) => maybeRequestViewportForScroll(event.currentTarget)}
+                    onScroll={(event) => scheduleViewportRequestForScroll(event.currentTarget)}
                 >
                     <EditorTable currentModel={currentModel} pendingSummary={pendingSummary} />
                 </div>
@@ -2897,16 +3056,17 @@ function EditorApp({ view }: { view: Extract<ViewState, { kind: "app" }> }): Rea
         restorePaneScrollState(view.scrollState);
         if (viewLocked) {
             clearFrozenPaneLayout();
-            scheduleFrozenPaneLayoutSync({ revealSelection: view.revealSelection });
+            scheduleFrozenPaneLayoutSync({
+                revealSelection: view.revealSelection,
+                forceColumnMeasurement: true,
+            });
             return;
         }
 
-        applyFrozenPaneLayout(view.model.activeSheet.freezePane);
-        syncGridColumnWidths();
-        cacheRenderedRowHeights();
-        if (view.revealSelection) {
-            revealSelectedCell();
-        }
+        scheduleGridMetricRefresh({
+            revealSelection: view.revealSelection,
+            viewLocked,
+        });
     }, [
         viewLocked,
         view.model.activeSheet.freezePane,
@@ -2961,12 +3121,14 @@ function Root(): React.ReactElement {
 
 window.addEventListener("resize", () => {
     if (hasLockedView(model?.activeSheet.freezePane)) {
-        scheduleFrozenPaneLayoutSync();
+        clearFrozenPaneLayout();
+        scheduleFrozenPaneLayoutSync({ forceColumnMeasurement: true });
         return;
     }
 
-    requestAnimationFrame(() => {
-        syncGridColumnWidths();
+    scheduleGridMetricRefresh({
+        viewLocked: false,
+        forceColumnMeasurement: true,
     });
 });
 
@@ -2987,6 +3149,7 @@ window.addEventListener("message", (event: MessageEvent<IncomingMessage>) => {
     if (message.type === "render") {
         if (message.payload.activeSheet.key !== lastMeasuredSheetKey) {
             rowHeightByNumber.clear();
+            columnWidthByNumber.clear();
             lastMeasuredSheetKey = message.payload.activeSheet.key;
             lastObservedPaneScrollTop = null;
         }

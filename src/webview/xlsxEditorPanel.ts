@@ -719,7 +719,7 @@ export class XlsxEditorPanel {
                         message.rowNumber,
                         this.getSheetEntries()
                     );
-                    await this.render();
+                    await this.render(undefined, { silent: true });
                     return;
                 case "prevPage":
                     if (!this.getWorkingWorkbook()) {
