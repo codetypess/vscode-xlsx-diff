@@ -219,6 +219,8 @@ let suppressNextCellClick = false;
 let frozenPaneLayoutFrame = 0;
 let isSyncingFrozenPaneScroll = false;
 let lastRequestedViewportStartRow: number | null = null;
+let queuedViewportStartRow: number | null = null;
+let lastObservedPaneScrollTop: number | null = null;
 const rowHeightByNumber = new Map<number, number>();
 let searchOptions: SearchOptions = {
     isRegexp: false,
@@ -227,6 +229,10 @@ let searchOptions: SearchOptions = {
 };
 
 const ESTIMATED_EDITOR_ROW_HEIGHT = 28;
+
+function getViewportShiftRowCount(): number {
+    return Math.max(1, DEFAULT_EDITOR_WINDOW_SIZE - DEFAULT_EDITOR_WINDOW_OVERSCAN * 2);
+}
 
 function getPendingEditKey(sheetKey: string, rowNumber: number, columnNumber: number): string {
     return `${sheetKey}:${rowNumber}:${columnNumber}`;
@@ -383,6 +389,14 @@ function getMaxViewportStartRow(currentModel: EditorRenderModel | null): number 
     return Math.max(currentModel.page.totalRows - DEFAULT_EDITOR_WINDOW_SIZE + 1, baseRow);
 }
 
+function hasPendingViewportRequest(currentModel: EditorRenderModel | null): boolean {
+    return Boolean(
+        currentModel &&
+            lastRequestedViewportStartRow !== null &&
+            lastRequestedViewportStartRow !== currentModel.page.startRow
+    );
+}
+
 function requestViewportStartRow(rowNumber: number): void {
     if (!model) {
         return;
@@ -397,6 +411,12 @@ function requestViewportStartRow(rowNumber: number): void {
         return;
     }
 
+    if (hasPendingViewportRequest(model)) {
+        queuedViewportStartRow = clampedRowNumber;
+        return;
+    }
+
+    queuedViewportStartRow = null;
     lastRequestedViewportStartRow = clampedRowNumber;
     vscode.postMessage({ type: "setViewportStartRow", rowNumber: clampedRowNumber });
 }
@@ -411,20 +431,42 @@ function maybeRequestViewportForScroll(pane: HTMLElement): void {
     }
 
     const baseRow = getScrollableViewportBaseRow(model);
+    const currentStartRow = model.page.startRow;
+    const currentEndRow = model.page.endRow;
+    const visibleRowCount = Math.max(
+        1,
+        Math.ceil(pane.clientHeight / ESTIMATED_EDITOR_ROW_HEIGHT)
+    );
     const firstVisibleRow = Math.max(
         baseRow,
         Math.floor(pane.scrollTop / ESTIMATED_EDITOR_ROW_HEIGHT) + baseRow
     );
-    const nextStartRow = Math.max(
-        baseRow,
-        Math.min(getMaxViewportStartRow(model), firstVisibleRow - DEFAULT_EDITOR_WINDOW_OVERSCAN)
-    );
-
-    if (Math.abs(nextStartRow - model.page.startRow) < Math.max(8, DEFAULT_EDITOR_WINDOW_OVERSCAN / 2)) {
+    const lastVisibleRow = Math.min(model.page.totalRows, firstVisibleRow + visibleRowCount - 1);
+    const previousScrollTop = lastObservedPaneScrollTop;
+    lastObservedPaneScrollTop = pane.scrollTop;
+    if (previousScrollTop === null || pane.scrollTop === previousScrollTop) {
         return;
     }
 
-    requestViewportStartRow(nextStartRow);
+    const isScrollingDown = pane.scrollTop > previousScrollTop;
+    const shiftRowCount = getViewportShiftRowCount();
+
+    if (isScrollingDown) {
+        const remainingRowsBelowViewport = currentEndRow - lastVisibleRow;
+        if (remainingRowsBelowViewport > DEFAULT_EDITOR_WINDOW_OVERSCAN) {
+            return;
+        }
+
+        requestViewportStartRow(currentStartRow + shiftRowCount);
+        return;
+    }
+
+    const rowsAboveViewport = firstVisibleRow - currentStartRow;
+    if (rowsAboveViewport > DEFAULT_EDITOR_WINDOW_OVERSCAN) {
+        return;
+    }
+
+    requestViewportStartRow(currentStartRow - shiftRowCount);
 }
 
 function hasFrozenRowGap(currentModel: EditorRenderModel | null): boolean {
@@ -831,6 +873,7 @@ function restorePaneScrollState(scrollState: ScrollState | null): void {
 
     pane.scrollTop = clampScrollPosition(scrollState.top, pane.scrollHeight - pane.clientHeight);
     pane.scrollLeft = clampScrollPosition(scrollState.left, pane.scrollWidth - pane.clientWidth);
+    lastObservedPaneScrollTop = pane.scrollTop;
 
     if (pane.dataset.pane === "bottom-right") {
         syncFrozenPaneScroll("bottom-right", pane);
@@ -1887,10 +1930,14 @@ function updateView(view: ViewState): void {
 }
 
 function renderLoading(message: string): void {
+    queuedViewportStartRow = null;
+    lastObservedPaneScrollTop = null;
     updateView({ kind: "loading", message });
 }
 
 function renderError(message: string): void {
+    queuedViewportStartRow = null;
+    lastObservedPaneScrollTop = null;
     updateView({ kind: "error", message });
 }
 
@@ -2888,6 +2935,12 @@ window.addEventListener("message", (event: MessageEvent<IncomingMessage>) => {
             lastPendingNotification = null;
             lastPendingEditsSyncKey = serializePendingEdits(Array.from(pendingEdits.values()));
             notifyPendingEditState();
+        }
+
+        if (queuedViewportStartRow !== null && queuedViewportStartRow !== message.payload.page.startRow) {
+            const nextViewportStartRow = queuedViewportStartRow;
+            queuedViewportStartRow = null;
+            requestViewportStartRow(nextViewportStartRow);
         }
 
         renderApp({
