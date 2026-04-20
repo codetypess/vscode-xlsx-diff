@@ -159,21 +159,24 @@ function createWorkbookFileView(workbook: WorkbookSnapshot): WorkbookFileView {
     };
 }
 
-function createPageRows(
+function createRowsForRange(
     sheet: SheetSnapshot,
-    currentPage: number,
+    startRow: number,
+    endRow: number,
     selectedCell: EditorSelectedCell | null,
     columns: string[]
 ): EditorGridRowView[] {
-    if (sheet.rowCount === 0) {
+    if (sheet.rowCount === 0 || startRow > endRow) {
         return [];
     }
 
-    const startRow = (currentPage - 1) * DEFAULT_PAGE_SIZE + 1;
-    const endRow = Math.min(sheet.rowCount, currentPage * DEFAULT_PAGE_SIZE);
     const rows: EditorGridRowView[] = [];
 
-    for (let rowNumber = startRow; rowNumber <= endRow; rowNumber += 1) {
+    for (
+        let rowNumber = Math.max(startRow, 1);
+        rowNumber <= Math.min(endRow, sheet.rowCount);
+        rowNumber += 1
+    ) {
         const cells: EditorGridCellView[] = columns.map((columnLabel, columnIndex) => {
             const columnNumber = columnIndex + 1;
             const cellKey = createCellKey(rowNumber, columnNumber);
@@ -199,6 +202,34 @@ function createPageRows(
     }
 
     return rows;
+}
+
+function createPageRows(
+    sheet: SheetSnapshot,
+    currentPage: number,
+    selectedCell: EditorSelectedCell | null,
+    columns: string[]
+): EditorGridRowView[] {
+    return createRowsForRange(
+        sheet,
+        (currentPage - 1) * DEFAULT_PAGE_SIZE + 1,
+        Math.min(sheet.rowCount, currentPage * DEFAULT_PAGE_SIZE),
+        selectedCell,
+        columns
+    );
+}
+
+function createFrozenRows(
+    sheet: SheetSnapshot,
+    selectedCell: EditorSelectedCell | null,
+    columns: string[]
+): EditorGridRowView[] {
+    const frozenRowCount = Math.max(
+        0,
+        Math.min(sheet.freezePane?.rowCount ?? 0, Math.max(sheet.rowCount - 1, 0))
+    );
+
+    return createRowsForRange(sheet, 1, frozenRowCount, selectedCell, columns);
 }
 
 function createSelectionView(
@@ -474,6 +505,7 @@ export function createEditorRenderModel(
                 visibleRowCount: 0,
                 rangeLabel: "No rows",
                 columns: [],
+                frozenRows: [],
                 rows: [],
             },
             sheets: [],
@@ -497,6 +529,7 @@ export function createEditorRenderModel(
         normalizedState.selectedCell,
         columns
     );
+    const frozenRows = createFrozenRows(activeSheet, normalizedState.selectedCell, columns);
     const totalPages = Math.max(
         1,
         Math.ceil(Math.max(activeSheet.rowCount, 1) / DEFAULT_PAGE_SIZE)
@@ -540,6 +573,7 @@ export function createEditorRenderModel(
                     ? "No rows"
                     : `${pageRows[0].rowNumber}-${pageRows[pageRows.length - 1].rowNumber}`,
             columns,
+            frozenRows,
             rows: pageRows,
         },
         sheets,

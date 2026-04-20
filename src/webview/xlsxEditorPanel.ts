@@ -21,6 +21,7 @@ import {
     setEditorCurrentPage,
     setSelectedEditorCell,
 } from "./editorRenderModel";
+import { hasLockedView } from "./viewLock";
 import { XlsxEditorDocument } from "./xlsxEditorDocument";
 import { getWorkbookResourceName } from "../workbook/resourceUri";
 
@@ -1059,11 +1060,7 @@ export class XlsxEditorPanel {
             return;
         }
 
-        const isLocked = Boolean(
-            activeEntry.sheet.freezePane &&
-            (activeEntry.sheet.freezePane.columnCount > 0 ||
-                activeEntry.sheet.freezePane.rowCount > 0)
-        );
+        const isLocked = hasLockedView(activeEntry.sheet.freezePane);
 
         const nextColumnCount = Math.max(
             0,

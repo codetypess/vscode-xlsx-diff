@@ -169,5 +169,9 @@ suite("Editor render model", () => {
             topLeftCell: "B3",
             activePane: "bottomRight",
         });
+        assert.deepStrictEqual(
+            renderModel.page.frozenRows.map((row) => row.rowNumber),
+            [1, 2]
+        );
     });
 });

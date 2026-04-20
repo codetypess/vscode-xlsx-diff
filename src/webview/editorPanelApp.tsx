@@ -9,6 +9,7 @@ import type {
     EditorSheetTabView,
 } from "../core/model/types";
 import { getColumnLabel } from "../core/model/cells";
+import { getFreezePaneCountsForCell, hasLockedView } from "./viewLock";
 
 interface VsCodeApi {
     postMessage(message: OutgoingMessage): void;
@@ -131,6 +132,8 @@ interface SelectionDragState {
     pointerId: number;
 }
 
+type FrozenPaneName = "top-left" | "top-right" | "bottom-left" | "bottom-right";
+
 type ViewState =
     | { kind: "loading"; message: string }
     | { kind: "error"; message: string }
@@ -208,6 +211,8 @@ let setViewState: React.Dispatch<React.SetStateAction<ViewState>> | null = null;
 let tabContextMenu: TabContextMenuState | null = null;
 let selectionDragState: SelectionDragState | null = null;
 let suppressNextCellClick = false;
+let frozenPaneLayoutFrame = 0;
+let isSyncingFrozenPaneScroll = false;
 let searchOptions: SearchOptions = {
     isRegexp: false,
     matchCase: false,
@@ -280,8 +285,76 @@ function getCellTooltip(address: string, value: string, formula: string | null):
     return lines.join("\n");
 }
 
+function getRenderableRows(currentModel: EditorRenderModel | null): EditorGridRowView[] {
+    if (!currentModel) {
+        return [];
+    }
+
+    const rows: EditorGridRowView[] = [];
+    const seenRows = new Set<number>();
+    for (const row of [...currentModel.page.frozenRows, ...currentModel.page.rows]) {
+        if (seenRows.has(row.rowNumber)) {
+            continue;
+        }
+
+        seenRows.add(row.rowNumber);
+        rows.push(row);
+    }
+
+    return rows;
+}
+
+function hasFrozenRowGap(currentModel: EditorRenderModel | null): boolean {
+    if (!currentModel || currentModel.page.frozenRows.length === 0 || currentModel.page.rows.length === 0) {
+        return false;
+    }
+
+    const lastFrozenRow = currentModel.page.frozenRows[currentModel.page.frozenRows.length - 1];
+    const firstPageRow = currentModel.page.rows[0];
+    return Boolean(lastFrozenRow && firstPageRow && lastFrozenRow.rowNumber + 1 < firstPageRow.rowNumber);
+}
+
+function getFirstRenderableRow(currentModel: EditorRenderModel | null): EditorGridRowView | null {
+    return getRenderableRows(currentModel)[0] ?? null;
+}
+
+function getVisibleFreezeCounts(
+    currentModel: EditorRenderModel | null
+): { rowCount: number; columnCount: number } {
+    if (!currentModel || !hasLockedView(currentModel.activeSheet.freezePane)) {
+        return { rowCount: 0, columnCount: 0 };
+    }
+
+    return {
+        rowCount: Math.max(
+            0,
+            Math.min(
+                currentModel.activeSheet.freezePane.rowCount,
+                Math.max(currentModel.activeSheet.rowCount - 1, 0)
+            )
+        ),
+        columnCount: Math.max(
+            0,
+            Math.min(
+                currentModel.activeSheet.freezePane.columnCount,
+                Math.max(currentModel.activeSheet.columnCount - 1, 0)
+            )
+        ),
+    };
+}
+
+function getFrozenRowsForCurrentView(currentModel: EditorRenderModel): EditorGridRowView[] {
+    const { rowCount } = getVisibleFreezeCounts(currentModel);
+    return currentModel.page.frozenRows.filter((row) => row.rowNumber <= rowCount);
+}
+
+function getScrollableRowsForCurrentView(currentModel: EditorRenderModel): EditorGridRowView[] {
+    const { rowCount } = getVisibleFreezeCounts(currentModel);
+    return currentModel.page.rows.filter((row) => row.rowNumber > rowCount);
+}
+
 function getCellView(rowNumber: number, columnNumber: number): EditorGridCellView | null {
-    const row = model?.page.rows.find((item) => item.rowNumber === rowNumber);
+    const row = getRenderableRows(model).find((item) => item.rowNumber === rowNumber);
     return row?.cells[columnNumber - 1] ?? null;
 }
 
@@ -465,9 +538,9 @@ function getViewLockTarget(): { rowCount: number; columnCount: number } | null {
               }
             : null) ??
         getSelectionStartCell() ??
-        (model.page.rows[0]
+        (getFirstRenderableRow(model)
             ? {
-                  rowNumber: model.page.rows[0].rowNumber,
+                  rowNumber: getFirstRenderableRow(model)!.rowNumber,
                   columnNumber: 1,
               }
             : null);
@@ -475,17 +548,11 @@ function getViewLockTarget(): { rowCount: number; columnCount: number } | null {
         return null;
     }
 
-    return {
-        rowCount: Math.max(anchorCell.rowNumber, 0),
-        columnCount: Math.max(anchorCell.columnNumber, 0),
-    };
+    return getFreezePaneCountsForCell(anchorCell);
 }
 
 function isViewLocked(): boolean {
-    return Boolean(
-        model?.activeSheet.freezePane &&
-        (model.activeSheet.freezePane.columnCount > 0 || model.activeSheet.freezePane.rowCount > 0)
-    );
+    return hasLockedView(model?.activeSheet.freezePane);
 }
 
 function canToggleViewLock(): boolean {
@@ -614,7 +681,9 @@ function clampScrollPosition(value: number, maxValue: number): number {
 }
 
 function getPaneScrollState(): ScrollState | null {
-    const pane = document.querySelector<HTMLElement>(".pane__table");
+    const pane =
+        document.querySelector<HTMLElement>('[data-role="grid-scroll-main"]') ??
+        document.querySelector<HTMLElement>(".pane__table");
     if (!pane) {
         return null;
     }
@@ -630,13 +699,19 @@ function restorePaneScrollState(scrollState: ScrollState | null): void {
         return;
     }
 
-    const pane = document.querySelector<HTMLElement>(".pane__table");
+    const pane =
+        document.querySelector<HTMLElement>('[data-role="grid-scroll-main"]') ??
+        document.querySelector<HTMLElement>(".pane__table");
     if (!pane) {
         return;
     }
 
     pane.scrollTop = clampScrollPosition(scrollState.top, pane.scrollHeight - pane.clientHeight);
     pane.scrollLeft = clampScrollPosition(scrollState.left, pane.scrollWidth - pane.clientWidth);
+
+    if (pane.dataset.pane === "bottom-right") {
+        syncFrozenPaneScroll("bottom-right", pane);
+    }
 }
 
 function clearFrozenPaneLayout(): void {
@@ -759,6 +834,210 @@ function applyFrozenPaneLayout(freezePane: EditorRenderModel["activeSheet"]["fre
     }
 }
 
+function getFrozenPaneElement(name: FrozenPaneName): HTMLElement | null {
+    return document.querySelector<HTMLElement>(`[data-pane="${name}"]`);
+}
+
+function syncFrozenPaneScroll(sourcePaneName: FrozenPaneName, sourcePane: HTMLElement): void {
+    if (isSyncingFrozenPaneScroll) {
+        return;
+    }
+
+    const topRightPane = getFrozenPaneElement("top-right");
+    const bottomLeftPane = getFrozenPaneElement("bottom-left");
+    const bottomRightPane = getFrozenPaneElement("bottom-right");
+    if (!bottomRightPane) {
+        return;
+    }
+
+    isSyncingFrozenPaneScroll = true;
+
+    if (sourcePaneName === "top-right") {
+        bottomRightPane.scrollLeft = clampScrollPosition(
+            sourcePane.scrollLeft,
+            bottomRightPane.scrollWidth - bottomRightPane.clientWidth
+        );
+    } else if (sourcePaneName === "bottom-left") {
+        bottomRightPane.scrollTop = clampScrollPosition(
+            sourcePane.scrollTop,
+            bottomRightPane.scrollHeight - bottomRightPane.clientHeight
+        );
+    } else if (sourcePaneName === "bottom-right") {
+        if (topRightPane) {
+            topRightPane.scrollLeft = clampScrollPosition(
+                sourcePane.scrollLeft,
+                topRightPane.scrollWidth - topRightPane.clientWidth
+            );
+        }
+
+        if (bottomLeftPane) {
+            bottomLeftPane.scrollTop = clampScrollPosition(
+                sourcePane.scrollTop,
+                bottomLeftPane.scrollHeight - bottomLeftPane.clientHeight
+            );
+        }
+    }
+
+    requestAnimationFrame(() => {
+        isSyncingFrozenPaneScroll = false;
+    });
+}
+
+function syncFrozenPaneRowHeights(): void {
+    const rowFragments = Array.from(
+        document.querySelectorAll<HTMLTableRowElement>('[data-role="grid-row"]')
+    );
+    if (rowFragments.length === 0) {
+        return;
+    }
+
+    const headerRows = Array.from(
+        document.querySelectorAll<HTMLTableRowElement>('[data-role="grid-header-row"]')
+    );
+    for (const row of [...headerRows, ...rowFragments]) {
+        row.style.height = "";
+    }
+
+    if (headerRows.length > 1) {
+        const headerHeight = Math.ceil(
+            Math.max(...headerRows.map((row) => row.getBoundingClientRect().height))
+        );
+        if (headerHeight > 0) {
+            for (const row of headerRows) {
+                row.style.height = `${headerHeight}px`;
+            }
+        }
+    }
+
+    const rowGroups = new Map<number, HTMLTableRowElement[]>();
+    for (const row of rowFragments) {
+        const rowNumber = Number(row.dataset.rowNumber);
+        if (!Number.isInteger(rowNumber)) {
+            continue;
+        }
+
+        const entries = rowGroups.get(rowNumber) ?? [];
+        entries.push(row);
+        rowGroups.set(rowNumber, entries);
+    }
+
+    for (const rows of rowGroups.values()) {
+        if (rows.length < 2) {
+            continue;
+        }
+
+        const rowHeight = Math.ceil(Math.max(...rows.map((row) => row.getBoundingClientRect().height)));
+        if (rowHeight <= 0) {
+            continue;
+        }
+
+        for (const row of rows) {
+            row.style.height = `${rowHeight}px`;
+        }
+    }
+}
+
+function syncFrozenPaneColumnWidths(): void {
+    const rowHeaderColumns = Array.from(
+        document.querySelectorAll<HTMLElement>('[data-role="grid-row-header-col"]')
+    );
+    const rowHeaderCells = Array.from(
+        document.querySelectorAll<HTMLElement>('th.grid__row-number, td.grid__row-number')
+    );
+    for (const column of rowHeaderColumns) {
+        column.style.width = "";
+    }
+
+    const rowHeaderWidth = Math.ceil(
+        Math.max(56, ...rowHeaderCells.map((cell) => cell.getBoundingClientRect().width), 0)
+    );
+    for (const column of rowHeaderColumns) {
+        column.style.width = `${rowHeaderWidth}px`;
+    }
+
+    const columnElements = Array.from(
+        document.querySelectorAll<HTMLElement>('[data-role="grid-column-col"][data-column-number]')
+    );
+    const widthByColumnNumber = new Map<number, number>();
+
+    for (const column of columnElements) {
+        column.style.width = "";
+    }
+
+    for (const element of document.querySelectorAll<HTMLElement>('[data-column-number]')) {
+        const columnNumber = Number(element.dataset.columnNumber);
+        if (!Number.isInteger(columnNumber)) {
+            continue;
+        }
+
+        const nextWidth = Math.ceil(element.getBoundingClientRect().width);
+        const currentWidth = widthByColumnNumber.get(columnNumber) ?? 0;
+        if (nextWidth > currentWidth) {
+            widthByColumnNumber.set(columnNumber, nextWidth);
+        }
+    }
+
+    for (const column of columnElements) {
+        const columnNumber = Number(column.dataset.columnNumber);
+        if (!Number.isInteger(columnNumber)) {
+            continue;
+        }
+
+        const width = widthByColumnNumber.get(columnNumber);
+        if (!width) {
+            continue;
+        }
+
+        column.style.width = `${width}px`;
+    }
+}
+
+function scheduleFrozenPaneLayoutSync({
+    revealSelection = false,
+}: {
+    revealSelection?: boolean;
+} = {}): void {
+    if (frozenPaneLayoutFrame) {
+        cancelAnimationFrame(frozenPaneLayoutFrame);
+    }
+
+    frozenPaneLayoutFrame = requestAnimationFrame(() => {
+        frozenPaneLayoutFrame = 0;
+        syncFrozenPaneColumnWidths();
+        syncFrozenPaneRowHeights();
+        if (revealSelection) {
+            revealSelectedCell();
+        }
+    });
+}
+
+function getSelectedCellPaneName(
+    currentModel: EditorRenderModel | null,
+    cell: CellPosition
+): FrozenPaneName | null {
+    if (!currentModel || !hasLockedView(currentModel.activeSheet.freezePane)) {
+        return null;
+    }
+
+    const { rowCount, columnCount } = getVisibleFreezeCounts(currentModel);
+    const isFrozenRow = cell.rowNumber <= rowCount;
+    const isFrozenColumn = cell.columnNumber <= columnCount;
+
+    if (isFrozenRow && isFrozenColumn) {
+        return "top-left";
+    }
+
+    if (isFrozenRow) {
+        return "top-right";
+    }
+
+    if (isFrozenColumn) {
+        return "bottom-left";
+    }
+
+    return "bottom-right";
+}
+
 function getStickyPaneInsets(pane: HTMLElement): { top: number; left: number } {
     const paneRect = pane.getBoundingClientRect();
     const headerRow = pane.querySelector("thead tr");
@@ -787,8 +1066,11 @@ function revealSelectedCell(): void {
         return;
     }
 
-    const pane = document.querySelector<HTMLElement>(".pane__table");
-    const target = document.querySelector<HTMLElement>(
+    const paneName = getSelectedCellPaneName(model, selectedCell);
+    const pane =
+        (paneName ? getFrozenPaneElement(paneName) : null) ??
+        document.querySelector<HTMLElement>(".pane__table");
+    const target = pane?.querySelector<HTMLElement>(
         `[data-role="grid-cell"][data-row-number="${selectedCell.rowNumber}"][data-column-number="${selectedCell.columnNumber}"]`
     );
     if (!pane || !target) {
@@ -797,7 +1079,7 @@ function revealSelectedCell(): void {
 
     const paneRect = pane.getBoundingClientRect();
     const elementRect = target.getBoundingClientRect();
-    const stickyInsets = getStickyPaneInsets(pane);
+    const stickyInsets = paneName ? { top: 0, left: 0 } : getStickyPaneInsets(pane);
     let top = pane.scrollTop;
     let left = pane.scrollLeft;
 
@@ -815,6 +1097,10 @@ function revealSelectedCell(): void {
 
     pane.scrollTop = clampScrollPosition(top, pane.scrollHeight - pane.clientHeight);
     pane.scrollLeft = clampScrollPosition(left, pane.scrollWidth - pane.clientWidth);
+
+    if (paneName) {
+        syncFrozenPaneScroll(paneName, pane);
+    }
 }
 
 function isCellVisible(cell: CellPosition | null): boolean {
@@ -822,7 +1108,7 @@ function isCellVisible(cell: CellPosition | null): boolean {
         return false;
     }
 
-    return model.page.rows.some(
+    return getRenderableRows(model).some(
         (row) => row.rowNumber === cell.rowNumber && cell.columnNumber <= row.cells.length
     );
 }
@@ -923,8 +1209,8 @@ function prepareSelectionForRender({
               rowNumber: model.selection.rowNumber,
               columnNumber: model.selection.columnNumber,
           }
-        : model?.page.rows[0]
-          ? { rowNumber: model.page.rows[0].rowNumber, columnNumber: 1 }
+        : getFirstRenderableRow(model)
+          ? { rowNumber: getFirstRenderableRow(model)!.rowNumber, columnNumber: 1 }
           : null;
 
     if (selectedCell) {
@@ -1282,13 +1568,26 @@ function getSelectionBounds(): {
     minColumn: number;
     maxColumn: number;
 } | null {
-    if (!model || model.page.rows.length === 0) {
+    if (!model) {
+        return null;
+    }
+
+    const currentSelectedCell = selectedCell;
+    const boundsRows =
+        hasFrozenRowGap(model) && currentSelectedCell
+            ? getFrozenRowsForCurrentView(model).some(
+                  (row) => row.rowNumber === currentSelectedCell.rowNumber
+              )
+                ? getFrozenRowsForCurrentView(model)
+                : model.page.rows
+            : getRenderableRows(model);
+    if (boundsRows.length === 0) {
         return null;
     }
 
     return {
-        minRow: model.page.rows[0].rowNumber,
-        maxRow: model.page.rows[model.page.rows.length - 1].rowNumber,
+        minRow: boundsRows[0]!.rowNumber,
+        maxRow: boundsRows[boundsRows.length - 1]!.rowNumber,
         minColumn: 1,
         maxColumn: model.page.columns.length,
     };
@@ -1311,9 +1610,10 @@ function ensureSelection(): CellPosition | null {
         return selectedCell;
     }
 
-    if (model?.page.rows[0]) {
+    const firstRow = getFirstRenderableRow(model);
+    if (firstRow) {
         selectedCell = {
-            rowNumber: model.page.rows[0].rowNumber,
+            rowNumber: firstRow.rowNumber,
             columnNumber: 1,
         };
         selectionAnchorCell = selectedCell;
@@ -1584,11 +1884,7 @@ function EditorToolbar({ currentModel }: { currentModel: EditorRenderModel }): R
     const hasPendingEdits = pendingEdits.size > 0 || currentModel.hasPendingEdits;
     const canUndo = undoStack.length > 0 || currentModel.canUndoStructuralEdits;
     const canRedo = redoStack.length > 0 || currentModel.canRedoStructuralEdits;
-    const viewLocked = Boolean(
-        currentModel.activeSheet.freezePane &&
-        (currentModel.activeSheet.freezePane.columnCount > 0 ||
-            currentModel.activeSheet.freezePane.rowCount > 0)
-    );
+    const viewLocked = hasLockedView(currentModel.activeSheet.freezePane);
     const viewLockActionLabel = viewLocked ? STRINGS.unlockView : STRINGS.lockView;
 
     return (
@@ -1717,7 +2013,7 @@ function EditorToolbar({ currentModel }: { currentModel: EditorRenderModel }): R
                 <ToolbarButton
                     actionLabel={viewLockActionLabel}
                     disabled={!canToggleViewLock() || isSaving}
-                    icon={viewLocked ? "codicon-unlock" : "codicon-lock"}
+                    icon={viewLocked ? "codicon-lock" : "codicon-unlock"}
                     iconOnly={true}
                     isActive={viewLocked}
                     onClick={toggleViewLock}
@@ -1879,85 +2175,241 @@ function GridCell({
     );
 }
 
+function GridColumnHeaderCell({
+    currentModel,
+    pendingSummary,
+    columnNumber,
+}: {
+    currentModel: EditorRenderModel;
+    pendingSummary: PendingSummary;
+    columnNumber: number;
+}): React.ReactElement {
+    const hasPending = pendingSummary.columns.has(columnNumber);
+    const isActiveColumn = isColumnInSelection(columnNumber);
+
+    return (
+        <th
+            key={columnNumber}
+            className={classNames([
+                "grid__column",
+                hasPending && "grid__column--diff",
+                hasPending && "grid__column--pending",
+                isActiveColumn && "grid__column--active",
+            ])}
+            data-column-number={columnNumber}
+        >
+            <span className="grid__column-label">
+                {hasPending ? <PendingMarker /> : null}
+                <span>{currentModel.page.columns[columnNumber - 1]}</span>
+            </span>
+        </th>
+    );
+}
+
+function GridRowHeaderCell({
+    pendingSummary,
+    row,
+}: {
+    pendingSummary: PendingSummary;
+    row: EditorGridRowView;
+}): React.ReactElement {
+    const hasPending = pendingSummary.rows.has(row.rowNumber);
+    const isActiveRow = isRowInSelection(row.rowNumber);
+
+    return (
+        <th
+            className={classNames([
+                "grid__row-number",
+                hasPending && "grid__row-number--pending",
+                isActiveRow && "grid__row-number--active",
+            ])}
+            data-role="grid-row-header"
+            data-row-number={row.rowNumber}
+        >
+            <span className="grid__row-label">
+                {hasPending ? <PendingMarker /> : null}
+                <span>{row.rowNumber}</span>
+            </span>
+        </th>
+    );
+}
+
+function GridSectionTable({
+    currentModel,
+    pendingSummary,
+    rows,
+    columnNumbers,
+    includeHeader,
+    includeRowHeaders,
+    split = false,
+}: {
+    currentModel: EditorRenderModel;
+    pendingSummary: PendingSummary;
+    rows: EditorGridRowView[];
+    columnNumbers: number[];
+    includeHeader: boolean;
+    includeRowHeaders: boolean;
+    split?: boolean;
+}): React.ReactElement | null {
+    const hasHeader = includeHeader && (includeRowHeaders || columnNumbers.length > 0);
+    const hasBody = rows.length > 0 && (includeRowHeaders || columnNumbers.length > 0);
+    if (!hasHeader && !hasBody) {
+        return null;
+    }
+
+    return (
+        <table className={classNames(["grid", split && "grid--split"])}>
+            <colgroup>
+                {includeRowHeaders ? <col data-role="grid-row-header-col" /> : null}
+                {columnNumbers.map((columnNumber) => (
+                    <col
+                        key={columnNumber}
+                        data-column-number={columnNumber}
+                        data-role="grid-column-col"
+                    />
+                ))}
+            </colgroup>
+            {includeHeader ? (
+                <thead>
+                    <tr data-role="grid-header-row">
+                        {includeRowHeaders ? <th className="grid__row-number">#</th> : null}
+                        {columnNumbers.map((columnNumber) => (
+                            <GridColumnHeaderCell
+                                key={columnNumber}
+                                currentModel={currentModel}
+                                pendingSummary={pendingSummary}
+                                columnNumber={columnNumber}
+                            />
+                        ))}
+                    </tr>
+                </thead>
+            ) : null}
+            <tbody>
+                {rows.map((row) => (
+                    <tr
+                        key={`${row.rowNumber}:${includeRowHeaders ? "row" : "cell"}:${columnNumbers[0] ?? 0}`}
+                        data-role="grid-row"
+                        data-row-number={row.rowNumber}
+                    >
+                        {includeRowHeaders ? (
+                            <GridRowHeaderCell pendingSummary={pendingSummary} row={row} />
+                        ) : null}
+                        {columnNumbers.map((columnNumber) => (
+                            <GridCell
+                                key={`${row.rowNumber}:${columnNumber}`}
+                                cell={row.cells[columnNumber - 1]!}
+                                columnNumber={columnNumber}
+                                row={row}
+                            />
+                        ))}
+                    </tr>
+                ))}
+            </tbody>
+        </table>
+    );
+}
+
 function EditorTable({
     currentModel,
     pendingSummary,
 }: {
     currentModel: EditorRenderModel;
     pendingSummary: PendingSummary;
-}): React.ReactElement {
+}): React.ReactElement | null {
     if (currentModel.page.rows.length === 0) {
         return <div className="empty-table">{STRINGS.noRowsAvailable}</div>;
     }
 
     return (
-        <table className="grid">
-            <thead>
-                <tr>
-                    <th className="grid__row-number">#</th>
-                    {currentModel.page.columns.map((column, index) => {
-                        const columnNumber = index + 1;
-                        const hasPending = pendingSummary.columns.has(columnNumber);
-                        const isActiveColumn = isColumnInSelection(columnNumber);
+        <GridSectionTable
+            currentModel={currentModel}
+            pendingSummary={pendingSummary}
+            rows={currentModel.page.rows}
+            columnNumbers={currentModel.page.columns.map((_, index) => index + 1)}
+            includeHeader={true}
+            includeRowHeaders={true}
+        />
+    );
+}
 
-                        return (
-                            <th
-                                key={columnNumber}
-                                className={classNames([
-                                    "grid__column",
-                                    hasPending && "grid__column--diff",
-                                    hasPending && "grid__column--pending",
-                                    isActiveColumn && "grid__column--active",
-                                ])}
-                                data-column-number={columnNumber}
-                            >
-                                <span className="grid__column-label">
-                                    {hasPending ? <PendingMarker /> : null}
-                                    <span>{column}</span>
-                                </span>
-                            </th>
-                        );
-                    })}
-                </tr>
-            </thead>
-            <tbody>
-                {currentModel.page.rows.map((row) => {
-                    const hasPending = pendingSummary.rows.has(row.rowNumber);
-                    const isActiveRow = isRowInSelection(row.rowNumber);
+function FrozenEditorTable({
+    currentModel,
+    pendingSummary,
+}: {
+    currentModel: EditorRenderModel;
+    pendingSummary: PendingSummary;
+}): React.ReactElement {
+    const { columnCount } = getVisibleFreezeCounts(currentModel);
+    const frozenRows = getFrozenRowsForCurrentView(currentModel);
+    const scrollableRows = getScrollableRowsForCurrentView(currentModel);
+    const frozenColumnNumbers = Array.from({ length: columnCount }, (_, index) => index + 1);
+    const scrollColumnNumbers = Array.from(
+        { length: Math.max(currentModel.page.columns.length - columnCount, 0) },
+        (_, index) => columnCount + index + 1
+    );
 
-                    return (
-                        <tr
-                            key={row.rowNumber}
-                            data-role="grid-row"
-                            data-row-number={row.rowNumber}
-                        >
-                            <th
-                                className={classNames([
-                                    "grid__row-number",
-                                    hasPending && "grid__row-number--pending",
-                                    isActiveRow && "grid__row-number--active",
-                                ])}
-                                data-role="grid-row-header"
-                                data-row-number={row.rowNumber}
-                            >
-                                <span className="grid__row-label">
-                                    {hasPending ? <PendingMarker /> : null}
-                                    <span>{row.rowNumber}</span>
-                                </span>
-                            </th>
-                            {row.cells.map((cell, index) => (
-                                <GridCell
-                                    key={`${row.rowNumber}:${index + 1}`}
-                                    cell={cell}
-                                    columnNumber={index + 1}
-                                    row={row}
-                                />
-                            ))}
-                        </tr>
-                    );
-                })}
-            </tbody>
-        </table>
+    return (
+        <div className="pane__table pane__table--split">
+            <div className="freeze-grid">
+                <div className="freeze-grid__pane freeze-grid__pane--top-left" data-pane="top-left">
+                    <GridSectionTable
+                        currentModel={currentModel}
+                        pendingSummary={pendingSummary}
+                        rows={frozenRows}
+                        columnNumbers={frozenColumnNumbers}
+                        includeHeader={true}
+                        includeRowHeaders={true}
+                        split={true}
+                    />
+                </div>
+                <div
+                    className="freeze-grid__pane freeze-grid__pane--top-right"
+                    data-pane="top-right"
+                    onScroll={(event) => syncFrozenPaneScroll("top-right", event.currentTarget)}
+                >
+                    <GridSectionTable
+                        currentModel={currentModel}
+                        pendingSummary={pendingSummary}
+                        rows={frozenRows}
+                        columnNumbers={scrollColumnNumbers}
+                        includeHeader={true}
+                        includeRowHeaders={false}
+                        split={true}
+                    />
+                </div>
+                <div
+                    className="freeze-grid__pane freeze-grid__pane--bottom-left"
+                    data-pane="bottom-left"
+                    onScroll={(event) => syncFrozenPaneScroll("bottom-left", event.currentTarget)}
+                >
+                    <GridSectionTable
+                        currentModel={currentModel}
+                        pendingSummary={pendingSummary}
+                        rows={scrollableRows}
+                        columnNumbers={frozenColumnNumbers}
+                        includeHeader={false}
+                        includeRowHeaders={true}
+                        split={true}
+                    />
+                </div>
+                <div
+                    className="freeze-grid__pane freeze-grid__pane--bottom-right"
+                    data-pane="bottom-right"
+                    data-role="grid-scroll-main"
+                    onScroll={(event) => syncFrozenPaneScroll("bottom-right", event.currentTarget)}
+                >
+                    <GridSectionTable
+                        currentModel={currentModel}
+                        pendingSummary={pendingSummary}
+                        rows={scrollableRows}
+                        columnNumbers={scrollColumnNumbers}
+                        includeHeader={false}
+                        includeRowHeaders={false}
+                        split={true}
+                    />
+                </div>
+            </div>
+        </div>
     );
 }
 
@@ -1970,6 +2422,9 @@ function EditorPane({
 }): React.ReactElement {
     const selectedAddress = getSelectedCellAddress();
     const selectedCellTitle = `${STRINGS.selectedCell}: ${selectedAddress}`;
+    const viewLocked = hasLockedView(currentModel.activeSheet.freezePane);
+    const hasVisibleRows =
+        currentModel.page.rows.length > 0 || currentModel.page.frozenRows.length > 0;
 
     return (
         <section className="pane pane--single">
@@ -1990,9 +2445,17 @@ function EditorPane({
                     </span>
                 ) : null}
             </div>
-            <div className="pane__table">
-                <EditorTable currentModel={currentModel} pendingSummary={pendingSummary} />
-            </div>
+            {!hasVisibleRows ? (
+                <div className="pane__table">
+                    <div className="empty-table">{STRINGS.noRowsAvailable}</div>
+                </div>
+            ) : viewLocked ? (
+                <FrozenEditorTable currentModel={currentModel} pendingSummary={pendingSummary} />
+            ) : (
+                <div className="pane__table">
+                    <EditorTable currentModel={currentModel} pendingSummary={pendingSummary} />
+                </div>
+            )}
         </section>
     );
 }
@@ -2121,14 +2584,27 @@ function Status({
 
 function EditorApp({ view }: { view: Extract<ViewState, { kind: "app" }> }): React.ReactElement {
     const pendingSummary = getPendingSummary(view.model.activeSheet.key);
+    const viewLocked = hasLockedView(view.model.activeSheet.freezePane);
 
     React.useLayoutEffect(() => {
         restorePaneScrollState(view.scrollState);
+        if (viewLocked) {
+            clearFrozenPaneLayout();
+            scheduleFrozenPaneLayoutSync({ revealSelection: view.revealSelection });
+            return;
+        }
+
         applyFrozenPaneLayout(view.model.activeSheet.freezePane);
         if (view.revealSelection) {
             revealSelectedCell();
         }
-    }, [view.model.activeSheet.freezePane, view.revision, view.revealSelection, view.scrollState]);
+    }, [
+        viewLocked,
+        view.model.activeSheet.freezePane,
+        view.revision,
+        view.revealSelection,
+        view.scrollState,
+    ]);
 
     return (
         <div className="app app--editor">
@@ -2173,6 +2649,12 @@ function Root(): React.ReactElement {
 
     return <Shell kind={view.kind} message={view.message} />;
 }
+
+window.addEventListener("resize", () => {
+    if (hasLockedView(model?.activeSheet.freezePane)) {
+        scheduleFrozenPaneLayoutSync();
+    }
+});
 
 window.addEventListener("message", (event: MessageEvent<IncomingMessage>) => {
     const message = event.data;

@@ -84,6 +84,7 @@ export interface EditorPageSlice {
     visibleRowCount: number;
     rangeLabel: string;
     columns: string[];
+    frozenRows: EditorGridRowView[];
     rows: EditorGridRowView[];
 }
 
