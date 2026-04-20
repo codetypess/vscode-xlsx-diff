@@ -219,6 +219,7 @@ let suppressNextCellClick = false;
 let frozenPaneLayoutFrame = 0;
 let isSyncingFrozenPaneScroll = false;
 let lastRequestedViewportStartRow: number | null = null;
+const rowHeightByNumber = new Map<number, number>();
 let searchOptions: SearchOptions = {
     isRegexp: false,
     matchCase: false,
@@ -312,13 +313,30 @@ function getRenderableRows(currentModel: EditorRenderModel | null): EditorGridRo
     return rows;
 }
 
+function getApproximateRowHeight(rowNumber: number): number {
+    return rowHeightByNumber.get(rowNumber) ?? ESTIMATED_EDITOR_ROW_HEIGHT;
+}
+
+function getApproximateRowSpanHeight(startRow: number, endRow: number): number {
+    if (endRow < startRow) {
+        return 0;
+    }
+
+    let height = 0;
+    for (let rowNumber = Math.max(startRow, 1); rowNumber <= endRow; rowNumber += 1) {
+        height += getApproximateRowHeight(rowNumber);
+    }
+
+    return height;
+}
+
 function getTopSpacerHeight(currentModel: EditorRenderModel): number {
     const baseRow = getScrollableViewportBaseRow(currentModel);
     if (currentModel.page.startRow <= baseRow) {
         return 0;
     }
 
-    return Math.max(0, (currentModel.page.startRow - baseRow) * ESTIMATED_EDITOR_ROW_HEIGHT);
+    return getApproximateRowSpanHeight(baseRow, currentModel.page.startRow - 1);
 }
 
 function getBottomSpacerHeight(currentModel: EditorRenderModel): number {
@@ -326,10 +344,7 @@ function getBottomSpacerHeight(currentModel: EditorRenderModel): number {
         return 0;
     }
 
-    return Math.max(
-        0,
-        (currentModel.page.totalRows - currentModel.page.endRow) * ESTIMATED_EDITOR_ROW_HEIGHT
-    );
+    return getApproximateRowSpanHeight(currentModel.page.endRow + 1, currentModel.page.totalRows);
 }
 
 function getScrollableViewportBaseRow(currentModel: EditorRenderModel | null): number {
@@ -822,6 +837,28 @@ function restorePaneScrollState(scrollState: ScrollState | null): void {
     }
 }
 
+function cacheRenderedRowHeights(): void {
+    const nextHeights = new Map<number, number>();
+
+    for (const row of document.querySelectorAll<HTMLTableRowElement>('[data-role="grid-row"]')) {
+        const rowNumber = Number(row.dataset.rowNumber);
+        if (!Number.isInteger(rowNumber)) {
+            continue;
+        }
+
+        const rowHeight = Math.ceil(row.getBoundingClientRect().height);
+        if (rowHeight <= 0) {
+            continue;
+        }
+
+        nextHeights.set(rowNumber, Math.max(nextHeights.get(rowNumber) ?? 0, rowHeight));
+    }
+
+    for (const [rowNumber, rowHeight] of nextHeights) {
+        rowHeightByNumber.set(rowNumber, rowHeight);
+    }
+}
+
 function clearFrozenPaneLayout(): void {
     for (const element of document.querySelectorAll<HTMLElement>(
         ".grid__column--frozen, .grid__row-number--frozen, .grid__cell--frozen-row, .grid__cell--frozen-column, .grid__cell--frozen-intersection"
@@ -1113,6 +1150,7 @@ function scheduleFrozenPaneLayoutSync({
         frozenPaneLayoutFrame = 0;
         syncFrozenPaneColumnWidths();
         syncFrozenPaneRowHeights();
+        cacheRenderedRowHeights();
         if (revealSelection) {
             revealSelectedCell();
         }
@@ -2742,6 +2780,7 @@ function EditorApp({ view }: { view: Extract<ViewState, { kind: "app" }> }): Rea
         }
 
         applyFrozenPaneLayout(view.model.activeSheet.freezePane);
+        cacheRenderedRowHeights();
         if (view.revealSelection) {
             revealSelectedCell();
         }
