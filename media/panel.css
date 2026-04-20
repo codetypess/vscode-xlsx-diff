@@ -461,9 +461,15 @@ body {
 }
 
 .grid--split thead th,
-.grid--split th:first-child,
-.grid--split td:first-child {
+.grid--split th:first-child {
     position: static;
+    top: auto;
+    left: auto;
+    z-index: auto;
+}
+
+.grid--split td:first-child {
+    position: relative;
     top: auto;
     left: auto;
     z-index: auto;
