@@ -112,6 +112,28 @@ suite("Workbook edit writer", () => {
         }
     });
 
+    test("loads explicit row heights and column widths from workbook snapshots", async () => {
+        const { Workbook } = await import("fastxlsx");
+        const tempDirectory = await mkdtemp(path.join(os.tmpdir(), "xlsx-diff-"));
+
+        try {
+            const workbookPath = path.join(tempDirectory, "dimensions.xlsx");
+            const workbook = Workbook.create("Sheet1");
+            const sheet = workbook.getSheet("Sheet1");
+            sheet.cell("B2").setValue("sized");
+            sheet.setRowHeight(2, 24);
+            sheet.setColumnWidth(2, 18.5);
+            await workbook.save(workbookPath);
+
+            const snapshot = await loadWorkbookSnapshot(workbookPath);
+
+            assert.deepStrictEqual(snapshot.sheets[0]?.rowHeights, { 2: 24 });
+            assert.deepStrictEqual(snapshot.sheets[0]?.columnWidths, { 2: 18.5 });
+        } finally {
+            await rm(tempDirectory, { recursive: true, force: true });
+        }
+    });
+
     test("tracks sheet edits as pending document state", () => {
         const document = new XlsxEditorDocument(vscode.Uri.file("/tmp/workbook-edits.xlsx"));
 

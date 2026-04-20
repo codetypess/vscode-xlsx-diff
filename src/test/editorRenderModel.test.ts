@@ -30,7 +30,11 @@ function createSheet(
     rowCount = 1,
     columnCount = 1,
     mergedRanges: string[] = [],
-    freezePane: SheetSnapshot["freezePane"] = null
+    freezePane: SheetSnapshot["freezePane"] = null,
+    dimensions: {
+        rowHeights?: Record<number, number>;
+        columnWidths?: Record<number, number>;
+    } = {}
 ): SheetSnapshot {
     return {
         name,
@@ -38,6 +42,8 @@ function createSheet(
         columnCount,
         mergedRanges,
         freezePane,
+        rowHeights: { ...(dimensions.rowHeights ?? {}) },
+        columnWidths: { ...(dimensions.columnWidths ?? {}) },
         cells: Object.fromEntries(cells.map((cell) => [cell.key, cell])),
         signature: `${name}-signature`,
     };
@@ -192,6 +198,31 @@ suite("Editor render model", () => {
             renderModel.page.frozenRows.map((row) => row.rowNumber),
             [1, 2]
         );
+    });
+
+    test("surfaces explicit row heights and column widths for the active sheet", () => {
+        const workbook = createWorkbook({}, [
+            createSheet(
+                "Sheet1",
+                [createCell(3, 3, "value")],
+                10,
+                10,
+                [],
+                null,
+                {
+                    rowHeights: { 2: 24 },
+                    columnWidths: { 3: 18.5 },
+                }
+            ),
+        ]);
+
+        const renderModel = createEditorRenderModel(
+            workbook,
+            createInitialEditorPanelState(workbook)
+        );
+
+        assert.deepStrictEqual(renderModel.activeSheet.rowHeights, { 2: 24 });
+        assert.deepStrictEqual(renderModel.activeSheet.columnWidths, { 3: 18.5 });
     });
 
     test("keeps frozen rows separate when virtualizing a locked sheet", () => {

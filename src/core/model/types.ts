@@ -32,6 +32,8 @@ export interface SheetSnapshot {
     columnCount: number;
     mergedRanges: string[];
     freezePane?: SheetFreezePaneSnapshot | null;
+    rowHeights: Record<number, number>;
+    columnWidths: Record<number, number>;
     cells: Record<string, CellSnapshot>;
     signature: string;
 }
@@ -115,6 +117,8 @@ export interface EditorActiveSheetView {
     mergedRangeCount: number;
     hasMergedRanges: boolean;
     freezePane: SheetFreezePaneSnapshot | null;
+    rowHeights: Record<number, number>;
+    columnWidths: Record<number, number>;
 }
 
 export interface EditorWorkbookSummary {

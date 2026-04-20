@@ -221,6 +221,7 @@ let isSyncingFrozenPaneScroll = false;
 let lastRequestedViewportStartRow: number | null = null;
 let queuedViewportStartRow: number | null = null;
 let lastObservedPaneScrollTop: number | null = null;
+let lastMeasuredSheetKey: string | null = null;
 const rowHeightByNumber = new Map<number, number>();
 let searchOptions: SearchOptions = {
     isRegexp: false,
@@ -232,6 +233,18 @@ const ESTIMATED_EDITOR_ROW_HEIGHT = 28;
 
 function getViewportShiftRowCount(): number {
     return Math.max(1, DEFAULT_EDITOR_WINDOW_SIZE - DEFAULT_EDITOR_WINDOW_OVERSCAN * 2);
+}
+
+function convertPointsToPixels(points: number): number {
+    return Math.max(1, (points * 96) / 72);
+}
+
+function convertExcelColumnWidthToPixels(width: number): number {
+    const maxDigitWidth = 7;
+    return Math.max(
+        1,
+        Math.trunc(((256 * width + Math.trunc(128 / maxDigitWidth)) / 256) * maxDigitWidth)
+    );
 }
 
 function getPendingEditKey(sheetKey: string, rowNumber: number, columnNumber: number): string {
@@ -319,21 +332,97 @@ function getRenderableRows(currentModel: EditorRenderModel | null): EditorGridRo
     return rows;
 }
 
-function getApproximateRowHeight(rowNumber: number): number {
+function getExplicitRowHeightPixels(
+    currentModel: EditorRenderModel | null,
+    rowNumber: number
+): number | null {
+    const rowHeight = currentModel?.activeSheet.rowHeights[rowNumber];
+    return typeof rowHeight === "number" && rowHeight > 0 ? convertPointsToPixels(rowHeight) : null;
+}
+
+function getExplicitColumnWidthPixels(
+    currentModel: EditorRenderModel | null,
+    columnNumber: number
+): number | null {
+    const columnWidth = currentModel?.activeSheet.columnWidths[columnNumber];
+    return typeof columnWidth === "number" && columnWidth > 0
+        ? convertExcelColumnWidthToPixels(columnWidth)
+        : null;
+}
+
+function getApproximateRowHeight(
+    currentModel: EditorRenderModel | null,
+    rowNumber: number
+): number {
+    const explicitRowHeight = getExplicitRowHeightPixels(currentModel, rowNumber);
+    if (explicitRowHeight !== null) {
+        return explicitRowHeight;
+    }
+
     return rowHeightByNumber.get(rowNumber) ?? ESTIMATED_EDITOR_ROW_HEIGHT;
 }
 
-function getApproximateRowSpanHeight(startRow: number, endRow: number): number {
+function getApproximateRowSpanHeight(
+    currentModel: EditorRenderModel | null,
+    startRow: number,
+    endRow: number
+): number {
     if (endRow < startRow) {
         return 0;
     }
 
     let height = 0;
     for (let rowNumber = Math.max(startRow, 1); rowNumber <= endRow; rowNumber += 1) {
-        height += getApproximateRowHeight(rowNumber);
+        height += getApproximateRowHeight(currentModel, rowNumber);
     }
 
     return height;
+}
+
+function getVisibleScrollableRowRange(
+    currentModel: EditorRenderModel,
+    pane: HTMLElement
+): { firstVisibleRow: number; lastVisibleRow: number } {
+    const rows = currentModel.page.rows;
+    const baseRow = getScrollableViewportBaseRow(currentModel);
+    if (rows.length === 0) {
+        return {
+            firstVisibleRow: baseRow,
+            lastVisibleRow: baseRow,
+        };
+    }
+
+    let rowIndex = 0;
+    let offsetWithinWindow = Math.max(0, pane.scrollTop - getTopSpacerHeight(currentModel));
+    while (rowIndex < rows.length) {
+        const rowHeight = getApproximateRowHeight(currentModel, rows[rowIndex].rowNumber);
+        if (offsetWithinWindow < rowHeight) {
+            break;
+        }
+
+        offsetWithinWindow -= rowHeight;
+        rowIndex += 1;
+    }
+
+    const clampedRowIndex = Math.min(rowIndex, rows.length - 1);
+    const firstVisibleRow = rows[clampedRowIndex]?.rowNumber ?? rows[0].rowNumber;
+    let lastVisibleRow = firstVisibleRow;
+    let remainingHeight = pane.clientHeight + offsetWithinWindow;
+
+    for (let visibleRowIndex = clampedRowIndex; visibleRowIndex < rows.length; visibleRowIndex += 1) {
+        const row = rows[visibleRowIndex];
+        if (!row) {
+            break;
+        }
+
+        lastVisibleRow = row.rowNumber;
+        remainingHeight -= getApproximateRowHeight(currentModel, row.rowNumber);
+        if (remainingHeight <= 0) {
+            break;
+        }
+    }
+
+    return { firstVisibleRow, lastVisibleRow };
 }
 
 function getTopSpacerHeight(currentModel: EditorRenderModel): number {
@@ -342,7 +431,7 @@ function getTopSpacerHeight(currentModel: EditorRenderModel): number {
         return 0;
     }
 
-    return getApproximateRowSpanHeight(baseRow, currentModel.page.startRow - 1);
+    return getApproximateRowSpanHeight(currentModel, baseRow, currentModel.page.startRow - 1);
 }
 
 function getBottomSpacerHeight(currentModel: EditorRenderModel): number {
@@ -350,7 +439,11 @@ function getBottomSpacerHeight(currentModel: EditorRenderModel): number {
         return 0;
     }
 
-    return getApproximateRowSpanHeight(currentModel.page.endRow + 1, currentModel.page.totalRows);
+    return getApproximateRowSpanHeight(
+        currentModel,
+        currentModel.page.endRow + 1,
+        currentModel.page.totalRows
+    );
 }
 
 function getScrollableViewportBaseRow(currentModel: EditorRenderModel | null): number {
@@ -433,15 +526,7 @@ function maybeRequestViewportForScroll(pane: HTMLElement): void {
     const baseRow = getScrollableViewportBaseRow(model);
     const currentStartRow = model.page.startRow;
     const currentEndRow = model.page.endRow;
-    const visibleRowCount = Math.max(
-        1,
-        Math.ceil(pane.clientHeight / ESTIMATED_EDITOR_ROW_HEIGHT)
-    );
-    const firstVisibleRow = Math.max(
-        baseRow,
-        Math.floor(pane.scrollTop / ESTIMATED_EDITOR_ROW_HEIGHT) + baseRow
-    );
-    const lastVisibleRow = Math.min(model.page.totalRows, firstVisibleRow + visibleRowCount - 1);
+    const { firstVisibleRow, lastVisibleRow } = getVisibleScrollableRowRange(model, pane);
     const previousScrollTop = lastObservedPaneScrollTop;
     lastObservedPaneScrollTop = pane.scrollTop;
     if (previousScrollTop === null || pane.scrollTop === previousScrollTop) {
@@ -880,6 +965,11 @@ function restorePaneScrollState(scrollState: ScrollState | null): void {
     }
 }
 
+function getExplicitPixelSize(element: HTMLElement, name: "explicitWidth" | "explicitHeight"): number | null {
+    const value = Number(element.dataset[name]);
+    return Number.isFinite(value) && value > 0 ? value : null;
+}
+
 function cacheRenderedRowHeights(): void {
     const nextHeights = new Map<number, number>();
 
@@ -1109,12 +1199,14 @@ function syncFrozenPaneRowHeights(): void {
         rowGroups.set(rowNumber, entries);
     }
 
-    for (const rows of rowGroups.values()) {
-        if (rows.length < 2) {
-            continue;
-        }
-
-        const rowHeight = Math.ceil(Math.max(...rows.map((row) => row.getBoundingClientRect().height)));
+    for (const [rowNumber, rows] of rowGroups) {
+        const explicitRowHeight = rows.reduce<number | null>((height, row) => {
+            const nextHeight = getExplicitPixelSize(row, "explicitHeight");
+            return nextHeight !== null ? nextHeight : height;
+        }, null);
+        const rowHeight =
+            explicitRowHeight ??
+            Math.ceil(Math.max(...rows.map((row) => row.getBoundingClientRect().height)));
         if (rowHeight <= 0) {
             continue;
         }
@@ -1147,14 +1239,27 @@ function syncFrozenPaneColumnWidths(): void {
         document.querySelectorAll<HTMLElement>('[data-role="grid-column-col"][data-column-number]')
     );
     const widthByColumnNumber = new Map<number, number>();
+    const explicitWidthByColumnNumber = new Map<number, number>();
 
     for (const column of columnElements) {
+        const columnNumber = Number(column.dataset.columnNumber);
+        if (Number.isInteger(columnNumber)) {
+            const explicitWidth = getExplicitPixelSize(column, "explicitWidth");
+            if (explicitWidth !== null) {
+                explicitWidthByColumnNumber.set(columnNumber, explicitWidth);
+            }
+        }
+
         column.style.width = "";
     }
 
     for (const element of document.querySelectorAll<HTMLElement>('[data-column-number]')) {
         const columnNumber = Number(element.dataset.columnNumber);
         if (!Number.isInteger(columnNumber)) {
+            continue;
+        }
+
+        if (explicitWidthByColumnNumber.has(columnNumber)) {
             continue;
         }
 
@@ -1171,7 +1276,8 @@ function syncFrozenPaneColumnWidths(): void {
             continue;
         }
 
-        const width = widthByColumnNumber.get(columnNumber);
+        const width =
+            explicitWidthByColumnNumber.get(columnNumber) ?? widthByColumnNumber.get(columnNumber);
         if (!width) {
             continue;
         }
@@ -1932,12 +2038,16 @@ function updateView(view: ViewState): void {
 function renderLoading(message: string): void {
     queuedViewportStartRow = null;
     lastObservedPaneScrollTop = null;
+    lastMeasuredSheetKey = null;
+    rowHeightByNumber.clear();
     updateView({ kind: "loading", message });
 }
 
 function renderError(message: string): void {
     queuedViewportStartRow = null;
     lastObservedPaneScrollTop = null;
+    lastMeasuredSheetKey = null;
+    rowHeightByNumber.clear();
     updateView({ kind: "error", message });
 }
 
@@ -2379,6 +2489,15 @@ function GridColumnHeaderCell({
 }): React.ReactElement {
     const hasPending = pendingSummary.columns.has(columnNumber);
     const isActiveColumn = isColumnInSelection(columnNumber);
+    const explicitColumnWidth = getExplicitColumnWidthPixels(currentModel, columnNumber);
+    const explicitColumnWidthStyle =
+        explicitColumnWidth === null
+            ? undefined
+            : {
+                  width: `${explicitColumnWidth}px`,
+                  minWidth: `${explicitColumnWidth}px`,
+                  maxWidth: `${explicitColumnWidth}px`,
+              };
 
     return (
         <th
@@ -2390,6 +2509,7 @@ function GridColumnHeaderCell({
                 isActiveColumn && "grid__column--active",
             ])}
             data-column-number={columnNumber}
+            style={explicitColumnWidthStyle}
         >
             <span className="grid__column-label">
                 {hasPending ? <PendingMarker /> : null}
@@ -2458,13 +2578,25 @@ function GridSectionTable({
         <table className={classNames(["grid", split && "grid--split"])}>
             <colgroup>
                 {includeRowHeaders ? <col data-role="grid-row-header-col" /> : null}
-                {columnNumbers.map((columnNumber) => (
-                    <col
-                        key={columnNumber}
-                        data-column-number={columnNumber}
-                        data-role="grid-column-col"
-                    />
-                ))}
+                {columnNumbers.map((columnNumber) => {
+                    const explicitColumnWidth = getExplicitColumnWidthPixels(
+                        currentModel,
+                        columnNumber
+                    );
+                    return (
+                        <col
+                            key={columnNumber}
+                            data-column-number={columnNumber}
+                            data-explicit-width={explicitColumnWidth ?? undefined}
+                            data-role="grid-column-col"
+                            style={
+                                explicitColumnWidth === null
+                                    ? undefined
+                                    : { width: `${explicitColumnWidth}px` }
+                            }
+                        />
+                    );
+                })}
             </colgroup>
             {includeHeader ? (
                 <thead>
@@ -2491,25 +2623,34 @@ function GridSectionTable({
                         />
                     </tr>
                 ) : null}
-                {rows.map((row) => (
-                    <tr
-                        key={`${row.rowNumber}:${includeRowHeaders ? "row" : "cell"}:${columnNumbers[0] ?? 0}`}
-                        data-role="grid-row"
-                        data-row-number={row.rowNumber}
-                    >
-                        {includeRowHeaders ? (
-                            <GridRowHeaderCell pendingSummary={pendingSummary} row={row} />
-                        ) : null}
-                        {columnNumbers.map((columnNumber) => (
-                            <GridCell
-                                key={`${row.rowNumber}:${columnNumber}`}
-                                cell={row.cells[columnNumber - 1]!}
-                                columnNumber={columnNumber}
-                                row={row}
-                            />
-                        ))}
-                    </tr>
-                ))}
+                {rows.map((row) => {
+                    const explicitRowHeight = getExplicitRowHeightPixels(currentModel, row.rowNumber);
+                    return (
+                        <tr
+                            key={`${row.rowNumber}:${includeRowHeaders ? "row" : "cell"}:${columnNumbers[0] ?? 0}`}
+                            data-explicit-height={explicitRowHeight ?? undefined}
+                            data-role="grid-row"
+                            data-row-number={row.rowNumber}
+                            style={
+                                explicitRowHeight === null
+                                    ? undefined
+                                    : { height: `${explicitRowHeight}px` }
+                            }
+                        >
+                            {includeRowHeaders ? (
+                                <GridRowHeaderCell pendingSummary={pendingSummary} row={row} />
+                            ) : null}
+                            {columnNumbers.map((columnNumber) => (
+                                <GridCell
+                                    key={`${row.rowNumber}:${columnNumber}`}
+                                    cell={row.cells[columnNumber - 1]!}
+                                    columnNumber={columnNumber}
+                                    row={row}
+                                />
+                            ))}
+                        </tr>
+                    );
+                })}
                 {bottomSpacerHeight > 0 ? (
                     <tr aria-hidden="true" className="grid__spacer-row">
                         <td
@@ -2904,6 +3045,12 @@ window.addEventListener("message", (event: MessageEvent<IncomingMessage>) => {
     }
 
     if (message.type === "render") {
+        if (message.payload.activeSheet.key !== lastMeasuredSheetKey) {
+            rowHeightByNumber.clear();
+            lastMeasuredSheetKey = message.payload.activeSheet.key;
+            lastObservedPaneScrollTop = null;
+        }
+
         model = message.payload;
         lastRequestedViewportStartRow = message.payload.page.startRow;
         isSaving = false;
