@@ -106,17 +106,22 @@ function clampPage(sheet: SheetSnapshot, currentPage: number): number {
     return Math.min(Math.max(currentPage, 1), totalPages);
 }
 
+function getMinViewportStartRow(sheet: SheetSnapshot): number {
+    if (sheet.rowCount <= 0) {
+        return 1;
+    }
+
+    return Math.min((sheet.freezePane?.rowCount ?? 0) + 1, sheet.rowCount);
+}
+
 function clampViewportStartRow(sheet: SheetSnapshot, viewportStartRow: number): number {
     if (sheet.rowCount <= 0) {
         return 1;
     }
 
-    const maxStartRow = Math.max(sheet.rowCount - DEFAULT_EDITOR_WINDOW_SIZE + 1, 1);
-    return Math.min(Math.max(Math.trunc(viewportStartRow), 1), maxStartRow);
-}
-
-function isSheetViewLocked(sheet: SheetSnapshot): boolean {
-    return Boolean(sheet.freezePane && (sheet.freezePane.columnCount > 0 || sheet.freezePane.rowCount > 0));
+    const minStartRow = getMinViewportStartRow(sheet);
+    const maxStartRow = Math.max(sheet.rowCount - DEFAULT_EDITOR_WINDOW_SIZE + 1, minStartRow);
+    return Math.min(Math.max(Math.trunc(viewportStartRow), minStartRow), maxStartRow);
 }
 
 function clampSelectedCell(
@@ -223,26 +228,15 @@ function createRowsForRange(
 
 function createPageRows(
     sheet: SheetSnapshot,
-    currentPage: number,
     viewportStartRow: number,
     selectedCell: EditorSelectedCell | null,
     columns: string[]
 ): EditorGridRowView[] {
-    if (!isSheetViewLocked(sheet)) {
-        const startRow = clampViewportStartRow(sheet, viewportStartRow);
-        return createRowsForRange(
-            sheet,
-            startRow,
-            Math.min(sheet.rowCount, startRow + DEFAULT_EDITOR_WINDOW_SIZE - 1),
-            selectedCell,
-            columns
-        );
-    }
-
+    const startRow = clampViewportStartRow(sheet, viewportStartRow);
     return createRowsForRange(
         sheet,
-        getPageStartRow(currentPage),
-        Math.min(sheet.rowCount, currentPage * DEFAULT_PAGE_SIZE),
+        startRow,
+        Math.min(sheet.rowCount, startRow + DEFAULT_EDITOR_WINDOW_SIZE - 1),
         selectedCell,
         columns
     );
@@ -519,17 +513,30 @@ export function setSelectedEditorCell(
         return normalizedState;
     }
 
+    const frozenRowCount = Math.max(
+        0,
+        Math.min(sheetEntry.sheet.freezePane?.rowCount ?? 0, sheetEntry.sheet.rowCount)
+    );
+    let viewportStartRow = normalizedState.viewportStartRow;
+    if (selectedCell.rowNumber > frozenRowCount) {
+        if (
+            selectedCell.rowNumber < normalizedState.viewportStartRow ||
+            selectedCell.rowNumber >=
+                normalizedState.viewportStartRow + DEFAULT_EDITOR_WINDOW_SIZE
+        ) {
+            viewportStartRow = clampViewportStartRow(
+                sheetEntry.sheet,
+                getPageStartRow(getCellPage(selectedCell.rowNumber))
+            );
+        }
+    }
+
     return normalizeEditorPanelState(
         workbook,
         {
             ...normalizedState,
             currentPage: getCellPage(selectedCell.rowNumber),
-            viewportStartRow:
-                selectedCell.rowNumber < normalizedState.viewportStartRow ||
-                selectedCell.rowNumber >=
-                    normalizedState.viewportStartRow + DEFAULT_EDITOR_WINDOW_SIZE
-                    ? getPageStartRow(getCellPage(selectedCell.rowNumber))
-                    : normalizedState.viewportStartRow,
+            viewportStartRow,
             selectedCell,
         },
         sheetEntriesOverride
@@ -599,7 +606,6 @@ export function createEditorRenderModel(
     );
     const pageRows = createPageRows(
         activeSheet,
-        normalizedState.currentPage,
         normalizedState.viewportStartRow,
         normalizedState.selectedCell,
         columns

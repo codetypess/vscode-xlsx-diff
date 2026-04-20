@@ -1,7 +1,11 @@
 import * as React from "react";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
-import { DEFAULT_EDITOR_WINDOW_OVERSCAN, DEFAULT_PAGE_SIZE } from "../constants";
+import {
+    DEFAULT_EDITOR_WINDOW_OVERSCAN,
+    DEFAULT_EDITOR_WINDOW_SIZE,
+    DEFAULT_PAGE_SIZE,
+} from "../constants";
 import type {
     EditorGridCellView,
     EditorGridRowView,
@@ -309,19 +313,16 @@ function getRenderableRows(currentModel: EditorRenderModel | null): EditorGridRo
 }
 
 function getTopSpacerHeight(currentModel: EditorRenderModel): number {
-    if (hasLockedView(currentModel.activeSheet.freezePane) || currentModel.page.startRow <= 1) {
+    const baseRow = getScrollableViewportBaseRow(currentModel);
+    if (currentModel.page.startRow <= baseRow) {
         return 0;
     }
 
-    return Math.max(0, (currentModel.page.startRow - 1) * ESTIMATED_EDITOR_ROW_HEIGHT);
+    return Math.max(0, (currentModel.page.startRow - baseRow) * ESTIMATED_EDITOR_ROW_HEIGHT);
 }
 
 function getBottomSpacerHeight(currentModel: EditorRenderModel): number {
-    if (
-        hasLockedView(currentModel.activeSheet.freezePane) ||
-        currentModel.page.endRow <= 0 ||
-        currentModel.page.endRow >= currentModel.page.totalRows
-    ) {
+    if (currentModel.page.endRow <= 0 || currentModel.page.endRow >= currentModel.page.totalRows) {
         return 0;
     }
 
@@ -331,20 +332,52 @@ function getBottomSpacerHeight(currentModel: EditorRenderModel): number {
     );
 }
 
+function getScrollableViewportBaseRow(currentModel: EditorRenderModel | null): number {
+    if (!currentModel) {
+        return 1;
+    }
+
+    return Math.max(
+        1,
+        hasLockedView(currentModel.activeSheet.freezePane)
+            ? Math.min(
+                  (currentModel.activeSheet.freezePane?.rowCount ?? 0) + 1,
+                  currentModel.page.totalRows
+              )
+            : 1
+    );
+}
+
+function getScrollableViewportRowCount(currentModel: EditorRenderModel | null): number {
+    if (!currentModel) {
+        return 0;
+    }
+
+    return Math.max(
+        0,
+        currentModel.page.totalRows - getScrollableViewportBaseRow(currentModel) + 1
+    );
+}
+
 function getMaxViewportStartRow(currentModel: EditorRenderModel | null): number {
     if (!currentModel) {
         return 1;
     }
 
-    return Math.max(currentModel.page.totalRows - DEFAULT_PAGE_SIZE + 1, 1);
+    const baseRow = getScrollableViewportBaseRow(currentModel);
+    return Math.max(currentModel.page.totalRows - DEFAULT_EDITOR_WINDOW_SIZE + 1, baseRow);
 }
 
 function requestViewportStartRow(rowNumber: number): void {
-    if (!model || hasLockedView(model.activeSheet.freezePane)) {
+    if (!model) {
         return;
     }
 
-    const clampedRowNumber = Math.max(1, Math.min(rowNumber, getMaxViewportStartRow(model)));
+    const minRowNumber = getScrollableViewportBaseRow(model);
+    const clampedRowNumber = Math.max(
+        minRowNumber,
+        Math.min(rowNumber, getMaxViewportStartRow(model))
+    );
     if (clampedRowNumber === model.page.startRow || clampedRowNumber === lastRequestedViewportStartRow) {
         return;
     }
@@ -354,17 +387,21 @@ function requestViewportStartRow(rowNumber: number): void {
 }
 
 function maybeRequestViewportForScroll(pane: HTMLElement): void {
-    if (!model || hasLockedView(model.activeSheet.freezePane)) {
+    if (!model) {
         return;
     }
 
-    if (model.page.totalRows <= model.page.visibleRowCount) {
+    if (getScrollableViewportRowCount(model) <= model.page.visibleRowCount) {
         return;
     }
 
-    const firstVisibleRow = Math.max(1, Math.floor(pane.scrollTop / ESTIMATED_EDITOR_ROW_HEIGHT) + 1);
+    const baseRow = getScrollableViewportBaseRow(model);
+    const firstVisibleRow = Math.max(
+        baseRow,
+        Math.floor(pane.scrollTop / ESTIMATED_EDITOR_ROW_HEIGHT) + baseRow
+    );
     const nextStartRow = Math.max(
-        1,
+        baseRow,
         Math.min(getMaxViewportStartRow(model), firstVisibleRow - DEFAULT_EDITOR_WINDOW_OVERSCAN)
     );
 
@@ -2437,6 +2474,8 @@ function FrozenEditorTable({
     const { columnCount } = getVisibleFreezeCounts(currentModel);
     const frozenRows = getFrozenRowsForCurrentView(currentModel);
     const scrollableRows = getScrollableRowsForCurrentView(currentModel);
+    const topSpacerHeight = getTopSpacerHeight(currentModel);
+    const bottomSpacerHeight = getBottomSpacerHeight(currentModel);
     const frozenColumnNumbers = Array.from({ length: columnCount }, (_, index) => index + 1);
     const scrollColumnNumbers = Array.from(
         { length: Math.max(currentModel.page.columns.length - columnCount, 0) },
@@ -2475,7 +2514,10 @@ function FrozenEditorTable({
                 <div
                     className="freeze-grid__pane freeze-grid__pane--bottom-left"
                     data-pane="bottom-left"
-                    onScroll={(event) => syncFrozenPaneScroll("bottom-left", event.currentTarget)}
+                    onScroll={(event) => {
+                        syncFrozenPaneScroll("bottom-left", event.currentTarget);
+                        maybeRequestViewportForScroll(event.currentTarget);
+                    }}
                 >
                     <GridSectionTable
                         currentModel={currentModel}
@@ -2485,13 +2527,18 @@ function FrozenEditorTable({
                         includeHeader={false}
                         includeRowHeaders={true}
                         split={true}
+                        topSpacerHeight={topSpacerHeight}
+                        bottomSpacerHeight={bottomSpacerHeight}
                     />
                 </div>
                 <div
                     className="freeze-grid__pane freeze-grid__pane--bottom-right"
                     data-pane="bottom-right"
                     data-role="grid-scroll-main"
-                    onScroll={(event) => syncFrozenPaneScroll("bottom-right", event.currentTarget)}
+                    onScroll={(event) => {
+                        syncFrozenPaneScroll("bottom-right", event.currentTarget);
+                        maybeRequestViewportForScroll(event.currentTarget);
+                    }}
                 >
                     <GridSectionTable
                         currentModel={currentModel}
@@ -2501,6 +2548,8 @@ function FrozenEditorTable({
                         includeHeader={false}
                         includeRowHeaders={false}
                         split={true}
+                        topSpacerHeight={topSpacerHeight}
+                        bottomSpacerHeight={bottomSpacerHeight}
                     />
                 </div>
             </div>
