@@ -1,5 +1,6 @@
 import * as assert from "assert";
 import * as vscode from "vscode";
+import { getGitWorkbookResourceInfo } from "../git/resourceInfo";
 import {
     describeGitResourceRef,
     getScmWorkbookDiffUrisFromEditorUris,
@@ -57,6 +58,23 @@ suite("Workbook resource URIs", () => {
 
         assert.strictEqual(isWorkbookResourceUri(gitUri), true);
         assert.strictEqual(getWorkbookResourcePathLabel(gitUri), "/tmp/item.xlsx");
+    });
+
+    test("extracts git adapter resource info without changing rewritten paths", () => {
+        const gitUri = vscode.Uri.from({
+            scheme: "git",
+            path: "/tmp/item.xlsx.git",
+            query: JSON.stringify({
+                path: "/tmp/item.xlsx",
+                ref: "",
+            }),
+        });
+
+        const info = getGitWorkbookResourceInfo(gitUri);
+        assert.strictEqual(info?.provider, "git");
+        assert.strictEqual(info?.uri, gitUri);
+        assert.strictEqual(info?.resourcePath, "/tmp/item.xlsx");
+        assert.strictEqual(info?.ref, "");
     });
 
     test("filters scm workbook diffs to non-file originals", () => {
