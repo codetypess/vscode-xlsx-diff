@@ -1608,6 +1608,149 @@ function syncSelectedCellToHost(): void {
     });
 }
 
+function isSimpleSelection(
+    cell: CellPosition | null,
+    anchorCell: CellPosition | null = selectionAnchorCell
+): boolean {
+    if (!cell) {
+        return anchorCell === null;
+    }
+
+    const anchor = anchorCell ?? cell;
+    return anchor.rowNumber === cell.rowNumber && anchor.columnNumber === cell.columnNumber;
+}
+
+function getRenderedCellElements(
+    cell: Pick<CellPosition, "rowNumber" | "columnNumber"> | null
+): HTMLElement[] {
+    if (!cell) {
+        return [];
+    }
+
+    return Array.from(
+        document.querySelectorAll<HTMLElement>(
+            `[data-role="grid-cell"][data-row-number="${cell.rowNumber}"][data-column-number="${cell.columnNumber}"]`
+        )
+    );
+}
+
+function setRenderedPrimarySelectionState(
+    cell: Pick<CellPosition, "rowNumber" | "columnNumber"> | null,
+    isSelected: boolean
+): void {
+    for (const element of getRenderedCellElements(cell)) {
+        element.classList.toggle("grid__cell--selected-range", isSelected);
+        element.classList.toggle("grid__cell--selected", isSelected);
+        element.classList.toggle("grid__cell--selection-top", isSelected);
+        element.classList.toggle("grid__cell--selection-right", isSelected);
+        element.classList.toggle("grid__cell--selection-bottom", isSelected);
+        element.classList.toggle("grid__cell--selection-left", isSelected);
+        element.setAttribute("aria-selected", String(isSelected));
+    }
+}
+
+function setRenderedRowSelectionState(rowNumber: number, isActive: boolean): void {
+    for (const header of document.querySelectorAll<HTMLElement>(
+        `[data-role="grid-row-header"][data-row-number="${rowNumber}"]`
+    )) {
+        header.classList.toggle("grid__row-number--active", isActive);
+    }
+
+    for (const cell of document.querySelectorAll<HTMLElement>(
+        `[data-role="grid-cell"][data-row-number="${rowNumber}"]`
+    )) {
+        cell.classList.toggle("grid__cell--active-row", isActive);
+    }
+}
+
+function setRenderedColumnSelectionState(columnNumber: number, isActive: boolean): void {
+    for (const header of document.querySelectorAll<HTMLElement>(
+        `th.grid__column[data-column-number="${columnNumber}"]`
+    )) {
+        header.classList.toggle("grid__column--active", isActive);
+    }
+
+    for (const cell of document.querySelectorAll<HTMLElement>(
+        `[data-role="grid-cell"][data-column-number="${columnNumber}"]`
+    )) {
+        cell.classList.toggle("grid__cell--active-column", isActive);
+    }
+}
+
+function updateSelectedCellAddressBadge(): void {
+    const badge = document.querySelector<HTMLElement>('[data-role="selected-cell-address"]');
+    if (!badge) {
+        return;
+    }
+
+    const address = getSelectedCellAddress();
+    badge.textContent = address;
+    badge.title = `${STRINGS.selectedCell}: ${address}`;
+}
+
+function syncLocalSimpleSelectionDom(
+    previousCell: CellPosition | null,
+    nextCell: CellPosition | null
+): void {
+    if (
+        previousCell &&
+        (!nextCell ||
+            previousCell.rowNumber !== nextCell.rowNumber ||
+            previousCell.columnNumber !== nextCell.columnNumber)
+    ) {
+        setRenderedPrimarySelectionState(previousCell, false);
+    }
+
+    if (previousCell && (!nextCell || previousCell.rowNumber !== nextCell.rowNumber)) {
+        setRenderedRowSelectionState(previousCell.rowNumber, false);
+    }
+
+    if (previousCell && (!nextCell || previousCell.columnNumber !== nextCell.columnNumber)) {
+        setRenderedColumnSelectionState(previousCell.columnNumber, false);
+    }
+
+    if (
+        nextCell &&
+        (!previousCell ||
+            previousCell.rowNumber !== nextCell.rowNumber ||
+            previousCell.columnNumber !== nextCell.columnNumber)
+    ) {
+        setRenderedPrimarySelectionState(nextCell, true);
+    }
+
+    if (nextCell && (!previousCell || previousCell.rowNumber !== nextCell.rowNumber)) {
+        setRenderedRowSelectionState(nextCell.rowNumber, true);
+    }
+
+    if (nextCell && (!previousCell || previousCell.columnNumber !== nextCell.columnNumber)) {
+        setRenderedColumnSelectionState(nextCell.columnNumber, true);
+    }
+
+    updateSelectedCellAddressBadge();
+}
+
+function canUseLockedViewLocalSelectionUpdate(
+    nextCell: CellPosition | null,
+    {
+        reveal,
+        anchorCell,
+    }: {
+        reveal: boolean;
+        anchorCell: CellPosition | null;
+    }
+): boolean {
+    return Boolean(
+        nextCell &&
+            model &&
+            hasLockedView(model.activeSheet.freezePane) &&
+            !editingCell &&
+            !reveal &&
+            isCellVisible(nextCell) &&
+            !hasExpandedSelection() &&
+            isSimpleSelection(nextCell, anchorCell)
+    );
+}
+
 function setSelectedCellLocal(
     nextCell: CellPosition | null,
     {
@@ -1620,13 +1763,25 @@ function setSelectedCellLocal(
         anchorCell?: CellPosition | null;
     } = {}
 ): void {
+    const previousCell = selectedCell;
+    const nextAnchorCell = nextCell ? (anchorCell ?? nextCell) : null;
+    const canUseLocalUpdate = canUseLockedViewLocalSelectionUpdate(nextCell, {
+        reveal,
+        anchorCell: nextAnchorCell,
+    });
+
     selectedCell = nextCell;
-    selectionAnchorCell = nextCell ? (anchorCell ?? nextCell) : null;
+    selectionAnchorCell = nextAnchorCell;
     suppressAutoSelection = nextCell === null;
     clearBrowserTextSelection();
 
     if (syncHost) {
         syncSelectedCellToHost();
+    }
+
+    if (canUseLocalUpdate) {
+        syncLocalSimpleSelectionDom(previousCell, nextCell);
+        return;
     }
 
     renderApp({ commitEditing: false, revealSelection: reveal });
