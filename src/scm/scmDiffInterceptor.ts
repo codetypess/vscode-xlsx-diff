@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { WEBVIEW_TYPE_DIFF_PANEL, WEBVIEW_TYPE_EDITOR_PANEL } from "../constants";
 import { resolveUnknownGitWorkbookDiff } from "../git/scmDiffFallback";
+import { resolveUnknownSvnWorkbookDiff } from "../svn/scmDiffFallback";
 import { XlsxDiffPanel } from "../webview/diffPanel";
 import {
     getScmWorkbookDiffUrisFromEditorUris,
@@ -13,6 +14,41 @@ import { describeUri } from "./uriDescription";
 interface CustomWorkbookEditorTab {
     tab: vscode.Tab;
     uri: vscode.Uri;
+}
+
+function isWorkbookRelatedTab(tab: vscode.Tab): boolean {
+    if (tab.input instanceof vscode.TabInputTextDiff) {
+        const textDiffInput = tab.input as vscode.TabInputTextDiff;
+        const { original, modified } = textDiffInput;
+        const originalIsWorkbook = isWorkbookResourceUri(original);
+        const modifiedIsWorkbook = isWorkbookResourceUri(modified);
+        return (
+            original.scheme === "git" ||
+            original.scheme === "svn" ||
+            modified.scheme === "git" ||
+            modified.scheme === "svn" ||
+            originalIsWorkbook ||
+            modifiedIsWorkbook
+        );
+    }
+
+    const resourceUri = getTabResourceUri(tab.input);
+    return isWorkbookResourceUri(resourceUri);
+}
+
+function describeTab(tab: vscode.Tab): string {
+    const tabSummary = `label="${tab.label}" active=${tab.isActive} preview=${tab.isPreview} dirty=${tab.isDirty} kind=${getTabInputKind(tab.input)} column=${tab.group.viewColumn}`;
+
+    if (tab.input instanceof vscode.TabInputTextDiff) {
+        return `${tabSummary} original=${describeUri(tab.input.original)} modified=${describeUri(tab.input.modified)}`;
+    }
+
+    const resourceUri = getTabResourceUri(tab.input);
+    if (resourceUri) {
+        return `${tabSummary} resource=${describeUri(resourceUri)}`;
+    }
+
+    return tabSummary;
 }
 
 function getTabKey(tab: vscode.Tab): string {
@@ -145,11 +181,17 @@ export function registerScmWorkbookDiffInterceptor(extensionUri: vscode.Uri): vs
     ): Promise<void> => {
         const requestKey = `${diffUris.original.toString()}::${diffUris.modified.toString()}`;
         if (inFlight.has(requestKey)) {
+            log(
+                `skip diff panel open; request already in flight original=${describeUri(diffUris.original)} modified=${describeUri(diffUris.modified)}`
+            );
             return;
         }
 
         inFlight.add(requestKey);
         try {
+            log(
+                `open diff panel original=${describeUri(diffUris.original)} modified=${describeUri(diffUris.modified)} viewColumn=${viewColumn} tabsToClose=${tabsToClose.length}`
+            );
             const openPanelPromise = XlsxDiffPanel.create(
                 extensionUri,
                 diffUris.original,
@@ -169,7 +211,10 @@ export function registerScmWorkbookDiffInterceptor(extensionUri: vscode.Uri): vs
     const maybeResolveUnknownScmDiff = async (
         tab: vscode.Tab
     ): Promise<{ original: vscode.Uri; modified: vscode.Uri } | undefined> => {
-        return resolveUnknownGitWorkbookDiff(tab, log);
+        return (
+            (await resolveUnknownGitWorkbookDiff(tab, log)) ??
+            (await resolveUnknownSvnWorkbookDiff(tab, log))
+        );
     };
 
     const maybeInterceptTab = async (tab: vscode.Tab | undefined): Promise<void> => {
@@ -198,9 +243,15 @@ export function registerScmWorkbookDiffInterceptor(extensionUri: vscode.Uri): vs
                     return;
                 }
 
+                if (isWorkbookRelatedTab(tab)) {
+                    log(`no scm workbook diff match for tab: ${describeTab(tab)}`);
+                }
                 return;
             }
 
+            log(
+                `direct scm diff match original=${describeUri(diffUris.original)} modified=${describeUri(diffUris.modified)}`
+            );
             markTabsPendingClose([tab]);
             await openDiffPanel(diffUris, tab.group.viewColumn, [tab]);
         } finally {
@@ -228,6 +279,8 @@ export function registerScmWorkbookDiffInterceptor(extensionUri: vscode.Uri): vs
                 const shouldInterceptPair =
                     recentCustomEditorTabs.has(firstTab.uri.toString()) ||
                     recentCustomEditorTabs.has(secondTab.uri.toString()) ||
+                    firstTab.uri.scheme !== "file" ||
+                    secondTab.uri.scheme !== "file" ||
                     firstTab.tab.isPreview ||
                     secondTab.tab.isPreview;
                 if (!shouldInterceptPair) {
@@ -289,13 +342,14 @@ export function registerScmWorkbookDiffInterceptor(extensionUri: vscode.Uri): vs
             void maybeInterceptTab(tab);
         }
 
-        if (sawCustomWorkbookEditorTab) {
+        if (sawCustomWorkbookEditorTab || getCustomWorkbookEditorTabs().length >= 2) {
             void maybeInterceptCustomEditorPair();
             scheduleCustomEditorPairScan();
         }
     };
 
     void maybeInterceptTab(vscode.window.tabGroups.activeTabGroup.activeTab);
+    void maybeInterceptCustomEditorPair();
 
     return vscode.Disposable.from(
         outputChannel,

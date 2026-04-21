@@ -1,15 +1,31 @@
 import * as assert from "assert";
 import * as vscode from "vscode";
 import { getGitWorkbookResourceInfo } from "../git/resourceInfo";
+import { getSvnWorkbookResourceInfo } from "../svn/resourceInfo";
 import {
     describeGitResourceRef,
     getScmWorkbookDiffUrisFromEditorUris,
     getScmWorkbookDiffUrisFromTabInput,
     getWorkbookDiffUrisFromTabInput,
+    getWorkbookResourceDetail,
     getWorkbookResourcePathLabel,
     getWorkbookResourceTimeLabel,
     isWorkbookResourceUri,
 } from "../workbook/resourceUri";
+
+function createSvnShowUri(resourcePath = "/tmp/item.xlsx", ref: string | number = "HEAD") {
+    return vscode.Uri.from({
+        scheme: "svn",
+        path: resourcePath,
+        query: JSON.stringify({
+            action: "SHOW",
+            fsPath: resourcePath,
+            extra: {
+                ref,
+            },
+        }),
+    });
+}
 
 suite("Workbook resource URIs", () => {
     test("recognizes xlsx diff tab inputs", () => {
@@ -77,6 +93,38 @@ suite("Workbook resource URIs", () => {
         assert.strictEqual(info?.ref, "");
     });
 
+    test("recognizes svn workbook resources from svn-scm show uris", async () => {
+        const svnUri = createSvnShowUri();
+
+        const info = getSvnWorkbookResourceInfo(svnUri);
+        assert.strictEqual(info?.provider, "svn");
+        assert.strictEqual(info?.uri, svnUri);
+        assert.strictEqual(info?.resourcePath, "/tmp/item.xlsx");
+        assert.strictEqual(info?.ref, "HEAD");
+        assert.strictEqual(isWorkbookResourceUri(svnUri), true);
+        assert.strictEqual(getWorkbookResourcePathLabel(svnUri), "/tmp/item.xlsx (HEAD)");
+        assert.match(getWorkbookResourceTimeLabel(svnUri) ?? "", /SVN .*HEAD$/);
+
+        const detail = await getWorkbookResourceDetail(svnUri);
+        assert.match(detail?.value ?? "", /SVN .*HEAD$/);
+        assert.ok(["Source", "来源"].includes(detail?.label ?? ""));
+    });
+
+    test("ignores unsupported svn virtual resources", () => {
+        const svnPatchUri = vscode.Uri.from({
+            scheme: "svn",
+            path: "/tmp/item.xlsx",
+            query: JSON.stringify({
+                action: "PATCH",
+                fsPath: "/tmp/item.xlsx",
+                extra: {},
+            }),
+        });
+
+        assert.strictEqual(getSvnWorkbookResourceInfo(svnPatchUri), undefined);
+        assert.strictEqual(isWorkbookResourceUri(svnPatchUri), false);
+    });
+
     test("filters scm workbook diffs to non-file originals", () => {
         const scmInput = new vscode.TabInputTextDiff(
             vscode.Uri.from({
@@ -90,13 +138,36 @@ suite("Workbook resource URIs", () => {
             vscode.Uri.file("/tmp/item.xlsx")
         );
 
+        const svnInput = new vscode.TabInputTextDiff(
+            createSvnShowUri(),
+            vscode.Uri.file("/tmp/item.xlsx")
+        );
+
         const fileDiffInput = new vscode.TabInputTextDiff(
             vscode.Uri.file("/tmp/left.xlsx"),
             vscode.Uri.file("/tmp/right.xlsx")
         );
 
         assert.ok(getScmWorkbookDiffUrisFromTabInput(scmInput));
+        assert.ok(getScmWorkbookDiffUrisFromTabInput(svnInput));
         assert.strictEqual(getScmWorkbookDiffUrisFromTabInput(fileDiffInput), undefined);
+    });
+
+    test("normalizes svn local diffs from HEAD to BASE", () => {
+        const svnHeadUri = createSvnShowUri("/tmp/item.xlsx", "HEAD");
+        const fileUri = vscode.Uri.file("/tmp/item.xlsx");
+        const diffInput = new vscode.TabInputTextDiff(svnHeadUri, fileUri);
+
+        const tabDiffUris = getScmWorkbookDiffUrisFromTabInput(diffInput);
+        const editorDiffUris = getScmWorkbookDiffUrisFromEditorUris(fileUri, svnHeadUri);
+
+        assert.strictEqual(getSvnWorkbookResourceInfo(tabDiffUris?.original ?? fileUri)?.ref, "BASE");
+        assert.strictEqual(tabDiffUris?.modified.toString(), fileUri.toString());
+        assert.strictEqual(
+            getSvnWorkbookResourceInfo(editorDiffUris?.original ?? fileUri)?.ref,
+            "BASE"
+        );
+        assert.strictEqual(editorDiffUris?.modified.toString(), fileUri.toString());
     });
 
     test("pairs scm custom editor resources for the same workbook", () => {
@@ -114,6 +185,15 @@ suite("Workbook resource URIs", () => {
             original: gitUri,
             modified: fileUri,
         });
+    });
+
+    test("pairs svn custom editor resources for the same workbook", () => {
+        const svnUri = createSvnShowUri();
+        const fileUri = vscode.Uri.file("/tmp/item.xlsx");
+
+        const diffUris = getScmWorkbookDiffUrisFromEditorUris(fileUri, svnUri);
+        assert.strictEqual(getSvnWorkbookResourceInfo(diffUris?.original ?? fileUri)?.ref, "BASE");
+        assert.strictEqual(diffUris?.modified.toString(), fileUri.toString());
     });
 
     test("pairs scm custom editor resources for git index diffs", () => {

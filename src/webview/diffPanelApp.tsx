@@ -861,18 +861,6 @@ function Toolbar({ currentModel }: { currentModel: RenderModel }): React.ReactEl
                     }}
                 />
                 <ToolbarButton
-                    disabled={!currentModel.canPrevPage}
-                    icon="codicon-arrow-left"
-                    label={STRINGS.prevPage}
-                    onClick={() => vscode.postMessage({ type: "prevPage" })}
-                />
-                <ToolbarButton
-                    disabled={!currentModel.canNextPage}
-                    icon="codicon-arrow-right"
-                    label={STRINGS.nextPage}
-                    onClick={() => vscode.postMessage({ type: "nextPage" })}
-                />
-                <ToolbarButton
                     icon="codicon-arrow-swap"
                     label={STRINGS.swap}
                     onClick={() => vscode.postMessage({ type: "swap" })}

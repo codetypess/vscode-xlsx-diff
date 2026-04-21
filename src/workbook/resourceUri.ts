@@ -5,6 +5,8 @@ import {
     getScmWorkbookResourceDetail,
     getScmWorkbookResourceInfo,
     getScmWorkbookResourceTimeLabel,
+    hasScmWorkbookResourceProvider,
+    normalizeScmWorkbookDiffUris,
     type WorkbookResourceDetail,
 } from "../scm/resourceInfo";
 
@@ -24,7 +26,12 @@ export function isWorkbookResourceUri(uri: vscode.Uri | undefined): uri is vscod
         return false;
     }
 
-    const resourcePath = getUriPathForExtension(uri);
+    const scmInfo = getScmWorkbookResourceInfo(uri);
+    if (!scmInfo && hasScmWorkbookResourceProvider(uri.scheme)) {
+        return false;
+    }
+
+    const resourcePath = scmInfo?.resourcePath ?? getUriPathForExtension(uri);
     const normalizedPath = resourcePath.toLowerCase().endsWith(".git")
         ? resourcePath.slice(0, -".git".length)
         : resourcePath;
@@ -102,7 +109,7 @@ export function getScmWorkbookDiffUrisFromTabInput(
         return undefined;
     }
 
-    return diffUris;
+    return normalizeScmWorkbookDiffUris(diffUris);
 }
 
 function normalizeResourcePathForComparison(resourcePath: string): string {
@@ -141,22 +148,22 @@ export function getScmWorkbookDiffUrisFromEditorUris(
     }
 
     if (firstUri.scheme === "file") {
-        return { original: secondUri, modified: firstUri };
+        return normalizeScmWorkbookDiffUris({ original: secondUri, modified: firstUri });
     }
 
     if (secondUri.scheme === "file") {
-        return { original: firstUri, modified: secondUri };
+        return normalizeScmWorkbookDiffUris({ original: firstUri, modified: secondUri });
     }
 
     const firstRef = getScmWorkbookResourceRef(firstUri);
     const secondRef = getScmWorkbookResourceRef(secondUri);
     if (firstRef === "" && secondRef !== "") {
-        return { original: secondUri, modified: firstUri };
+        return normalizeScmWorkbookDiffUris({ original: secondUri, modified: firstUri });
     }
 
     if (secondRef === "" && firstRef !== "") {
-        return { original: firstUri, modified: secondUri };
+        return normalizeScmWorkbookDiffUris({ original: firstUri, modified: secondUri });
     }
 
-    return { original: firstUri, modified: secondUri };
+    return normalizeScmWorkbookDiffUris({ original: firstUri, modified: secondUri });
 }

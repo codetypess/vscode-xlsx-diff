@@ -1,10 +1,16 @@
 import * as vscode from "vscode";
 import { gitWorkbookResourceProvider } from "../git/resourceInfo";
+import { svnWorkbookResourceProvider } from "../svn/resourceInfo";
 
 export interface WorkbookResourceDetail {
     label: string;
     value: string;
     titleValue?: string;
+}
+
+export interface WorkbookDiffUris {
+    original: vscode.Uri;
+    modified: vscode.Uri;
 }
 
 export interface ScmWorkbookResourceInfo {
@@ -21,14 +27,20 @@ export interface ScmWorkbookResourceProvider {
     getResourceDetail?(
         info: ScmWorkbookResourceInfo
     ): Promise<WorkbookResourceDetail | undefined>;
+    normalizeDiffUris?(diffUris: WorkbookDiffUris): WorkbookDiffUris;
 }
 
 const scmWorkbookResourceProviders: readonly ScmWorkbookResourceProvider[] = [
     gitWorkbookResourceProvider,
+    svnWorkbookResourceProvider,
 ];
 
 function getProvider(providerName: string): ScmWorkbookResourceProvider | undefined {
     return scmWorkbookResourceProviders.find((provider) => provider.scheme === providerName);
+}
+
+export function hasScmWorkbookResourceProvider(scheme: string): boolean {
+    return scmWorkbookResourceProviders.some((provider) => provider.scheme === scheme);
 }
 
 export function getScmWorkbookResourceInfo(
@@ -58,4 +70,14 @@ export async function getScmWorkbookResourceDetail(
     info: ScmWorkbookResourceInfo
 ): Promise<WorkbookResourceDetail | undefined> {
     return getProvider(info.provider)?.getResourceDetail?.(info);
+}
+
+export function normalizeScmWorkbookDiffUris(diffUris: WorkbookDiffUris): WorkbookDiffUris {
+    let normalizedDiffUris = diffUris;
+
+    for (const provider of scmWorkbookResourceProviders) {
+        normalizedDiffUris = provider.normalizeDiffUris?.(normalizedDiffUris) ?? normalizedDiffUris;
+    }
+
+    return normalizedDiffUris;
 }

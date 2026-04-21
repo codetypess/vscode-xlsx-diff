@@ -1,6 +1,6 @@
 # XLSX Diff
 
-A VS Code extension for visually comparing and editing `.xlsx` workbooks — directly inside the editor, with first-class Git / SCM integration.
+A VS Code extension for visually comparing and editing `.xlsx` workbooks — directly inside the editor, with first-class Git / SVN / SCM integration.
 
 ![XLSX Diff screenshot](./media/preview.png)
 
@@ -9,7 +9,7 @@ A VS Code extension for visually comparing and editing `.xlsx` workbooks — dir
 ## Features
 
 - **Side-by-side spreadsheet diff** — view left and right workbooks in a clean table layout with colour-coded differences (modified / added / removed).
-- **Git & SCM integration** — click any `.xlsx` file in the Source Control panel to open the diff view automatically.
+- **Git, SVN & SCM integration** — click any `.xlsx` file in the Source Control panel to open the diff view automatically.
 - **Sheet tabs** — navigate between multiple worksheets; tabs show diff markers when a sheet contains changes.
 - **Row filters** — toggle between *All rows*, *Diff rows only*, or *Same rows only*.
 - **Diff navigation** — jump to the previous / next changed cell with a single click or keyboard shortcut.
@@ -54,18 +54,18 @@ In the editor view you can:
 
 Open the **Source Control** panel, then click any `.xlsx` file listed under *Changes*. The XLSX diff view opens automatically instead of VS Code's built-in binary diff.
 
+Git support works with VS Code's built-in Git extension. SVN support works with the `johnstoncode.svn-scm` extension and its `svn:` read-only resources.
+
 ### Keyboard shortcuts in the diff view
 
 | Action | Key |
 |---|---|
 | Next diff | Click **↓ Next Diff** button |
 | Prev diff | Click **↑ Prev Diff** button |
-| Next page | Click **→ Next Page** button |
-| Prev page | Click **← Prev Page** button |
 
 ### Editing a cell
 
-1. Make sure the target file is a local `.xlsx` file (not a Git history version or read-only file).
+1. Make sure the target file is a local `.xlsx` file (not a Git/SVN history version or read-only file).
 2. **Double-click** a non-formula cell you want to edit.
 3. Type the new value.
 4. Press **Enter** or **Tab** to stage the change in the current session.
