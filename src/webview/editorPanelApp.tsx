@@ -238,6 +238,9 @@ const ESTIMATED_EDITOR_ROW_HEIGHT = 28;
 const EDITOR_COLUMN_MIN_WIDTH = 108;
 const EDITOR_COLUMN_MAX_WIDTH = 240;
 const ACTIVE_SCROLL_LAYOUT_DELAY_MS = 140;
+const WHEEL_DELTA_LINE_MODE = 1;
+const WHEEL_DELTA_PAGE_MODE = 2;
+const WHEEL_LINE_SCROLL_PIXELS = 40;
 
 function getViewportShiftRowCount(): number {
     return Math.max(1, DEFAULT_EDITOR_WINDOW_SIZE - DEFAULT_EDITOR_WINDOW_OVERSCAN * 2);
@@ -1337,8 +1340,12 @@ function getFrozenPaneElement(name: FrozenPaneName): HTMLElement | null {
     return document.querySelector<HTMLElement>(`[data-pane="${name}"]`);
 }
 
-function syncFrozenPaneScroll(sourcePaneName: FrozenPaneName, sourcePane: HTMLElement): void {
-    if (isSyncingFrozenPaneScroll) {
+function syncFrozenPaneScroll(
+    sourcePaneName: FrozenPaneName,
+    sourcePane: HTMLElement,
+    { force = false }: { force?: boolean } = {}
+): void {
+    if (isSyncingFrozenPaneScroll && !force) {
         return;
     }
 
@@ -1380,6 +1387,61 @@ function syncFrozenPaneScroll(sourcePaneName: FrozenPaneName, sourcePane: HTMLEl
     requestAnimationFrame(() => {
         isSyncingFrozenPaneScroll = false;
     });
+}
+
+function normalizeWheelDelta(delta: number, deltaMode: number, viewportSize: number): number {
+    if (deltaMode === WHEEL_DELTA_LINE_MODE) {
+        return delta * WHEEL_LINE_SCROLL_PIXELS;
+    }
+
+    if (deltaMode === WHEEL_DELTA_PAGE_MODE) {
+        return delta * viewportSize;
+    }
+
+    return delta;
+}
+
+function forwardFrozenPaneWheel(event: React.WheelEvent<HTMLElement>): void {
+    const bottomRightPane = getFrozenPaneElement("bottom-right");
+    if (!bottomRightPane) {
+        return;
+    }
+
+    let deltaX = normalizeWheelDelta(
+        event.deltaX,
+        event.deltaMode,
+        bottomRightPane.clientWidth
+    );
+    let deltaY = normalizeWheelDelta(
+        event.deltaY,
+        event.deltaMode,
+        bottomRightPane.clientHeight
+    );
+
+    if (event.shiftKey && deltaX === 0 && deltaY !== 0) {
+        deltaX = deltaY;
+        deltaY = 0;
+    }
+
+    if (deltaX === 0 && deltaY === 0) {
+        return;
+    }
+
+    event.preventDefault();
+
+    const nextLeft = clampScrollPosition(
+        bottomRightPane.scrollLeft + deltaX,
+        bottomRightPane.scrollWidth - bottomRightPane.clientWidth
+    );
+    const nextTop = clampScrollPosition(
+        bottomRightPane.scrollTop + deltaY,
+        bottomRightPane.scrollHeight - bottomRightPane.clientHeight
+    );
+
+    bottomRightPane.scrollLeft = nextLeft;
+    bottomRightPane.scrollTop = nextTop;
+    syncFrozenPaneScroll("bottom-right", bottomRightPane, { force: true });
+    scheduleViewportRequestForScroll(bottomRightPane);
 }
 
 function syncFrozenPaneRowHeights(): void {
@@ -2804,7 +2866,11 @@ function FrozenEditorTable({
     return (
         <div className="pane__table pane__table--split">
             <div className="freeze-grid">
-                <div className="freeze-grid__pane freeze-grid__pane--top-left" data-pane="top-left">
+                <div
+                    className="freeze-grid__pane freeze-grid__pane--top-left"
+                    data-pane="top-left"
+                    onWheel={forwardFrozenPaneWheel}
+                >
                     <GridSectionTable
                         currentModel={currentModel}
                         pendingSummary={pendingSummary}
@@ -2818,6 +2884,7 @@ function FrozenEditorTable({
                 <div
                     className="freeze-grid__pane freeze-grid__pane--top-right"
                     data-pane="top-right"
+                    onWheel={forwardFrozenPaneWheel}
                     onScroll={(event) => syncFrozenPaneScroll("top-right", event.currentTarget)}
                 >
                     <GridSectionTable
@@ -2833,6 +2900,7 @@ function FrozenEditorTable({
                 <div
                     className="freeze-grid__pane freeze-grid__pane--bottom-left"
                     data-pane="bottom-left"
+                    onWheel={forwardFrozenPaneWheel}
                     onScroll={(event) => {
                         syncFrozenPaneScroll("bottom-left", event.currentTarget);
                         scheduleViewportRequestForScroll(event.currentTarget);
