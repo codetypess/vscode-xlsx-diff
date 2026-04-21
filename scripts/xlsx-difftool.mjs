@@ -1,56 +1,71 @@
 #!/usr/bin/env node
 
-import * as path from "node:path";
-import { spawn } from "node:child_process";
+import { launchCompare } from "./lib/openCompareUri.mjs";
 
 function printUsage() {
     process.stderr.write(
         [
-            "Usage: xlsx-difftool <local.xlsx> <remote.xlsx> [merged.xlsx]",
+            "Usage:",
+            "  xlsx-difftool <left.xlsx> <right.xlsx> [merged.xlsx]",
+            "  xlsx-difftool --left <left.xlsx> --right <right.xlsx> [--extension-id <id>]",
             "",
             "This helper opens the VS Code XLSX Diff extension via a vscode:// URI.",
-            "It is intended for use from git difftool with $LOCAL and $REMOTE.",
+            "It is intended for use from Git difftool and other external compare tools.",
+            "The optional merged.xlsx argument is accepted for Git-style integrations and ignored.",
             "",
         ].join("\n")
     );
 }
 
-function openUri(uri) {
-    const platform = process.platform;
+function parseArgs(argv) {
+    const positionals = [];
+    let extensionId;
 
-    if (platform === "darwin") {
-        return spawn("open", [uri], {
-            detached: true,
-            stdio: "ignore",
-        });
+    for (let index = 0; index < argv.length; index += 1) {
+        const value = argv[index];
+
+        if (value === "--help" || value === "-h") {
+            return { help: true };
+        }
+
+        if (value === "--extension-id") {
+            extensionId = argv[index + 1];
+            index += 1;
+            continue;
+        }
+
+        if (value === "--left") {
+            positionals[0] = argv[index + 1];
+            index += 1;
+            continue;
+        }
+
+        if (value === "--right") {
+            positionals[1] = argv[index + 1];
+            index += 1;
+            continue;
+        }
+
+        positionals.push(value);
     }
 
-    if (platform === "win32") {
-        return spawn("cmd", ["/c", "start", "", uri], {
-            detached: true,
-            stdio: "ignore",
-            windowsHide: true,
-        });
-    }
-
-    return spawn("xdg-open", [uri], {
-        detached: true,
-        stdio: "ignore",
-    });
+    return {
+        extensionId,
+        leftPath: positionals[0],
+        rightPath: positionals[1],
+    };
 }
 
-const [, , localPath, remotePath] = process.argv;
+const { help, extensionId, leftPath, rightPath } = parseArgs(process.argv.slice(2));
 
-if (!localPath || !remotePath) {
+if (help) {
+    printUsage();
+    process.exit(0);
+}
+
+if (!leftPath || !rightPath) {
     printUsage();
     process.exit(1);
 }
 
-const extensionId = process.env.VSCODE_XLSX_DIFF_EXTENSION_ID ?? "codetypess.xlsx-diff";
-const compareUri = new URL(`vscode://${extensionId}/compare`);
-
-compareUri.searchParams.set("left", path.resolve(localPath));
-compareUri.searchParams.set("right", path.resolve(remotePath));
-
-const child = openUri(compareUri.toString());
-child.unref();
+launchCompare(leftPath, rightPath, { extensionId });

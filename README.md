@@ -84,15 +84,56 @@ Git support works with VS Code's built-in Git extension. SVN support works with 
 
 ---
 
-## Git difftool integration
+## External tool integration
 
-You can configure Git to use this extension as your difftool for `.xlsx` files.
+The extension already exposes a `vscode://` compare entrypoint. This repository ships CLI helpers that forward external tool arguments into that entrypoint and open the XLSX Diff panel in VS Code.
+
+If you want stable commands on your `PATH`, run this once from the repository root:
+
+```bash
+npm link
+```
+
+That gives you:
+
+- `xlsx-difftool` for tools that pass two workbook paths
+- `xlsx-svn-diffwrap` for Subversion-style external diff arguments
+
+If you are using a different publisher ID, set it before invoking either helper:
+
+```bash
+export VSCODE_XLSX_DIFF_EXTENSION_ID=your-publisher.xlsx-diff
+```
+
+### Direct CLI usage
+
+```bash
+xlsx-difftool left.xlsx right.xlsx
+```
+
+If you do not want to link the commands globally, invoke the script directly:
+
+```bash
+node /absolute/path/to/vscode-xlsx-diff/scripts/xlsx-difftool.mjs left.xlsx right.xlsx
+```
+
+### Git difftool integration
+
+You can configure Git to use this extension as the difftool for `.xlsx` files.
 
 **`~/.gitconfig`:**
 
 ```ini
 [diff]
     tool = xlsx-vscode
+[difftool "xlsx-vscode"]
+    cmd = "xlsx-difftool" "$LOCAL" "$REMOTE" "$MERGED"
+    prompt = false
+```
+
+If you prefer not to install the helper on `PATH`, point Git at the script directly:
+
+```ini
 [difftool "xlsx-vscode"]
     cmd = "node /absolute/path/to/vscode-xlsx-diff/scripts/xlsx-difftool.mjs" "$LOCAL" "$REMOTE" "$MERGED"
     prompt = false
@@ -106,11 +147,27 @@ You can configure Git to use this extension as your difftool for `.xlsx` files.
 
 Running `git difftool` on an `.xlsx` file will then open the XLSX Diff panel in VS Code.
 
-If you are using a different publisher ID, set the environment variable before running the script:
+### SVN external diff integration
+
+Subversion passes GNU `diff`-style arguments to external diff tools. The `xlsx-svn-diffwrap` helper consumes those arguments, forwards the workbook pair to VS Code, and exits with the standard `diff` status code `1`.
+
+Direct command-line usage:
 
 ```bash
-export VSCODE_XLSX_DIFF_EXTENSION_ID=your-publisher.xlsx-diff
+svn diff --diff-cmd xlsx-svn-diffwrap
 ```
+
+If you prefer repository-wide or user-wide configuration, point Subversion's `diff-cmd` helper at the installed `xlsx-svn-diffwrap` command or the script path directly.
+
+### Custom external tools
+
+Any tool that can launch a command with two workbook paths can reuse the same helper:
+
+```bash
+xlsx-difftool "$LEFT_XLSX" "$RIGHT_XLSX"
+```
+
+The helpers are non-blocking: they ask VS Code to open the XLSX Diff panel and then return immediately.
 
 ---
 

@@ -42,7 +42,8 @@
   ],
   "main": "./dist/extension.js",
   "bin": {
-    "xlsx-difftool": "./scripts/xlsx-difftool.mjs"
+    "xlsx-difftool": "./scripts/xlsx-difftool.mjs",
+    "xlsx-svn-diffwrap": "./scripts/xlsx-svn-diffwrap.mjs"
   },
   "capabilities": {
     "untrustedWorkspaces": {
