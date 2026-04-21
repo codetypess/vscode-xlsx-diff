@@ -3135,31 +3135,12 @@ function EditorPane({
     currentModel: EditorRenderModel;
     pendingSummary: PendingSummary;
 }): React.ReactElement {
-    const selectedAddress = getSelectedCellAddress();
-    const selectedCellTitle = `${STRINGS.selectedCell}: ${selectedAddress}`;
     const viewLocked = hasLockedView(currentModel.activeSheet.freezePane);
     const hasVisibleRows =
         currentModel.page.rows.length > 0 || currentModel.page.frozenRows.length > 0;
 
     return (
-        <section className="pane pane--single">
-            <div className="pane__header">
-                <div className="pane__header-group">
-                    <div className="pane__title">{currentModel.activeSheet.label}</div>
-                    <span
-                        className="badge badge--selection"
-                        data-role="selected-cell-address"
-                        title={selectedCellTitle}
-                    >
-                        {selectedAddress}
-                    </span>
-                </div>
-                {currentModel.activeSheet.hasMergedRanges ? (
-                    <span className="badge badge--warn">
-                        {STRINGS.mergedRanges}: {currentModel.activeSheet.mergedRangeCount}
-                    </span>
-                ) : null}
-            </div>
+        <section className="pane pane--single pane--editor">
             {!hasVisibleRows ? (
                 <div className="pane__table">
                     <div className="empty-table">{STRINGS.noRowsAvailable}</div>
@@ -3275,23 +3256,9 @@ function Status({
     currentModel: EditorRenderModel;
     pendingSummary: PendingSummary;
 }): React.ReactElement {
-    const rowRangeLabel =
-        currentModel.page.visibleRowCount === 0 ? STRINGS.noRows : currentModel.page.rangeLabel;
-
     return (
         <footer className="footer">
             <Tabs currentModel={currentModel} pendingSummary={pendingSummary} />
-            <div className="status">
-                <span>
-                    <strong>{STRINGS.sheet}:</strong> {currentModel.activeSheet.label}
-                </span>
-                <span>
-                    <strong>{STRINGS.rows}:</strong> {rowRangeLabel}
-                </span>
-                <span>
-                    <strong>{STRINGS.visibleRows}:</strong> {currentModel.page.visibleRowCount}
-                </span>
-            </div>
         </footer>
     );
 }

@@ -331,6 +331,7 @@ body {
 
 .panes--single {
     grid-template-columns: minmax(0, 1fr);
+    padding: 0;
 }
 
 .pane {
@@ -345,6 +346,14 @@ body {
         color-mix(in srgb, var(--vscode-editor-background) 97%, white 3%)
     );
     overflow: hidden;
+}
+
+.pane--editor {
+    height: 100%;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    grid-template-rows: minmax(0, 1fr);
 }
 
 .pane__header {
@@ -376,10 +385,18 @@ body {
     min-width: 0;
 }
 
+.pane--editor .pane__header {
+    display: none;
+}
+
 .pane__table {
     position: relative;
     min-height: 0;
     overflow: auto;
+}
+
+.pane--editor .pane__table {
+    background: var(--vscode-editor-background);
 }
 
 .pane__table--split {
