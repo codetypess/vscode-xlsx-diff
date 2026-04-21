@@ -6,7 +6,6 @@ import type { CellSnapshot, SheetSnapshot, WorkbookSnapshot } from "../core/mode
 import {
     createEditorRenderModel,
     createInitialEditorPanelState,
-    moveEditorPageCursor,
     setActiveEditorSheet,
     setSelectedEditorCell,
     setEditorViewportStartRow,
@@ -91,7 +90,7 @@ suite("Editor render model", () => {
         assert.strictEqual(renderModel.canSave, false);
     });
 
-    test("moves selection to the page that contains the clicked cell", () => {
+    test("moves selection into the visible virtualized window", () => {
         const workbook = createWorkbook({}, [
             createSheet("Sheet1", [createCell(205, 1, "tail")], 205, 1),
         ]);
@@ -104,7 +103,6 @@ suite("Editor render model", () => {
         );
         const renderModel = createEditorRenderModel(workbook, state);
 
-        assert.strictEqual(renderModel.page.currentPage, 2);
         assert.strictEqual(renderModel.selection?.address, "R205C1");
         assert.strictEqual(renderModel.page.rows[0].rowNumber, 6);
         assert.strictEqual(renderModel.page.rows[199].cells[0].isSelected, true);
@@ -126,28 +124,6 @@ suite("Editor render model", () => {
         assert.strictEqual(renderModel.page.rows[0]?.rowNumber, 121);
         assert.strictEqual(renderModel.page.endRow, 320);
         assert.strictEqual(renderModel.page.rows[renderModel.page.rows.length - 1]?.rowNumber, 320);
-    });
-
-    test("moves page navigation across sheet boundaries", () => {
-        const workbook = createWorkbook({}, [
-            createSheet("First", [createCell(205, 1, "tail")], 205, 1),
-            createSheet("Second", [createCell(1, 1, "head")], 1, 1),
-        ]);
-
-        const secondPageState = setSelectedEditorCell(
-            workbook,
-            createInitialEditorPanelState(workbook),
-            205,
-            1
-        );
-        const crossSheetState = moveEditorPageCursor(workbook, secondPageState, 1);
-        const renderModel = createEditorRenderModel(workbook, crossSheetState);
-
-        assert.strictEqual(renderModel.activeSheet.label, "Second");
-        assert.strictEqual(renderModel.page.currentPage, 1);
-        assert.strictEqual(renderModel.selection?.address, "R1C1");
-        assert.strictEqual(renderModel.canPrevPage, true);
-        assert.strictEqual(renderModel.canNextPage, false);
     });
 
     test("switches sheets and preserves sparse cells as blanks", () => {

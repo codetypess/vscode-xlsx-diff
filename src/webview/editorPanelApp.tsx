@@ -4,7 +4,6 @@ import { createRoot } from "react-dom/client";
 import {
     DEFAULT_EDITOR_WINDOW_OVERSCAN,
     DEFAULT_EDITOR_WINDOW_SIZE,
-    DEFAULT_PAGE_SIZE,
 } from "../constants";
 import type {
     EditorGridCellView,
@@ -28,8 +27,6 @@ type OutgoingMessage =
     | { type: "deleteSheet"; sheetKey: string }
     | { type: "renameSheet"; sheetKey: string }
     | { type: "setViewportStartRow"; rowNumber: number }
-    | { type: "prevPage" }
-    | { type: "nextPage" }
     | {
           type: "search";
           query: string;
@@ -163,14 +160,11 @@ const DEFAULT_STRINGS = {
     searchRegex: "Use Regular Expression",
     searchMatchCase: "Match Case",
     searchWholeWord: "Match Whole Word",
-    prevPage: "Prev Page",
-    nextPage: "Next Page",
     size: "Size",
     modified: "Modified",
     sheet: "Sheet",
     rows: "Rows",
     noRows: "No rows",
-    page: "Page",
     visibleRows: "Visible rows",
     readOnly: "Read-only",
     save: "Save",
@@ -185,7 +179,7 @@ const DEFAULT_STRINGS = {
     totalRows: "Rows",
     nonEmptyCells: "Non-empty cells",
     mergedRanges: "Merged ranges",
-    noRowsAvailable: "No rows available on this page.",
+    noRowsAvailable: "No rows available in this view.",
     readOnlyBadge: "Read-only",
 };
 
@@ -2291,30 +2285,33 @@ function moveSelection(
     );
 }
 
-function moveSelectionByPage(direction: -1 | 1): void {
+function moveSelectionByViewportWindow(direction: -1 | 1): void {
     const selection = ensureSelection();
     if (!model || !selection) {
         return;
     }
 
-    const canMove = direction < 0 ? model.canPrevPage : model.canNextPage;
-    if (!canMove) {
+    const shiftRowCount = Math.max(1, model.page.rows.length - 1);
+    const nextRowNumber = Math.max(
+        1,
+        Math.min(model.activeSheet.rowCount, selection.rowNumber + direction * shiftRowCount)
+    );
+    const nextViewportStartRow = model.page.startRow + direction * shiftRowCount;
+
+    if (
+        nextRowNumber === selection.rowNumber &&
+        nextViewportStartRow === model.page.startRow
+    ) {
         return;
     }
 
     pendingSelectionAfterRender = {
-        rowNumber: Math.max(
-            1,
-            Math.min(
-                model.activeSheet.rowCount,
-                selection.rowNumber + direction * DEFAULT_PAGE_SIZE
-            )
-        ),
+        rowNumber: nextRowNumber,
         columnNumber: selection.columnNumber,
         reveal: true,
     };
 
-    vscode.postMessage({ type: direction < 0 ? "prevPage" : "nextPage" });
+    vscode.postMessage({ type: "setViewportStartRow", rowNumber: nextViewportStartRow });
 }
 
 function submitSearch(direction: "next" | "prev"): void {
@@ -2714,19 +2711,22 @@ function GridCell({
     cell,
     columnNumber,
     row,
+    selectionRange,
+    hasExpandedRange,
 }: {
     cell: EditorGridCellView;
     columnNumber: number;
     row: EditorGridRowView;
+    selectionRange: CellRange | null;
+    hasExpandedRange: boolean;
 }): React.ReactElement {
     const pendingKey = getPendingEditKey(model!.activeSheet.key, row.rowNumber, columnNumber);
     const pendingEdit = pendingEdits.get(pendingKey);
     const value = pendingEdit ? pendingEdit.value : cell.value;
     const formula = pendingEdit ? null : cell.formula;
     const editable = isGridCellEditable(cell);
-    const selectionRange = getSelectionRange();
     const isPrimarySelection =
-        !hasExpandedSelection(selectionRange) &&
+        !hasExpandedRange &&
         selectedCell?.rowNumber === row.rowNumber &&
         selectedCell.columnNumber === columnNumber;
     const isSelected = Boolean(
@@ -2736,8 +2736,16 @@ function GridCell({
         columnNumber >= selectionRange.startColumn &&
         columnNumber <= selectionRange.endColumn
     );
-    const isActiveRow = isRowInSelection(row.rowNumber);
-    const isActiveColumn = isColumnInSelection(columnNumber);
+    const isActiveRow = Boolean(
+        selectionRange &&
+            row.rowNumber >= selectionRange.startRow &&
+            row.rowNumber <= selectionRange.endRow
+    );
+    const isActiveColumn = Boolean(
+        selectionRange &&
+            columnNumber >= selectionRange.startColumn &&
+            columnNumber <= selectionRange.endColumn
+    );
     const isEditing =
         editingCell?.rowNumber === row.rowNumber && editingCell.columnNumber === columnNumber;
 
@@ -2821,13 +2829,19 @@ function GridColumnHeaderCell({
     currentModel,
     pendingSummary,
     columnNumber,
+    selectionRange,
 }: {
     currentModel: EditorRenderModel;
     pendingSummary: PendingSummary;
     columnNumber: number;
+    selectionRange: CellRange | null;
 }): React.ReactElement {
     const hasPending = pendingSummary.columns.has(columnNumber);
-    const isActiveColumn = isColumnInSelection(columnNumber);
+    const isActiveColumn = Boolean(
+        selectionRange &&
+            columnNumber >= selectionRange.startColumn &&
+            columnNumber <= selectionRange.endColumn
+    );
 
     return (
         <th
@@ -2851,12 +2865,18 @@ function GridColumnHeaderCell({
 function GridRowHeaderCell({
     pendingSummary,
     row,
+    selectionRange,
 }: {
     pendingSummary: PendingSummary;
     row: EditorGridRowView;
+    selectionRange: CellRange | null;
 }): React.ReactElement {
     const hasPending = pendingSummary.rows.has(row.rowNumber);
-    const isActiveRow = isRowInSelection(row.rowNumber);
+    const isActiveRow = Boolean(
+        selectionRange &&
+            row.rowNumber >= selectionRange.startRow &&
+            row.rowNumber <= selectionRange.endRow
+    );
 
     return (
         <th
@@ -2899,6 +2919,8 @@ function GridSectionTable({
 }): React.ReactElement | null {
     const hasHeader = includeHeader && (includeRowHeaders || columnNumbers.length > 0);
     const hasBody = rows.length > 0 && (includeRowHeaders || columnNumbers.length > 0);
+    const selectionRange = getSelectionRange();
+    const hasExpandedRange = hasExpandedSelection(selectionRange);
     if (!hasHeader && !hasBody) {
         return null;
     }
@@ -2925,6 +2947,7 @@ function GridSectionTable({
                                 currentModel={currentModel}
                                 pendingSummary={pendingSummary}
                                 columnNumber={columnNumber}
+                                selectionRange={selectionRange}
                             />
                         ))}
                     </tr>
@@ -2948,7 +2971,11 @@ function GridSectionTable({
                             data-row-number={row.rowNumber}
                         >
                             {includeRowHeaders ? (
-                                <GridRowHeaderCell pendingSummary={pendingSummary} row={row} />
+                                <GridRowHeaderCell
+                                    pendingSummary={pendingSummary}
+                                    row={row}
+                                    selectionRange={selectionRange}
+                                />
                             ) : null}
                             {columnNumbers.map((columnNumber) => (
                                 <GridCell
@@ -2956,6 +2983,8 @@ function GridSectionTable({
                                     cell={row.cells[columnNumber - 1]!}
                                     columnNumber={columnNumber}
                                     row={row}
+                                    selectionRange={selectionRange}
+                                    hasExpandedRange={hasExpandedRange}
                                 />
                             ))}
                         </tr>
@@ -3260,10 +3289,6 @@ function Status({
                     <strong>{STRINGS.rows}:</strong> {rowRangeLabel}
                 </span>
                 <span>
-                    <strong>{STRINGS.page}:</strong> {currentModel.page.currentPage} /{" "}
-                    {currentModel.page.totalPages}
-                </span>
-                <span>
                     <strong>{STRINGS.visibleRows}:</strong> {currentModel.page.visibleRowCount}
                 </span>
             </div>
@@ -3534,11 +3559,11 @@ document.addEventListener("keydown", (event: KeyboardEvent) => {
             return;
         case "PageUp":
             event.preventDefault();
-            moveSelectionByPage(-1);
+            moveSelectionByViewportWindow(-1);
             return;
         case "PageDown":
             event.preventDefault();
-            moveSelectionByPage(1);
+            moveSelectionByViewportWindow(1);
             return;
     }
 });

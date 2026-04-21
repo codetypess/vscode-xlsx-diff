@@ -79,8 +79,6 @@ export interface EditorGridRowView {
 }
 
 export interface EditorPageSlice {
-    currentPage: number;
-    totalPages: number;
     totalRows: number;
     visibleRowCount: number;
     rangeLabel: string;
@@ -93,7 +91,6 @@ export interface EditorPageSlice {
 
 export interface EditorPanelState {
     activeSheetKey: string | null;
-    currentPage: number;
     viewportStartRow: number;
     selectedCell: EditorSelectedCell | null;
 }
@@ -135,8 +132,6 @@ export interface EditorRenderModel {
     canEdit: boolean;
     page: EditorPageSlice;
     sheets: EditorSheetTabView[];
-    canPrevPage: boolean;
-    canNextPage: boolean;
     canUndoStructuralEdits: boolean;
     canRedoStructuralEdits: boolean;
 }
@@ -194,6 +189,7 @@ export interface PageSlice {
     visibleRowCount: number;
     rangeLabel: string;
     columns: string[];
+    columnDiffTones: Array<CellDiffStatus | null>;
     rows: GridRowView[];
     diffRowCount: number;
     diffCellCount: number;

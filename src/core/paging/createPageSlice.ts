@@ -3,17 +3,107 @@ import { createCellKey, getColumnLabel } from "../model/cells";
 import {
     type CellDiffStatus,
     type DiffCellLocation,
+    type GridCellView,
     type PageSlice,
     type RowFilterMode,
     type SheetDiffModel,
 } from "../model/types";
 
-function getSameRowCount(sheet: SheetDiffModel): number {
+interface CachedGridRowView {
+    rowNumber: number;
+    hasDiff: boolean;
+    diffTone: CellDiffStatus;
+    cells: GridCellView[];
+}
+
+interface CachedPageBase {
+    rowNumbers: number[];
+    rangeLabel: string;
+    rows: CachedGridRowView[];
+    columnDiffTones: Array<CellDiffStatus | null>;
+}
+
+interface SheetDiffDerivedCache {
+    columns: string[];
+    diffRowsSet: Set<number>;
+    diffCellByKey: Map<string, DiffCellLocation>;
+    diffCellIndexByKey: Map<string, number>;
+    sameRows: number[];
+    pageBases: Map<string, CachedPageBase>;
+}
+
+const sheetDiffDerivedCache = new WeakMap<SheetDiffModel, SheetDiffDerivedCache>();
+
+function buildSameRows(sheet: SheetDiffModel, diffRowsSet: Set<number>): number[] {
     if (sheet.kind === "added" || sheet.kind === "removed") {
-        return 0;
+        return [];
     }
 
-    return Math.max(0, sheet.rowCount - sheet.diffRows.length);
+    const sameRows: number[] = [];
+    for (let rowNumber = 1; rowNumber <= sheet.rowCount; rowNumber += 1) {
+        if (!diffRowsSet.has(rowNumber)) {
+            sameRows.push(rowNumber);
+        }
+    }
+
+    return sameRows;
+}
+
+function getSheetDiffDerivedCache(sheet: SheetDiffModel): SheetDiffDerivedCache {
+    const cached = sheetDiffDerivedCache.get(sheet);
+    if (cached) {
+        return cached;
+    }
+
+    const diffRowsSet = new Set(sheet.diffRows);
+    const nextCache: SheetDiffDerivedCache = {
+        columns: Array.from({ length: sheet.columnCount }, (_, index) => getColumnLabel(index + 1)),
+        diffRowsSet,
+        diffCellByKey: new Map(sheet.diffCells.map((cell) => [cell.key, cell] as const)),
+        diffCellIndexByKey: new Map(sheet.diffCells.map((cell) => [cell.key, cell.diffIndex] as const)),
+        sameRows: buildSameRows(sheet, diffRowsSet),
+        pageBases: new Map<string, CachedPageBase>(),
+    };
+
+    sheetDiffDerivedCache.set(sheet, nextCache);
+    return nextCache;
+}
+
+function getSameRowCount(sheet: SheetDiffModel): number {
+    return getSheetDiffDerivedCache(sheet).sameRows.length;
+}
+
+function getDiffTonePriority(status: CellDiffStatus): number {
+    switch (status) {
+        case "modified":
+            return 3;
+        case "removed":
+            return 2;
+        case "added":
+            return 1;
+        case "equal":
+        default:
+            return 0;
+    }
+}
+
+function mergeRowDiffTone(current: CellDiffStatus, next: CellDiffStatus): CellDiffStatus {
+    return getDiffTonePriority(next) > getDiffTonePriority(current) ? next : current;
+}
+
+function mergeColumnDiffTone(
+    current: CellDiffStatus | null,
+    next: CellDiffStatus
+): CellDiffStatus | null {
+    if (next === "equal") {
+        return current;
+    }
+
+    if (!current) {
+        return next;
+    }
+
+    return getDiffTonePriority(next) > getDiffTonePriority(current) ? next : current;
 }
 
 function getFilteredRowCount(sheet: SheetDiffModel, filter: RowFilterMode): number {
@@ -34,6 +124,7 @@ function clampPage(totalRows: number, currentPage: number): number {
 }
 
 function getRowNumbersForPage(
+    cache: SheetDiffDerivedCache,
     sheet: SheetDiffModel,
     filter: RowFilterMode,
     page: number
@@ -43,29 +134,8 @@ function getRowNumbersForPage(
     switch (filter) {
         case "diffs":
             return sheet.diffRows.slice(offset, offset + DEFAULT_PAGE_SIZE);
-        case "same": {
-            const diffRows = new Set(sheet.diffRows);
-            const rowNumbers: number[] = [];
-            let skipped = 0;
-
-            for (let rowNumber = 1; rowNumber <= sheet.rowCount; rowNumber += 1) {
-                if (diffRows.has(rowNumber)) {
-                    continue;
-                }
-
-                if (skipped < offset) {
-                    skipped += 1;
-                    continue;
-                }
-
-                rowNumbers.push(rowNumber);
-                if (rowNumbers.length === DEFAULT_PAGE_SIZE) {
-                    break;
-                }
-            }
-
-            return rowNumbers;
-        }
+        case "same":
+            return cache.sameRows.slice(offset, offset + DEFAULT_PAGE_SIZE);
         case "all":
         default: {
             const rowNumbers: number[] = [];
@@ -112,51 +182,33 @@ function resolveCellStatus(
     return "equal";
 }
 
-function resolveRowDiffTone(cells: { status: CellDiffStatus }[]): CellDiffStatus {
-    if (cells.some((cell) => cell.status === "modified")) {
-        return "modified";
-    }
-
-    if (cells.some((cell) => cell.status === "removed")) {
-        return "removed";
-    }
-
-    if (cells.some((cell) => cell.status === "added")) {
-        return "added";
-    }
-
-    return "equal";
-}
-
 function getHighlightedDiffCell(
-    sheet: SheetDiffModel,
+    cache: SheetDiffDerivedCache,
     highlightedDiffCellKey: string | null
 ): DiffCellLocation | null {
     if (!highlightedDiffCellKey) {
         return null;
     }
 
-    return sheet.diffCells.find((cell) => cell.key === highlightedDiffCellKey) ?? null;
+    return cache.diffCellByKey.get(highlightedDiffCellKey) ?? null;
 }
 
-export function createPageSlice(
+function getCachedPageBase(
+    cache: SheetDiffDerivedCache,
     sheet: SheetDiffModel,
     filter: RowFilterMode,
-    currentPage: number,
-    highlightedDiffCellKey: string | null
-): PageSlice {
-    const totalRows = getFilteredRowCount(sheet, filter);
-    const normalizedPage = clampPage(totalRows, currentPage);
-    const rowNumbers = getRowNumbersForPage(sheet, filter, normalizedPage);
-    const diffRows = new Set(sheet.diffRows);
-    const diffCellIndexByKey = new Map(
-        sheet.diffCells.map((cell) => [cell.key, cell.diffIndex] as const)
-    );
-    const highlightedDiffCell = getHighlightedDiffCell(sheet, highlightedDiffCellKey);
-    const columns = Array.from({ length: sheet.columnCount }, (_, index) =>
-        getColumnLabel(index + 1)
-    );
+    page: number
+): CachedPageBase {
+    const cacheKey = `${filter}:${page}`;
+    const cached = cache.pageBases.get(cacheKey);
+    if (cached) {
+        return cached;
+    }
+
+    const rowNumbers = getRowNumbersForPage(cache, sheet, filter, page);
+    const columnDiffTones = Array.from({ length: sheet.columnCount }, () => null as CellDiffStatus | null);
     const rows = rowNumbers.map((rowNumber) => {
+        let diffTone: CellDiffStatus = "equal";
         const cells = Array.from({ length: sheet.columnCount }, (_, columnIndex) => {
             const columnNumber = columnIndex + 1;
             const cellKey = createCellKey(rowNumber, columnNumber);
@@ -166,24 +218,27 @@ export function createPageSlice(
             const rightValue = rightCell?.displayValue ?? "";
             const leftFormula = leftCell?.formula ?? null;
             const rightFormula = rightCell?.formula ?? null;
-            const diffIndex = diffCellIndexByKey.get(cellKey) ?? null;
+            const status = resolveCellStatus(
+                sheet,
+                Boolean(leftCell),
+                Boolean(rightCell),
+                leftValue,
+                rightValue,
+                leftFormula,
+                rightFormula
+            );
+
+            diffTone = mergeRowDiffTone(diffTone, status);
+            columnDiffTones[columnIndex] = mergeColumnDiffTone(columnDiffTones[columnIndex], status);
 
             return {
                 key: cellKey,
                 address:
                     leftCell?.address ??
                     rightCell?.address ??
-                    `${columns[columnIndex]}${rowNumber}`,
-                status: resolveCellStatus(
-                    sheet,
-                    Boolean(leftCell),
-                    Boolean(rightCell),
-                    leftValue,
-                    rightValue,
-                    leftFormula,
-                    rightFormula
-                ),
-                diffIndex,
+                    `${cache.columns[columnIndex]}${rowNumber}`,
+                status,
+                diffIndex: cache.diffCellIndexByKey.get(cellKey) ?? null,
                 leftPresent: Boolean(leftCell),
                 rightPresent: Boolean(rightCell),
                 leftValue,
@@ -195,25 +250,52 @@ export function createPageSlice(
 
         return {
             rowNumber,
-            hasDiff: diffRows.has(rowNumber),
-            isHighlighted:
-                highlightedDiffCell !== null && rowNumber === highlightedDiffCell.rowNumber,
-            diffTone: resolveRowDiffTone(cells),
+            hasDiff: cache.diffRowsSet.has(rowNumber),
+            diffTone,
             cells,
         };
     });
+
+    const nextBase: CachedPageBase = {
+        rowNumbers,
+        rangeLabel:
+            rowNumbers.length === 0
+                ? "No rows"
+                : `${rowNumbers[0]}-${rowNumbers[rowNumbers.length - 1]}`,
+        rows,
+        columnDiffTones,
+    };
+
+    cache.pageBases.set(cacheKey, nextBase);
+    return nextBase;
+}
+
+export function createPageSlice(
+    sheet: SheetDiffModel,
+    filter: RowFilterMode,
+    currentPage: number,
+    highlightedDiffCellKey: string | null
+): PageSlice {
+    const cache = getSheetDiffDerivedCache(sheet);
+    const totalRows = getFilteredRowCount(sheet, filter);
+    const normalizedPage = clampPage(totalRows, currentPage);
+    const pageBase = getCachedPageBase(cache, sheet, filter, normalizedPage);
+    const highlightedDiffCell = getHighlightedDiffCell(cache, highlightedDiffCellKey);
+    const rows = pageBase.rows.map((row) => ({
+        ...row,
+        isHighlighted:
+            highlightedDiffCell !== null && row.rowNumber === highlightedDiffCell.rowNumber,
+    }));
 
     return {
         filter,
         currentPage: normalizedPage,
         totalPages: Math.max(1, Math.ceil(Math.max(totalRows, 1) / DEFAULT_PAGE_SIZE)),
         totalRows,
-        visibleRowCount: rowNumbers.length,
-        rangeLabel:
-            rowNumbers.length === 0
-                ? "No rows"
-                : `${rowNumbers[0]}-${rowNumbers[rowNumbers.length - 1]}`,
-        columns,
+        visibleRowCount: pageBase.rowNumbers.length,
+        rangeLabel: pageBase.rangeLabel,
+        columns: cache.columns,
+        columnDiffTones: pageBase.columnDiffTones,
         rows,
         diffRowCount: sheet.diffRows.length,
         diffCellCount: sheet.diffCellCount,

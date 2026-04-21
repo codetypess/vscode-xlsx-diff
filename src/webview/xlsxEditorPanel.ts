@@ -15,10 +15,8 @@ import {
     createEditorRenderModel,
     createInitialEditorPanelState,
     type EditorSheetEntry,
-    moveEditorPageCursor,
     normalizeEditorPanelState,
     setActiveEditorSheet,
-    setEditorCurrentPage,
     setEditorViewportStartRow,
     setSelectedEditorCell,
 } from "./editorRenderModel";
@@ -39,10 +37,7 @@ type WebviewMessage =
     | { type: "addSheet" }
     | { type: "deleteSheet"; sheetKey: string }
     | { type: "renameSheet"; sheetKey: string }
-    | { type: "setPage"; page: number }
     | { type: "setViewportStartRow"; rowNumber: number }
-    | { type: "prevPage" }
-    | { type: "nextPage" }
     | {
           type: "search";
           query: string;
@@ -76,14 +71,11 @@ export interface XlsxEditorPanelController {
 interface WebviewStrings {
     loading: string;
     reload: string;
-    prevPage: string;
-    nextPage: string;
     size: string;
     modified: string;
     sheet: string;
     rows: string;
     noRows: string;
-    page: string;
     visibleRows: string;
     readOnly: string;
     save: string;
@@ -161,14 +153,11 @@ function getWebviewStrings(): WebviewStrings {
             findNext: "下一个",
             gotoPlaceholder: "A1 或 Sheet1!B2",
             goto: "定位",
-            prevPage: "上一页",
-            nextPage: "下一页",
             size: "大小",
             modified: "修改时间",
             sheet: "工作表",
             rows: "行",
             noRows: "无行",
-            page: "页码",
             visibleRows: "可见行",
             readOnly: "只读",
             save: "保存",
@@ -190,7 +179,7 @@ function getWebviewStrings(): WebviewStrings {
             noCellSelected: "未选择",
             mergedRanges: "合并区域",
             pendingChanges: "待保存修改",
-            noRowsAvailable: "当前页没有可显示的行。",
+            noRowsAvailable: "当前视图没有可显示的行。",
             readOnlyBadge: "只读模式",
             localChangesBlockedReload:
                 "工作簿文件已在磁盘上变化。请先保存或放弃当前未保存修改，再刷新。",
@@ -198,7 +187,7 @@ function getWebviewStrings(): WebviewStrings {
             discardChangesAndReload: "放弃修改并刷新",
             keepEditing: "继续编辑",
             displayLanguageRefreshBlocked: "当前有未保存修改，语言变更将在保存或手动刷新后生效。",
-            noSearchMatches: "当前页没有找到匹配的单元格。",
+            noSearchMatches: "没有找到匹配的单元格。",
             invalidCellReference:
                 "无法定位该单元格，请使用 A1 或 Sheet1!B2 格式，并确保目标在当前工作簿范围内。",
             invalidSearchPattern: "搜索表达式无效。",
@@ -218,14 +207,11 @@ function getWebviewStrings(): WebviewStrings {
         findNext: "Next Match",
         gotoPlaceholder: "A1 or Sheet1!B2",
         goto: "Go",
-        prevPage: "Prev Page",
-        nextPage: "Next Page",
         size: "Size",
         modified: "Modified",
         sheet: "Sheet",
         rows: "Rows",
         noRows: "No rows",
-        page: "Page",
         visibleRows: "Visible rows",
         readOnly: "Read-only",
         save: "Save",
@@ -247,7 +233,7 @@ function getWebviewStrings(): WebviewStrings {
         noCellSelected: "None",
         mergedRanges: "Merged ranges",
         pendingChanges: "Pending changes",
-        noRowsAvailable: "No rows available on this page.",
+        noRowsAvailable: "No rows available in this view.",
         readOnlyBadge: "Read-only",
         localChangesBlockedReload:
             "The workbook changed on disk. Save or discard your pending edits before reloading.",
@@ -256,7 +242,7 @@ function getWebviewStrings(): WebviewStrings {
         keepEditing: "Keep Editing",
         displayLanguageRefreshBlocked:
             "Pending edits are open. Display language changes will apply after you save or reload the editor.",
-        noSearchMatches: "No matching cells were found on this page.",
+        noSearchMatches: "No matching cells were found.",
         invalidCellReference:
             "Unable to locate that cell. Use A1 or Sheet1!B2 and stay within the workbook range.",
         invalidSearchPattern: "The search pattern is invalid.",
@@ -387,7 +373,6 @@ export class XlsxEditorPanel {
     private workbook: WorkbookSnapshot | null = null;
     private state: EditorPanelState = {
         activeSheetKey: null,
-        currentPage: 1,
         viewportStartRow: 1,
         selectedCell: null,
     };
@@ -699,18 +684,6 @@ export class XlsxEditorPanel {
                 case "renameSheet":
                     await this.renamePendingSheet(message.sheetKey);
                     return;
-                case "setPage":
-                    if (!this.getWorkingWorkbook()) {
-                        return;
-                    }
-                    this.state = setEditorCurrentPage(
-                        this.getWorkingWorkbook()!,
-                        this.state,
-                        message.page,
-                        this.getSheetEntries()
-                    );
-                    await this.render();
-                    return;
                 case "setViewportStartRow":
                     if (!this.getWorkingWorkbook()) {
                         return;
@@ -722,30 +695,6 @@ export class XlsxEditorPanel {
                         this.getSheetEntries()
                     );
                     await this.render(undefined, { silent: true });
-                    return;
-                case "prevPage":
-                    if (!this.getWorkingWorkbook()) {
-                        return;
-                    }
-                    this.state = moveEditorPageCursor(
-                        this.getWorkingWorkbook()!,
-                        this.state,
-                        -1,
-                        this.getSheetEntries()
-                    );
-                    await this.render();
-                    return;
-                case "nextPage":
-                    if (!this.getWorkingWorkbook()) {
-                        return;
-                    }
-                    this.state = moveEditorPageCursor(
-                        this.getWorkingWorkbook()!,
-                        this.state,
-                        1,
-                        this.getSheetEntries()
-                    );
-                    await this.render();
                     return;
                 case "search": {
                     if (!this.getWorkingWorkbook()) {

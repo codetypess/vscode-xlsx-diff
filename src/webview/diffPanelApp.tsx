@@ -147,34 +147,6 @@ function classNames(values: Array<string | false | null | undefined>): string {
     return values.filter(Boolean).join(" ");
 }
 
-function getColumnDiffTones(rows: GridRowView[]): Map<number, CellDiffStatus> {
-    const tones = new Map<number, CellDiffStatus>();
-
-    for (const row of rows) {
-        row.cells.forEach((cell, index) => {
-            if (cell.status === "equal") {
-                return;
-            }
-
-            const currentTone = tones.get(index);
-            if (currentTone === "modified" || currentTone === "removed") {
-                return;
-            }
-
-            if (cell.status === "modified" || cell.status === "removed") {
-                tones.set(index, cell.status);
-                return;
-            }
-
-            if (!currentTone) {
-                tones.set(index, cell.status);
-            }
-        });
-    }
-
-    return tones;
-}
-
 function getDiffToneClass(diffTone: CellDiffStatus | undefined): string {
     return diffTone ? `diff-marker--${diffTone}` : "";
 }
@@ -1173,7 +1145,6 @@ function DiffTable({
         return <div className="empty-table">{STRINGS.noRowsAvailable}</div>;
     }
 
-    const diffColumnTones = getColumnDiffTones(currentModel.page.rows);
     const pendingRows = pendingSummary.rowsBySide[side];
     const pendingColumns = pendingSummary.columnsBySide[side];
 
@@ -1184,7 +1155,7 @@ function DiffTable({
                     <th className="grid__row-number">#</th>
                     {currentModel.page.columns.map((column, index) => {
                         const columnNumber = index + 1;
-                        const diffTone = diffColumnTones.get(index) ?? "";
+                        const diffTone = currentModel.page.columnDiffTones[index] ?? "";
                         const hasPending = pendingColumns.has(columnNumber);
                         const markerClass = getEffectiveDiffMarkerClass(diffTone, hasPending);
 

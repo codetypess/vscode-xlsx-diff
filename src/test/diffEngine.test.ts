@@ -97,10 +97,35 @@ suite("Diff engine", () => {
         assert.strictEqual(diffPage.highlightedDiffCell?.diffIndex, 0);
         assert.strictEqual(diffPage.rows[0].cells[0].diffIndex, 0);
         assert.strictEqual(diffPage.rows[1].cells[0].diffIndex, 1);
+        assert.deepStrictEqual(diffPage.columnDiffTones, ["modified", null]);
 
         const secondAllPage = createPageSlice(sheet, "all", 2, null);
         assert.strictEqual(secondAllPage.currentPage, 2);
         assert.strictEqual(secondAllPage.rows[0].rowNumber, 201);
         assert.strictEqual(secondAllPage.rows[secondAllPage.rows.length - 1].rowNumber, 205);
+    });
+
+    test("paginates same rows without rescanning diff gaps into the page window", () => {
+        const left = createWorkbook([
+            createSheet("Data", 402, 1, [
+                createCell(1, 1, "old-head"),
+                createCell(201, 1, "old-middle"),
+            ]),
+        ]);
+        const right = createWorkbook([
+            createSheet("Data", 402, 1, [
+                createCell(1, 1, "new-head"),
+                createCell(201, 1, "new-middle"),
+            ]),
+        ]);
+
+        const diff = buildWorkbookDiff(left, right);
+        const samePage = createPageSlice(diff.sheets[0], "same", 2, null);
+
+        assert.strictEqual(samePage.currentPage, 2);
+        assert.strictEqual(samePage.rows[0].rowNumber, 203);
+        assert.strictEqual(samePage.rows[samePage.rows.length - 1].rowNumber, 402);
+        assert.strictEqual(samePage.visibleRowCount, 200);
+        assert.deepStrictEqual(samePage.columnDiffTones, [null]);
     });
 });

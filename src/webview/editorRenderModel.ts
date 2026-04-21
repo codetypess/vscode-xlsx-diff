@@ -1,4 +1,4 @@
-import { DEFAULT_EDITOR_WINDOW_SIZE, DEFAULT_PAGE_SIZE } from "../constants";
+import { DEFAULT_EDITOR_WINDOW_SIZE } from "../constants";
 import { createCellKey, getColumnLabel } from "../core/model/cells";
 import { isChineseDisplayLanguage } from "../displayLanguage";
 import {
@@ -81,29 +81,15 @@ function resolveSheetEntries(
     return sheetEntriesOverride ?? getSheetEntries(workbook);
 }
 
-function getDefaultSelectedCell(sheet: SheetSnapshot, currentPage = 1): EditorSelectedCell | null {
+function getDefaultSelectedCell(sheet: SheetSnapshot): EditorSelectedCell | null {
     if (sheet.rowCount === 0 || sheet.columnCount === 0) {
         return null;
     }
 
-    const firstVisibleRow = Math.min(
-        sheet.rowCount,
-        Math.max(1, (currentPage - 1) * DEFAULT_PAGE_SIZE + 1)
-    );
-
     return {
-        rowNumber: firstVisibleRow,
+        rowNumber: 1,
         columnNumber: 1,
     };
-}
-
-function getPageStartRow(currentPage: number): number {
-    return Math.max(1, (currentPage - 1) * DEFAULT_PAGE_SIZE + 1);
-}
-
-function clampPage(sheet: SheetSnapshot, currentPage: number): number {
-    const totalPages = Math.max(1, Math.ceil(Math.max(sheet.rowCount, 1) / DEFAULT_PAGE_SIZE));
-    return Math.min(Math.max(currentPage, 1), totalPages);
 }
 
 function getMinViewportStartRow(sheet: SheetSnapshot): number {
@@ -138,36 +124,6 @@ function clampSelectedCell(
     };
 }
 
-function getCellPage(rowNumber: number): number {
-    return Math.floor((Math.max(rowNumber, 1) - 1) / DEFAULT_PAGE_SIZE) + 1;
-}
-
-function getSelectionForPage(
-    sheet: SheetSnapshot,
-    currentPage: number,
-    selectedCell: EditorSelectedCell | null
-): EditorSelectedCell | null {
-    const normalizedSelection = clampSelectedCell(sheet, selectedCell);
-    const pageStartRow = (currentPage - 1) * DEFAULT_PAGE_SIZE + 1;
-    const pageEndRow = Math.min(sheet.rowCount, currentPage * DEFAULT_PAGE_SIZE);
-
-    if (
-        normalizedSelection &&
-        normalizedSelection.rowNumber >= pageStartRow &&
-        normalizedSelection.rowNumber <= pageEndRow
-    ) {
-        return normalizedSelection;
-    }
-
-    if (sheet.rowCount === 0 || sheet.columnCount === 0) {
-        return null;
-    }
-
-    return {
-        rowNumber: pageStartRow,
-        columnNumber: normalizedSelection?.columnNumber ?? 1,
-    };
-}
 
 function createWorkbookFileView(workbook: WorkbookSnapshot): WorkbookFileView {
     return {
@@ -255,6 +211,13 @@ function createFrozenRows(
     return createRowsForRange(sheet, 1, frozenRowCount, selectedCell, columns);
 }
 
+function getViewportStartRowForSelection(sheet: SheetSnapshot, rowNumber: number): number {
+    return clampViewportStartRow(
+        sheet,
+        rowNumber - Math.floor(DEFAULT_EDITOR_WINDOW_SIZE / 2)
+    );
+}
+
 function createSelectionView(
     sheet: SheetSnapshot,
     selectedCell: EditorSelectedCell | null
@@ -301,7 +264,6 @@ export function createInitialEditorPanelState(
 
     return {
         activeSheetKey: firstSheet?.key ?? null,
-        currentPage: 1,
         viewportStartRow: 1,
         selectedCell: firstSheet ? getDefaultSelectedCell(firstSheet.sheet) : null,
     };
@@ -319,24 +281,18 @@ export function normalizeEditorPanelState(
     if (!activeSheetEntry) {
         return {
             activeSheetKey: null,
-            currentPage: 1,
             viewportStartRow: 1,
             selectedCell: null,
         };
     }
 
-    const viewportStartRow = clampViewportStartRow(
-        activeSheetEntry.sheet,
-        state.viewportStartRow || getPageStartRow(state.currentPage)
-    );
-    const currentPage = clampPage(activeSheetEntry.sheet, state.currentPage);
+    const viewportStartRow = clampViewportStartRow(activeSheetEntry.sheet, state.viewportStartRow);
     const selectedCell =
         clampSelectedCell(activeSheetEntry.sheet, state.selectedCell) ??
-        getDefaultSelectedCell(activeSheetEntry.sheet, currentPage);
+        getDefaultSelectedCell(activeSheetEntry.sheet);
 
     return {
         activeSheetKey: activeSheetEntry.key,
-        currentPage,
         viewportStartRow,
         selectedCell,
     };
@@ -359,103 +315,8 @@ export function setActiveEditorSheet(
         workbook,
         {
             activeSheetKey: sheetEntry.key,
-            currentPage: 1,
             viewportStartRow: 1,
             selectedCell: getDefaultSelectedCell(sheetEntry.sheet),
-        },
-        sheetEntriesOverride
-    );
-}
-
-export function setEditorCurrentPage(
-    workbook: WorkbookSnapshot,
-    state: EditorPanelState,
-    currentPage: number,
-    sheetEntriesOverride?: EditorSheetEntry[]
-): EditorPanelState {
-    const normalizedState = normalizeEditorPanelState(workbook, state, sheetEntriesOverride);
-    const sheetEntry = resolveSheetEntries(workbook, sheetEntriesOverride).find(
-        (entry) => entry.key === normalizedState.activeSheetKey
-    );
-
-    if (!sheetEntry) {
-        return normalizedState;
-    }
-
-    const nextPage = clampPage(sheetEntry.sheet, currentPage);
-
-    return normalizeEditorPanelState(
-        workbook,
-        {
-            ...normalizedState,
-            currentPage: nextPage,
-            viewportStartRow: getPageStartRow(nextPage),
-            selectedCell: getSelectionForPage(
-                sheetEntry.sheet,
-                nextPage,
-                normalizedState.selectedCell
-            ),
-        },
-        sheetEntriesOverride
-    );
-}
-
-export function moveEditorPageCursor(
-    workbook: WorkbookSnapshot,
-    state: EditorPanelState,
-    direction: -1 | 1,
-    sheetEntriesOverride?: EditorSheetEntry[]
-): EditorPanelState {
-    const normalizedState = normalizeEditorPanelState(workbook, state, sheetEntriesOverride);
-    const sheetEntries = resolveSheetEntries(workbook, sheetEntriesOverride);
-    const activeSheetIndex = sheetEntries.findIndex(
-        (entry) => entry.key === normalizedState.activeSheetKey
-    );
-
-    if (activeSheetIndex < 0) {
-        return normalizedState;
-    }
-
-    const activeSheet = sheetEntries[activeSheetIndex].sheet;
-    const totalPages = Math.max(
-        1,
-        Math.ceil(Math.max(activeSheet.rowCount, 1) / DEFAULT_PAGE_SIZE)
-    );
-
-    if (direction < 0 && normalizedState.currentPage > 1) {
-        return setEditorCurrentPage(
-            workbook,
-            normalizedState,
-            normalizedState.currentPage - 1,
-            sheetEntriesOverride
-        );
-    }
-
-    if (direction > 0 && normalizedState.currentPage < totalPages) {
-        return setEditorCurrentPage(
-            workbook,
-            normalizedState,
-            normalizedState.currentPage + 1,
-            sheetEntriesOverride
-        );
-    }
-
-    const adjacentSheet =
-        direction < 0 ? sheetEntries[activeSheetIndex - 1] : sheetEntries[activeSheetIndex + 1];
-
-    if (!adjacentSheet) {
-        return normalizedState;
-    }
-
-    const targetPage = direction < 0 ? clampPage(adjacentSheet.sheet, Number.MAX_SAFE_INTEGER) : 1;
-
-    return normalizeEditorPanelState(
-        workbook,
-        {
-            activeSheetKey: adjacentSheet.key,
-            currentPage: targetPage,
-            viewportStartRow: getPageStartRow(targetPage),
-            selectedCell: getDefaultSelectedCell(adjacentSheet.sheet, targetPage),
         },
         sheetEntriesOverride
     );
@@ -481,7 +342,6 @@ export function setEditorViewportStartRow(
         workbook,
         {
             ...normalizedState,
-            currentPage: getCellPage(nextViewportStartRow),
             viewportStartRow: nextViewportStartRow,
         },
         sheetEntriesOverride
@@ -524,9 +384,9 @@ export function setSelectedEditorCell(
             selectedCell.rowNumber >=
                 normalizedState.viewportStartRow + DEFAULT_EDITOR_WINDOW_SIZE
         ) {
-            viewportStartRow = clampViewportStartRow(
+            viewportStartRow = getViewportStartRowForSelection(
                 sheetEntry.sheet,
-                getPageStartRow(getCellPage(selectedCell.rowNumber))
+                selectedCell.rowNumber
             );
         }
     }
@@ -535,7 +395,6 @@ export function setSelectedEditorCell(
         workbook,
         {
             ...normalizedState,
-            currentPage: getCellPage(selectedCell.rowNumber),
             viewportStartRow,
             selectedCell,
         },
@@ -578,8 +437,6 @@ export function createEditorRenderModel(
             canSave: hasPendingEdits && !file.isReadonly,
             canEdit: !file.isReadonly,
             page: {
-                currentPage: 1,
-                totalPages: 1,
                 totalRows: 0,
                 visibleRowCount: 0,
                 rangeLabel: "No rows",
@@ -590,8 +447,6 @@ export function createEditorRenderModel(
                 rows: [],
             },
             sheets: [],
-            canPrevPage: false,
-            canNextPage: false,
             canUndoStructuralEdits: options.canUndoStructuralEdits ?? false,
             canRedoStructuralEdits: options.canRedoStructuralEdits ?? false,
         };
@@ -611,11 +466,6 @@ export function createEditorRenderModel(
         columns
     );
     const frozenRows = createFrozenRows(activeSheet, normalizedState.selectedCell, columns);
-    const totalPages = Math.max(
-        1,
-        Math.ceil(Math.max(activeSheet.rowCount, 1) / DEFAULT_PAGE_SIZE)
-    );
-    const sheetIndex = sheetEntries.findIndex((entry) => entry.key === activeSheetEntry.key);
     const selection = createSelectionView(activeSheet, normalizedState.selectedCell);
     const sheets: EditorSheetTabView[] = sheetEntries.map((entry) => ({
         key: entry.key,
@@ -645,8 +495,6 @@ export function createEditorRenderModel(
         canSave: hasPendingEdits && !file.isReadonly,
         canEdit: !file.isReadonly,
         page: {
-            currentPage: normalizedState.currentPage,
-            totalPages,
             totalRows: activeSheet.rowCount,
             visibleRowCount: pageRows.length,
             rangeLabel:
@@ -660,9 +508,6 @@ export function createEditorRenderModel(
             rows: pageRows,
         },
         sheets,
-        canPrevPage: normalizedState.currentPage > 1 || sheetIndex > 0,
-        canNextPage:
-            normalizedState.currentPage < totalPages || sheetIndex < sheetEntries.length - 1,
         canUndoStructuralEdits: options.canUndoStructuralEdits ?? false,
         canRedoStructuralEdits: options.canRedoStructuralEdits ?? false,
     };
