@@ -25,6 +25,7 @@ import {
 import { hasLockedView } from "./viewLock";
 import { XlsxEditorDocument } from "./xlsxEditorDocument";
 import { getWorkbookResourceName } from "../workbook/resourceUri";
+import { rememberRecentWorkbookResourceUri } from "../scm/recentWorkbookResourceContext";
 
 interface SearchOptions {
     isRegexp: boolean;
@@ -449,6 +450,7 @@ export class XlsxEditorPanel {
         panel: vscode.WebviewPanel,
         controller: XlsxEditorPanelController
     ): Promise<void> {
+        rememberRecentWorkbookResourceUri(document.uri, "customEditorPanel");
         const panelId = XlsxEditorPanel.nextPanelId;
         XlsxEditorPanel.nextPanelId += 1;
         panel.title = getWorkbookResourceName(document.uri);

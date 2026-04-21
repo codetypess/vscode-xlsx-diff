@@ -36,6 +36,13 @@ function isWorkbookRelatedTab(tab: vscode.Tab): boolean {
     return isWorkbookResourceUri(resourceUri);
 }
 
+function isPotentialUnknownWorkbookScmTab(tab: vscode.Tab): boolean {
+    return (
+        getTabInputKind(tab.input).startsWith("unknown:") &&
+        /^.+\.xlsx \(([^()]+)\)$/i.test(tab.label)
+    );
+}
+
 function describeTab(tab: vscode.Tab): string {
     const tabSummary = `label="${tab.label}" active=${tab.isActive} preview=${tab.isPreview} dirty=${tab.isDirty} kind=${getTabInputKind(tab.input)} column=${tab.group.viewColumn}`;
 
@@ -133,8 +140,23 @@ export function registerScmWorkbookDiffInterceptor(extensionUri: vscode.Uri): vs
     const scheduledCustomEditorPairScans = new Set<NodeJS.Timeout>();
     const tabKeysInProgress = new Set<string>();
     const tabKeysPendingClose = new Map<string, number>();
+    const recentlyLoggedCandidateTabs = new Map<string, number>();
+    const recentLogMessages = new Map<string, number>();
 
     const log = (message: string): void => {
+        const now = Date.now();
+        const lastLoggedAt = recentLogMessages.get(message);
+        if (lastLoggedAt && now - lastLoggedAt < 500) {
+            return;
+        }
+
+        recentLogMessages.set(message, now);
+        for (const [loggedMessage, loggedAt] of recentLogMessages) {
+            if (now - loggedAt > 5_000) {
+                recentLogMessages.delete(loggedMessage);
+            }
+        }
+
         outputChannel.appendLine(`[SCM ${new Date().toISOString()}] ${message}`);
     };
 
@@ -143,6 +165,15 @@ export function registerScmWorkbookDiffInterceptor(extensionUri: vscode.Uri): vs
         for (const [tabKey, markedAt] of tabKeysPendingClose) {
             if (now - markedAt > 5_000) {
                 tabKeysPendingClose.delete(tabKey);
+            }
+        }
+    };
+
+    const pruneRecentlyLoggedCandidateTabs = (): void => {
+        const now = Date.now();
+        for (const [tabKey, loggedAt] of recentlyLoggedCandidateTabs) {
+            if (now - loggedAt > 2_000) {
+                recentlyLoggedCandidateTabs.delete(tabKey);
             }
         }
     };
@@ -219,6 +250,7 @@ export function registerScmWorkbookDiffInterceptor(extensionUri: vscode.Uri): vs
 
     const maybeInterceptTab = async (tab: vscode.Tab | undefined): Promise<void> => {
         prunePendingCloseTabKeys();
+        pruneRecentlyLoggedCandidateTabs();
         const tabKey = tab ? getTabKey(tab) : undefined;
         if (
             !tab?.isActive ||
@@ -228,6 +260,14 @@ export function registerScmWorkbookDiffInterceptor(extensionUri: vscode.Uri): vs
             isXlsxDiffPanelTab(tab)
         ) {
             return;
+        }
+
+        if (
+            (isWorkbookRelatedTab(tab) || isPotentialUnknownWorkbookScmTab(tab)) &&
+            !recentlyLoggedCandidateTabs.has(tabKey)
+        ) {
+            recentlyLoggedCandidateTabs.set(tabKey, Date.now());
+            log(`inspect scm candidate tab: ${describeTab(tab)}`);
         }
 
         tabKeysInProgress.add(tabKey);

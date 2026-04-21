@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { WEBVIEW_TYPE_EDITOR_PANEL } from "../constants";
 import { type WorkbookEditState } from "../core/fastxlsx/writeCellValue";
+import { rememberRecentWorkbookResourceUri } from "../scm/recentWorkbookResourceContext";
 import { XlsxEditorDocument } from "./xlsxEditorDocument";
 import { XlsxEditorPanel } from "./xlsxEditorPanel";
 
@@ -34,6 +35,7 @@ export class XlsxCustomEditorProvider
         uri: vscode.Uri,
         openContext: vscode.CustomDocumentOpenContext
     ): XlsxEditorDocument {
+        rememberRecentWorkbookResourceUri(uri, "customEditorDocument");
         const backupUri = openContext.backupId ? vscode.Uri.parse(openContext.backupId) : undefined;
 
         return new XlsxEditorDocument(uri, backupUri);
