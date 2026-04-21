@@ -149,6 +149,9 @@ export function createPageSlice(
     const normalizedPage = clampPage(totalRows, currentPage);
     const rowNumbers = getRowNumbersForPage(sheet, filter, normalizedPage);
     const diffRows = new Set(sheet.diffRows);
+    const diffCellIndexByKey = new Map(
+        sheet.diffCells.map((cell) => [cell.key, cell.diffIndex] as const)
+    );
     const highlightedDiffCell = getHighlightedDiffCell(sheet, highlightedDiffCellKey);
     const columns = Array.from({ length: sheet.columnCount }, (_, index) =>
         getColumnLabel(index + 1)
@@ -163,6 +166,7 @@ export function createPageSlice(
             const rightValue = rightCell?.displayValue ?? "";
             const leftFormula = leftCell?.formula ?? null;
             const rightFormula = rightCell?.formula ?? null;
+            const diffIndex = diffCellIndexByKey.get(cellKey) ?? null;
 
             return {
                 key: cellKey,
@@ -179,6 +183,7 @@ export function createPageSlice(
                     leftFormula,
                     rightFormula
                 ),
+                diffIndex,
                 leftPresent: Boolean(leftCell),
                 rightPresent: Boolean(rightCell),
                 leftValue,

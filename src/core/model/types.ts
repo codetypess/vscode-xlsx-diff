@@ -7,6 +7,7 @@ export interface DiffCellLocation {
     rowNumber: number;
     columnNumber: number;
     address: string;
+    diffIndex: number;
 }
 
 export interface CellSnapshot {
@@ -168,6 +169,7 @@ export interface GridCellView {
     key: string;
     address: string;
     status: CellDiffStatus;
+    diffIndex: number | null;
     leftPresent: boolean;
     rightPresent: boolean;
     leftValue: string;

@@ -35,6 +35,7 @@ type WebviewMessage =
     | { type: "prevDiff" }
     | { type: "nextDiff" }
     | { type: "selectCell"; rowNumber: number; columnNumber: number }
+    | { type: "syncHighlightedDiffCell"; rowNumber: number; columnNumber: number }
     | {
           type: "saveEdits";
           edits: Array<{
@@ -493,6 +494,17 @@ export class XlsxDiffPanel {
                         message.columnNumber
                     );
                     await this.render();
+                    return;
+                case "syncHighlightedDiffCell":
+                    if (!this.diffModel) {
+                        return;
+                    }
+                    this.state = setHighlightedDiffCell(
+                        this.diffModel,
+                        this.state,
+                        message.rowNumber,
+                        message.columnNumber
+                    );
                     return;
                 case "saveEdits": {
                     if (!this.diffModel || message.edits.length === 0) {

@@ -28,6 +28,7 @@ type OutgoingMessage =
     | { type: "prevDiff" }
     | { type: "nextDiff" }
     | { type: "selectCell"; rowNumber: number; columnNumber: number }
+    | { type: "syncHighlightedDiffCell"; rowNumber: number; columnNumber: number }
     | {
           type: "saveEdits";
           edits: Array<{
@@ -207,24 +208,32 @@ function getCellTooltip(address: string, value: string, formula: string | null):
     return lines.join("\n");
 }
 
-function shouldHighlightCell(cell: GridCellView, side: Side, isHighlighted: boolean): boolean {
+function shouldHighlightCellStatus(
+    status: CellDiffStatus,
+    side: Side,
+    isHighlighted: boolean
+): boolean {
     if (!isHighlighted) {
         return false;
     }
 
-    if (cell.status === "modified") {
+    if (status === "modified") {
         return true;
     }
 
-    if (cell.status === "added") {
+    if (status === "added") {
         return side === "right";
     }
 
-    if (cell.status === "removed") {
+    if (status === "removed") {
         return side === "left";
     }
 
     return false;
+}
+
+function shouldHighlightCell(cell: GridCellView, side: Side, isHighlighted: boolean): boolean {
+    return shouldHighlightCellStatus(cell.status, side, isHighlighted);
 }
 
 function getSideCellClass(cell: GridCellView, side: Side, isHighlighted: boolean): string {
@@ -401,21 +410,48 @@ function getDesiredPaneScrollPosition(
     return { top, left };
 }
 
-function getSelectedCellElements(): HTMLElement[] {
-    if (!selectedCell) {
+function getGridCellElements(
+    cell: Pick<CellPosition, "rowNumber" | "columnNumber"> | null
+): HTMLElement[] {
+    if (!cell) {
         return [];
     }
 
     return Array.from(
         document.querySelectorAll<HTMLElement>(
-            `[data-role="grid-cell"][data-row-number="${selectedCell.rowNumber}"][data-column-number="${selectedCell.columnNumber}"]`
+            `[data-role="grid-cell"][data-row-number="${cell.rowNumber}"][data-column-number="${cell.columnNumber}"]`
         )
     );
 }
 
+function setGridCellSelectionState(
+    cell: Pick<CellPosition, "rowNumber" | "columnNumber"> | null,
+    isSelected: boolean
+): void {
+    for (const element of getGridCellElements(cell)) {
+        element.classList.toggle("grid__cell--selected", isSelected);
+        element.setAttribute("aria-selected", String(isSelected));
+    }
+}
+
+function setSelectedCell(position: CellPosition | null): void {
+    if (
+        selectedCell?.rowNumber === position?.rowNumber &&
+        selectedCell?.columnNumber === position?.columnNumber &&
+        selectedCell?.side === position?.side
+    ) {
+        selectedCell = position;
+        return;
+    }
+
+    setGridCellSelectionState(selectedCell, false);
+    selectedCell = position;
+    setGridCellSelectionState(selectedCell, true);
+}
+
 function revealSelectedCells(): void {
     setPaneScrollPositions(
-        getSelectedCellElements()
+        getGridCellElements(selectedCell)
             .map((element) => {
                 const pane = element.closest<HTMLElement>(".pane__table");
                 if (!pane) {
@@ -429,6 +465,81 @@ function revealSelectedCells(): void {
             })
             .filter((update): update is ScrollUpdate => update !== null)
     );
+}
+
+function setRenderedRowHighlightState(rowNumber: number, isHighlighted: boolean): void {
+    const rows = document.querySelectorAll<HTMLElement>(
+        `[data-role="grid-row"][data-row-number="${rowNumber}"]`
+    );
+
+    for (const rowElement of rows) {
+        rowElement.classList.toggle("row--highlight", isHighlighted);
+
+        const side = rowElement
+            .closest<HTMLElement>(".pane")
+            ?.getAttribute("data-side") as Side | null;
+        if (!side) {
+            continue;
+        }
+
+        for (const cellElement of rowElement.querySelectorAll<HTMLElement>('[data-role="grid-cell"]')) {
+            const status = cellElement.getAttribute("data-cell-status") as CellDiffStatus | null;
+            const shouldHighlight =
+                status !== null && shouldHighlightCellStatus(status, side, isHighlighted);
+            cellElement.classList.toggle("grid__cell--highlighted", shouldHighlight);
+        }
+    }
+}
+
+function syncDiffNavigationButtons(): void {
+    const prevButton = document.querySelector<HTMLButtonElement>('[data-role="prev-diff-button"]');
+    const nextButton = document.querySelector<HTMLButtonElement>('[data-role="next-diff-button"]');
+
+    if (prevButton) {
+        prevButton.disabled = !(model?.canPrevDiff ?? false);
+    }
+
+    if (nextButton) {
+        nextButton.disabled = !(model?.canNextDiff ?? false);
+    }
+}
+
+function syncLocalHighlightedDiffCell(
+    cell: GridCellView,
+    row: GridRowView,
+    columnNumber: number
+): void {
+    if (!model || cell.diffIndex === null) {
+        return;
+    }
+
+    const previousHighlightedRowNumber = model.page.highlightedDiffCell?.rowNumber ?? null;
+    if (previousHighlightedRowNumber !== null && previousHighlightedRowNumber !== row.rowNumber) {
+        const previousRow = model.page.rows.find(
+            (candidate) => candidate.rowNumber === previousHighlightedRowNumber
+        );
+        if (previousRow) {
+            previousRow.isHighlighted = false;
+        }
+        setRenderedRowHighlightState(previousHighlightedRowNumber, false);
+    }
+
+    if (previousHighlightedRowNumber !== row.rowNumber) {
+        row.isHighlighted = true;
+        setRenderedRowHighlightState(row.rowNumber, true);
+    }
+
+    model.page.highlightedDiffRow = row.rowNumber;
+    model.page.highlightedDiffCell = {
+        key: cell.key,
+        rowNumber: row.rowNumber,
+        columnNumber,
+        address: cell.address,
+        diffIndex: cell.diffIndex,
+    };
+    model.canPrevDiff = cell.diffIndex > 0;
+    model.canNextDiff = cell.diffIndex < model.page.diffCellCount - 1;
+    syncDiffNavigationButtons();
 }
 
 function getGridRows(side: Side): HTMLElement[] {
@@ -598,7 +709,7 @@ function finishEdit({
     }
 
     if (clearSelection) {
-        selectedCell = null;
+        setSelectedCell(null);
         suppressAutoSelection = true;
     }
 
@@ -673,7 +784,7 @@ function startEditCell(position: CellPosition, value: string): void {
         finishEdit({ mode: "commit", refresh: false });
     }
 
-    selectedCell = position;
+    setSelectedCell(position);
     suppressAutoSelection = false;
     editingCell = {
         ...position,
@@ -797,17 +908,20 @@ function ToolbarButton({
     label,
     active = false,
     disabled = false,
+    dataRole,
     onClick,
 }: {
     icon: string;
     label: string;
     active?: boolean;
     disabled?: boolean;
+    dataRole?: string;
     onClick(): void;
 }): React.ReactElement {
     return (
         <button
             className={classNames(["toolbar__button", active && "is-active"])}
+            data-role={dataRole}
             disabled={disabled}
             type="button"
             onClick={onClick}
@@ -843,6 +957,7 @@ function Toolbar({ currentModel }: { currentModel: RenderModel }): React.ReactEl
             </div>
             <div className="toolbar__group">
                 <ToolbarButton
+                    dataRole="prev-diff-button"
                     disabled={!currentModel.canPrevDiff}
                     icon="codicon-arrow-up"
                     label={STRINGS.prevDiff}
@@ -852,6 +967,7 @@ function Toolbar({ currentModel }: { currentModel: RenderModel }): React.ReactEl
                     }}
                 />
                 <ToolbarButton
+                    dataRole="next-diff-button"
                     disabled={!currentModel.canNextDiff}
                     icon="codicon-arrow-down"
                     label={STRINGS.nextDiff}
@@ -998,27 +1114,31 @@ function GridCell({
             data-row-number={row.rowNumber}
             title={getCellTooltip(cell.address, value, formula)}
             onClick={() => {
+                const hadEditingCell = Boolean(editingCell);
                 if (editingCell) {
                     finishEdit({ mode: "commit", refresh: false });
                 }
 
-                selectedCell = { rowNumber: row.rowNumber, columnNumber, side };
+                setSelectedCell({ rowNumber: row.rowNumber, columnNumber, side });
                 suppressAutoSelection = false;
                 pendingSelectionReason = null;
 
                 if (
-                    cell.status !== "equal" &&
+                    cell.diffIndex !== null &&
                     (model?.page.highlightedDiffCell?.rowNumber !== row.rowNumber ||
                         model?.page.highlightedDiffCell?.columnNumber !== columnNumber)
                 ) {
+                    syncLocalHighlightedDiffCell(cell, row, columnNumber);
                     vscode.postMessage({
-                        type: "selectCell",
+                        type: "syncHighlightedDiffCell",
                         rowNumber: row.rowNumber,
                         columnNumber,
                     });
                 }
 
-                renderApp({ commitEditing: false });
+                if (hadEditingCell) {
+                    renderApp({ commitEditing: false });
+                }
             }}
             onDoubleClick={(event) => {
                 if (!editable) {

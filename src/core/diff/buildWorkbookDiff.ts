@@ -67,6 +67,7 @@ function createSheetDiff(
                 rowNumber: cell.rowNumber,
                 columnNumber: cell.columnNumber,
                 address: cell.address,
+                diffIndex: -1,
             });
         }
     } else {
@@ -87,6 +88,7 @@ function createSheetDiff(
                 rowNumber: diffCell!.rowNumber,
                 columnNumber: diffCell!.columnNumber,
                 address: diffCell!.address,
+                diffIndex: -1,
             });
         }
     }
@@ -97,6 +99,9 @@ function createSheetDiff(
         }
 
         return left.columnNumber - right.columnNumber;
+    });
+    diffCells.forEach((cell, index) => {
+        cell.diffIndex = index;
     });
 
     return {
