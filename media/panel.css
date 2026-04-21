@@ -723,7 +723,7 @@ body {
 }
 
 .grid__cell--selected {
-    z-index: 3;
+    z-index: 1;
 }
 
 .grid__cell--selected-range {
