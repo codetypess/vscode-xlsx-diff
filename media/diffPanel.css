@@ -1,0 +1,651 @@
+:root {
+    --diff-row-height: 27px;
+    --diff-row-header-width: 56px;
+    --diff-column-width: 120px;
+    --diff-divider-width: 2px;
+    --diff-header-bg: var(
+        --vscode-sideBarSectionHeader-background,
+        color-mix(in srgb, var(--vscode-editor-background) 88%, white 12%)
+    );
+    --diff-toolbar-bg: var(
+        --vscode-editorGroupHeader-tabsBackground,
+        color-mix(in srgb, var(--vscode-editor-background) 94%, white 6%)
+    );
+    --diff-header-border: color-mix(in srgb, var(--vscode-panel-border) 72%, transparent);
+    --diff-subtle-text: var(--vscode-descriptionForeground);
+    --diff-modified-bg: color-mix(in srgb, var(--vscode-inputValidation-warningBackground) 28%, transparent);
+    --diff-added-bg: color-mix(in srgb, var(--vscode-inputValidation-infoBackground) 24%, transparent);
+    --diff-removed-bg: color-mix(in srgb, var(--vscode-inputValidation-errorBackground) 20%, transparent);
+    --diff-ghost-bg: color-mix(in srgb, var(--vscode-editor-background) 85%, var(--vscode-panel-border) 15%);
+    --diff-peer-bg: color-mix(in srgb, var(--vscode-list-inactiveSelectionBackground) 48%, transparent);
+    --diff-active-outline: var(--vscode-focusBorder);
+    --diff-current-outline: color-mix(in srgb, var(--vscode-focusBorder) 66%, var(--vscode-editorWarning-foreground) 34%);
+    --diff-button-bg: color-mix(in srgb, var(--vscode-button-secondaryBackground) 90%, transparent);
+}
+
+html,
+body,
+#app {
+    height: 100%;
+    width: 100%;
+    margin: 0;
+}
+
+body {
+    background: var(--vscode-editor-background);
+    color: var(--vscode-editor-foreground);
+    font-family: var(--vscode-font-family);
+    font-size: 13px;
+    padding: 0;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+button,
+input,
+textarea,
+select {
+    font: inherit;
+}
+
+.diff-shell,
+.diff-loading,
+.diff-errorState,
+.diff-emptyState {
+    height: 100%;
+    width: 100%;
+}
+
+.diff-loading,
+.diff-errorState,
+.diff-emptyState {
+    display: grid;
+    place-items: center;
+    padding: 0;
+}
+
+.diff-errorState,
+.diff-emptyState {
+    gap: 12px;
+}
+
+.diff-errorState__message,
+.diff-emptyState__message {
+    color: var(--diff-subtle-text);
+    text-align: center;
+}
+
+.diff-shell {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    min-width: 0;
+}
+
+.diff-toolbarBar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 8px 12px;
+    background: var(--diff-toolbar-bg);
+    border-bottom: 1px solid var(--diff-header-border);
+}
+
+.diff-toolbarGroup {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+}
+
+.diff-toolbarGroup--actions {
+    justify-content: flex-end;
+}
+
+.diff-separator {
+    margin: 0 6px;
+}
+
+.diff-chipGroup,
+.diff-actionGroup,
+.diff-statusBar {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.diff-button,
+.diff-chip,
+.diff-cell {
+    border: 1px solid var(--vscode-button-border, transparent);
+    background: transparent;
+    color: inherit;
+}
+
+.diff-button,
+.diff-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 28px;
+    padding: 0 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    white-space: nowrap;
+    font-size: 12px;
+    line-height: 18px;
+    background: var(
+        --vscode-button-secondaryBackground,
+        color-mix(in srgb, var(--vscode-editor-background) 90%, white 10%)
+    );
+    color: var(--vscode-button-secondaryForeground);
+}
+
+.diff-controlIcon {
+    font-size: 16px;
+    opacity: 1;
+}
+
+.diff-button:hover,
+.diff-chip:hover {
+    background: var(--vscode-button-secondaryHoverBackground, var(--vscode-list-hoverBackground));
+}
+
+.diff-button:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.diff-button--active,
+.diff-chip--active {
+    background: var(--vscode-button-background);
+    color: var(--vscode-button-foreground);
+    border-color: var(--vscode-button-border, transparent);
+}
+
+.diff-button--active:hover {
+    background: var(--vscode-button-hoverBackground, var(--vscode-button-background));
+}
+
+.diff-sheetTabs {
+    display: flex;
+    align-items: flex-end;
+    flex-wrap: wrap;
+    gap: 1px;
+    padding: 8px 12px 0;
+    border-top: 1px solid var(--vscode-panel-border, var(--diff-header-border));
+    border-bottom: 1px solid var(--vscode-tab-border, var(--vscode-panel-border));
+    overflow-x: auto;
+    background: var(
+        --vscode-editorGroupHeader-tabsBackground,
+        color-mix(in srgb, var(--vscode-editor-background) 96%, white 4%)
+    );
+}
+
+.diff-sheetTab {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    padding: 8px 16px 7px;
+    border: 1px solid transparent;
+    border-bottom: 0;
+    border-radius: 0;
+    cursor: pointer;
+    flex: 0 0 auto;
+    background: var(
+        --vscode-tab-inactiveBackground,
+        color-mix(in srgb, var(--vscode-editor-background) 95%, white 5%)
+    );
+    color: var(--vscode-tab-inactiveForeground, var(--vscode-descriptionForeground));
+    position: relative;
+    top: 1px;
+    white-space: nowrap;
+}
+
+.diff-sheetTab:hover {
+    background: var(
+        --vscode-tab-hoverBackground,
+        color-mix(in srgb, var(--vscode-editor-background) 91%, white 9%)
+    );
+}
+
+.diff-sheetTab--active {
+    background: var(
+        --vscode-tab-activeBackground,
+        color-mix(in srgb, var(--vscode-editor-background) 99%, white 1%)
+    );
+    color: var(--vscode-tab-activeForeground, var(--vscode-editor-foreground));
+    border-color: var(--vscode-tab-border, var(--diff-header-border));
+    font-weight: 600;
+    box-shadow: inset 0 2px 0 var(--vscode-tab-activeBorderTop, var(--vscode-focusBorder));
+}
+
+.diff-sheetTab--pending {
+    font-weight: 600;
+}
+
+.diff-sheetTab__marker {
+    margin-right: 2px;
+}
+
+.diff-sheetTab__label {
+    display: inline-block;
+    max-width: 160px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.diff-gridSection {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.diff-paneMetaRow {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) var(--diff-divider-width) minmax(0, 1fr);
+    border-bottom: 1px solid var(--vscode-panel-border);
+    background: transparent;
+}
+
+.diff-paneMeta {
+    min-width: 0;
+    padding: 12px;
+}
+
+.diff-paneMeta__name {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: 6px;
+    min-width: 0;
+}
+
+.diff-paneMeta__nameText {
+    flex: 1 1 auto;
+    min-width: 0;
+    word-break: break-word;
+}
+
+.diff-paneMeta__lock {
+    flex: 0 0 auto;
+    font-size: 14px;
+    color: var(--diff-subtle-text);
+}
+
+.diff-paneMeta__meta {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.diff-paneMeta__path,
+.diff-paneMeta__facts {
+    color: var(--diff-subtle-text);
+    font-size: 12px;
+}
+
+.diff-paneMeta__path {
+    line-height: 1.4;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.diff-paneMeta__facts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 12px;
+    line-height: 1.4;
+}
+
+.diff-gridShell {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.diff-gridHeaderRow,
+.diff-gridScrollbarRow,
+.diff-pairRow {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) var(--diff-divider-width) minmax(0, 1fr);
+}
+
+.diff-pane {
+    min-width: 0;
+}
+
+.diff-divider {
+    background: var(--vscode-panel-border);
+}
+
+.diff-paneHeader,
+.diff-sideRow {
+    display: grid;
+    grid-template-columns: var(--diff-row-header-width) minmax(0, 1fr);
+}
+
+.diff-paneHeader {
+    background: var(--diff-header-bg);
+    border-bottom: 1px solid var(--vscode-panel-border);
+}
+
+.diff-indexCell,
+.diff-headerCell {
+    height: var(--diff-row-height);
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    border-right: 1px solid var(--vscode-panel-border);
+    background: var(--diff-header-bg);
+    user-select: none;
+}
+
+.diff-indexCell {
+    height: var(--diff-row-height);
+    justify-content: flex-end;
+    padding: 4px 7px;
+    font-variant-numeric: tabular-nums;
+    border-bottom: 1px solid var(--vscode-panel-border);
+    color: var(--diff-subtle-text);
+}
+
+.diff-indexCell--header {
+    height: var(--diff-row-height);
+}
+
+.diff-headerCell {
+    padding: 4px 7px;
+}
+
+.diff-indexLabel,
+.diff-headerLabel {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 18px;
+    overflow: hidden;
+}
+
+.diff-indexLabel {
+    width: 100%;
+    justify-content: flex-end;
+}
+
+.diff-headerLabel {
+    max-width: calc(var(--diff-column-width) - 14px);
+}
+
+.diff-indexCell--selected {
+    background: color-mix(
+        in srgb,
+        var(--vscode-editorInfo-foreground, #3794ff) 8%,
+        var(--vscode-editor-background) 92%
+    );
+    color: var(--vscode-editor-foreground);
+    font-weight: 600;
+}
+
+.diff-headerCell--active {
+    background: color-mix(
+        in srgb,
+        var(--vscode-editorInfo-foreground, #3794ff) 10%,
+        var(--vscode-editor-background) 90%
+    );
+    color: var(--vscode-editor-foreground);
+    font-weight: 600;
+}
+
+.diff-indexCell--modified,
+.diff-indexCell--removed,
+.diff-headerCell--modified,
+.diff-headerCell--removed {
+    color: var(--vscode-editorError-foreground, #f14c4c);
+    font-weight: 600;
+}
+
+.diff-indexCell--added,
+.diff-headerCell--added {
+    color: var(--vscode-gitDecoration-addedResourceForeground, #2ea043);
+    font-weight: 600;
+}
+
+.diff-indexCell--pending,
+.diff-headerCell--pending {
+    color: var(--vscode-editorWarning-foreground, #cca700);
+    font-weight: 600;
+}
+
+.diff-diffMarker {
+    width: 9px;
+    height: 9px;
+    border-radius: 2px;
+    flex: 0 0 auto;
+    background: var(--vscode-editorError-foreground, #f14c4c);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 60%, transparent 40%);
+}
+
+.diff-diffMarker--added {
+    background: var(--vscode-gitDecoration-addedResourceForeground, #2ea043);
+}
+
+.diff-diffMarker--modified,
+.diff-diffMarker--removed {
+    background: var(--vscode-editorError-foreground, #f14c4c);
+}
+
+.diff-diffMarker--pending {
+    color: var(--vscode-editorWarning-foreground, #cca700);
+    background: var(--vscode-editorWarning-foreground, #cca700);
+}
+
+.diff-columnsViewport,
+.diff-rowCellsViewport {
+    overflow: hidden;
+}
+
+.diff-columnsTrack,
+.diff-rowCellsTrack {
+    display: flex;
+    will-change: transform;
+}
+
+.diff-headerCell,
+.diff-cell {
+    width: var(--diff-column-width);
+    flex: 0 0 var(--diff-column-width);
+}
+
+.diff-cell {
+    height: var(--diff-row-height);
+    padding: 3px 7px;
+    display: inline-flex;
+    align-items: flex-start;
+    text-align: left;
+    border-right: 1px solid var(--vscode-panel-border);
+    border-bottom: 1px solid var(--vscode-panel-border);
+    cursor: pointer;
+    position: relative;
+    background: var(--vscode-editor-background);
+}
+
+.diff-cell__text {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: -webkit-box;
+    overflow: hidden;
+    white-space: pre-wrap;
+    word-break: break-word;
+    line-height: 1.25;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+}
+
+.diff-cell--modified {
+    background: color-mix(in srgb, #f14c4c 24%, var(--vscode-editor-background) 76%);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, #f14c4c 82%, transparent 18%);
+}
+
+.diff-cell--added {
+    background: color-mix(in srgb, #2ea043 24%, var(--vscode-editor-background) 76%);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, #2ea043 82%, transparent 18%);
+}
+
+.diff-cell--removed {
+    background: color-mix(in srgb, #f14c4c 18%, var(--vscode-editor-background) 82%);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, #f14c4c 72%, transparent 28%);
+}
+
+.diff-cell--ghost {
+    color: var(--vscode-descriptionForeground);
+    background: color-mix(in srgb, var(--vscode-editor-background) 92%, white 8%);
+}
+
+.diff-cell--active {
+    z-index: 1;
+}
+
+.diff-cell--active::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border: 2px solid var(--vscode-focusBorder);
+    pointer-events: none;
+}
+
+.diff-cell--pending {
+    box-shadow: inset 0 0 0 2px var(--vscode-editorWarning-foreground, #cca700);
+    z-index: 1;
+}
+
+.diff-cell--editing {
+    padding: 0;
+    z-index: 5;
+}
+
+.diff-cell--editing::after {
+    display: none;
+}
+
+.diff-cell__input {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 3px 7px;
+    border: 2px solid var(--vscode-focusBorder);
+    outline: none;
+    background: var(--vscode-input-background, var(--vscode-editor-background));
+    color: var(--vscode-input-foreground, var(--vscode-editor-foreground));
+    font: inherit;
+    line-height: inherit;
+    user-select: text;
+}
+
+.diff-scrollbarRow {
+    display: grid;
+    grid-template-columns: var(--diff-row-header-width) minmax(0, 1fr);
+    background: transparent;
+}
+
+.diff-scrollbarRow--inactive {
+    visibility: hidden;
+}
+
+.diff-scrollbarSpacer {
+    border: 0;
+}
+
+.diff-scrollbar {
+    overflow-x: auto;
+    overflow-y: hidden;
+    height: 12px;
+    border: 0;
+    background: transparent;
+}
+
+.diff-scrollbar--inactive {
+    overflow: hidden;
+}
+
+.diff-scrollbar::-webkit-scrollbar {
+    height: 10px;
+}
+
+.diff-gridViewport {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+}
+
+.diff-gridViewportInner {
+    position: relative;
+    min-height: 100%;
+}
+
+.diff-gridBackdrop {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) var(--diff-divider-width) minmax(0, 1fr);
+    pointer-events: none;
+}
+
+.diff-gridBackdrop__divider {
+    background: var(--vscode-panel-border);
+}
+
+.diff-visibleRows {
+    position: absolute;
+    inset: 0 0 auto 0;
+}
+
+.diff-pairRow {
+    min-height: var(--diff-row-height);
+}
+
+.diff-statusBar {
+    min-height: 26px;
+    gap: 6px 10px;
+    padding: 6px 12px 8px;
+    color: var(--diff-subtle-text);
+    background: var(--vscode-editor-background);
+    font-size: 12px;
+}
+
+.diff-statusBar span {
+    white-space: nowrap;
+}
+
+@media (max-width: 980px) {
+    .diff-toolbarBar {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .diff-toolbarGroup--actions {
+        justify-content: flex-start;
+    }
+
+    .diff-paneMetaRow,
+    .diff-gridHeaderRow,
+    .diff-pairRow {
+        grid-template-columns: 1fr;
+    }
+
+    .diff-divider {
+        display: none;
+    }
+}

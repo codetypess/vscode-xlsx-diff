@@ -14,8 +14,7 @@
 		"noFallthroughCasesInSwitch": true
 	},
 	"include": [
-		"src/webview/panel.ts",
-		"src/webview/editorPanel.ts",
+		"src/webview/**/*.ts",
 		"src/webview/**/*.tsx",
 		"src/core/model/types.ts"
 	]

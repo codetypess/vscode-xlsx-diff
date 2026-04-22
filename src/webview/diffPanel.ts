@@ -4,38 +4,15 @@ import { WEBVIEW_TYPE_DIFF_PANEL } from "../constants";
 import { buildWorkbookDiff } from "../core/diff/buildWorkbookDiff";
 import { loadWorkbookSnapshot } from "../core/fastxlsx/loadWorkbookSnapshot";
 import { writeCellValues, type CellEdit } from "../core/fastxlsx/writeCellValue";
-import type {
-    PanelState,
-    RenderModel,
-    RowFilterMode,
-    WorkbookDiffModel,
-} from "../core/model/types";
+import type { WorkbookDiffModel } from "../core/model/types";
 import { getHtmlLanguageTag, isChineseDisplayLanguage } from "../displayLanguage";
-import {
-    createInitialPanelState,
-    createRenderModel,
-    movePageCursor,
-    moveDiffCursor,
-    normalizePanelState,
-    setActiveSheet,
-    setCurrentPage,
-    setFilterMode,
-    setHighlightedDiffCell,
-    setHighlightedDiffRow,
-} from "./renderModel";
 import { getWorkbookResourceName } from "../workbook/resourceUri";
+import { createDiffPanelRenderModel } from "./diffPanelModel";
+import type { DiffPanelRenderModel } from "./diffPanelTypes";
 
 type WebviewMessage =
     | { type: "ready" }
     | { type: "setSheet"; sheetKey: string }
-    | { type: "setFilter"; filter: RowFilterMode }
-    | { type: "setPage"; page: number }
-    | { type: "prevPage" }
-    | { type: "nextPage" }
-    | { type: "prevDiff" }
-    | { type: "nextDiff" }
-    | { type: "selectCell"; rowNumber: number; columnNumber: number }
-    | { type: "syncHighlightedDiffCell"; rowNumber: number; columnNumber: number }
     | {
           type: "saveEdits";
           edits: Array<{
@@ -51,32 +28,33 @@ type WebviewMessage =
 
 interface WebviewStrings {
     loading: string;
+    reload: string;
+    swap: string;
     all: string;
     diffs: string;
     same: string;
-    prevDiff: string;
-    nextDiff: string;
-    prevPage: string;
-    nextPage: string;
-    swap: string;
-    reload: string;
-    left: string;
-    right: string;
-    mergedRangesChanged: string;
-    noRowsAvailable: string;
-    size: string;
-    modified: string;
-    sheet: string;
-    rows: string;
-    noRows: string;
-    page: string;
-    filter: string;
-    diffCells: string;
+    allRows: string;
     diffRows: string;
     sameRows: string;
+    prevDiff: string;
+    nextDiff: string;
+    sheets: string;
+    diffCells: string;
+    diffRowsShort: string;
+    rows: string;
+    columns: string;
+    filter: string;
     visibleRows: string;
-    readOnly: string;
+    currentDiff: string;
+    selected: string;
     save: string;
+    none: string;
+    modified: string;
+    size: string;
+    readOnly: string;
+    mergedRangesChanged: string;
+    noSheet: string;
+    noRows: string;
 }
 
 function getNonce(): string {
@@ -92,67 +70,68 @@ function escapeWatcherGlobSegment(value: string): string {
 }
 
 function getWebviewStrings(): WebviewStrings {
-    const isChinese = isChineseDisplayLanguage();
-    if (isChinese) {
+    if (isChineseDisplayLanguage()) {
         return {
             loading: "正在加载 XLSX 对比...",
+            reload: "刷新",
+            swap: "交换",
             all: "全部",
             diffs: "差异",
             same: "相同",
-            prevDiff: "上一处差异",
-            nextDiff: "下一处差异",
-            prevPage: "上一页",
-            nextPage: "下一页",
-            swap: "交换",
-            reload: "刷新",
-            left: "左侧",
-            right: "右侧",
-            mergedRangesChanged: "合并区域已变化",
-            noRowsAvailable: "当前筛选条件下没有可显示的行。",
-            size: "大小",
-            modified: "修改时间",
-            sheet: "工作表",
-            rows: "行",
-            noRows: "无行",
-            page: "页码",
-            filter: "筛选",
-            diffCells: "差异单元格",
+            allRows: "全部行",
             diffRows: "差异行",
             sameRows: "相同行",
+            prevDiff: "上一处差异",
+            nextDiff: "下一处差异",
+            sheets: "工作表",
+            diffCells: "差异单元格",
+            diffRowsShort: "差异行",
+            rows: "行",
+            columns: "列",
+            filter: "筛选",
             visibleRows: "可见行",
-            readOnly: "只读",
+            currentDiff: "当前差异",
+            selected: "选中",
             save: "保存",
+            none: "-",
+            modified: "修改时间",
+            size: "大小",
+            readOnly: "只读",
+            mergedRangesChanged: "合并区域已变化",
+            noSheet: "没有可显示的工作表。",
+            noRows: "当前工作表没有可显示的行。",
         };
     }
 
     return {
         loading: "Loading XLSX diff...",
+        reload: "Reload",
+        swap: "Swap",
         all: "All",
         diffs: "Diffs",
         same: "Same",
+        allRows: "All Rows",
+        diffRows: "Diff Rows",
+        sameRows: "Same Rows",
         prevDiff: "Prev Diff",
         nextDiff: "Next Diff",
-        prevPage: "Prev Page",
-        nextPage: "Next Page",
-        swap: "Swap",
-        reload: "Reload",
-        left: "Left",
-        right: "Right",
-        mergedRangesChanged: "Merged ranges changed",
-        noRowsAvailable: "No rows available for this filter.",
-        size: "Size",
-        modified: "Modified",
-        sheet: "Sheet",
+        sheets: "Sheets",
+        diffCells: "Diff Cells",
+        diffRowsShort: "Diff Rows",
         rows: "Rows",
-        noRows: "No rows",
-        page: "Page",
+        columns: "Columns",
         filter: "Filter",
-        diffCells: "Diff cells",
-        diffRows: "Diff rows",
-        sameRows: "Same rows",
-        visibleRows: "Visible rows",
-        readOnly: "Read-only",
+        visibleRows: "Visible Rows",
+        currentDiff: "Current Diff",
+        selected: "Selected",
         save: "Save",
+        none: "-",
+        modified: "Modified",
+        size: "Size",
+        readOnly: "Read-only",
+        mergedRangesChanged: "Merged ranges changed",
+        noSheet: "No sheet is available.",
+        noRows: "No rows are available in this sheet.",
     };
 }
 
@@ -161,19 +140,14 @@ export class XlsxDiffPanel {
 
     private readonly panel: vscode.WebviewPanel;
     private readonly extensionUri: vscode.Uri;
+    private readonly panelKey: string;
     private readonly disposables: vscode.Disposable[] = [];
     private readonly fileWatchers: vscode.Disposable[] = [];
-    private readonly panelKey: string;
 
     private leftFileUri: vscode.Uri;
     private rightFileUri: vscode.Uri;
     private diffModel: WorkbookDiffModel | null = null;
-    private state: PanelState = {
-        activeSheetKey: null,
-        filter: "all",
-        currentPage: 1,
-        highlightedDiffCellKey: null,
-    };
+    private activeSheetKey: string | null = null;
     private isWebviewReady = false;
     private hasPendingRender = false;
     private isReloading = false;
@@ -210,6 +184,7 @@ export class XlsxDiffPanel {
             null,
             this.disposables
         );
+
         this.refreshFileWatchers();
     }
 
@@ -238,6 +213,11 @@ export class XlsxDiffPanel {
                 localResourceRoots: [extensionUri],
             }
         );
+
+        panel.iconPath = {
+            light: vscode.Uri.joinPath(extensionUri, "media", "icon.png"),
+            dark: vscode.Uri.joinPath(extensionUri, "media", "icon.png"),
+        };
 
         const instance = new XlsxDiffPanel(
             panel,
@@ -323,9 +303,15 @@ export class XlsxDiffPanel {
         if (Date.now() < this.suppressAutoRefreshUntil) {
             if (this.autoRefreshTimer) {
                 clearTimeout(this.autoRefreshTimer);
-                this.autoRefreshTimer = undefined;
             }
 
+            const delay = Math.max(0, this.suppressAutoRefreshUntil - Date.now()) + 50;
+            this.autoRefreshTimer = setTimeout(() => {
+                this.autoRefreshTimer = undefined;
+                void this.enqueueReload({ silent: true, clearPendingEdits: true }).catch((error) => {
+                    void this.handleError(error);
+                });
+            }, delay);
             return;
         }
 
@@ -335,7 +321,7 @@ export class XlsxDiffPanel {
 
         this.autoRefreshTimer = setTimeout(() => {
             this.autoRefreshTimer = undefined;
-            void this.enqueueReload({ clearPendingEdits: true }).catch((error) => {
+            void this.enqueueReload({ silent: true, clearPendingEdits: true }).catch((error) => {
                 void this.handleError(error);
             });
         }, 250);
@@ -362,7 +348,7 @@ export class XlsxDiffPanel {
 
             if (this.hasQueuedReload) {
                 this.hasQueuedReload = false;
-                await this.enqueueReload();
+                await this.enqueueReload({ silent: true });
             }
         }
 
@@ -371,23 +357,11 @@ export class XlsxDiffPanel {
         }
     }
 
-    private async handleError(error: unknown): Promise<void> {
-        const errorMessage = toErrorMessage(error);
-        console.error(error);
-        await vscode.window.showErrorMessage(errorMessage);
-        if (this.isWebviewReady) {
-            await this.panel.webview.postMessage({
-                type: "error",
-                message: errorMessage,
-            });
-        }
-    }
-
     private async refreshForDisplayLanguageChange(): Promise<void> {
         this.isWebviewReady = false;
         this.hasPendingRender = Boolean(this.diffModel);
         this.panel.webview.html = this.getHtml();
-        await this.enqueueReload();
+        await this.enqueueReload({ silent: true });
     }
 
     private getHtml(): string {
@@ -399,7 +373,7 @@ export class XlsxDiffPanel {
             vscode.Uri.joinPath(this.extensionUri, "media", "panel.js")
         );
         const styleUri = webview.asWebviewUri(
-            vscode.Uri.joinPath(this.extensionUri, "media", "panel.css")
+            vscode.Uri.joinPath(this.extensionUri, "media", "diffPanel.css")
         );
         const codiconStyleUri = webview.asWebviewUri(
             vscode.Uri.joinPath(this.extensionUri, "media", "codicons", "codicon.css")
@@ -409,16 +383,17 @@ export class XlsxDiffPanel {
 <html lang="${getHtmlLanguageTag()}">
 <head>
 	<meta charset="UTF-8" />
-	<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} https: data:; script-src 'nonce-${nonce}'; style-src ${webview.cspSource}; font-src ${webview.cspSource};" />
+	<meta
+		http-equiv="Content-Security-Policy"
+		content="default-src 'none'; img-src ${webview.cspSource} https: data:; script-src 'nonce-${nonce}'; style-src ${webview.cspSource}; font-src ${webview.cspSource};"
+	/>
 	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 	<link rel="stylesheet" href="${codiconStyleUri}" />
 	<link rel="stylesheet" href="${styleUri}" />
 	<title>XLSX Diff</title>
 </head>
 <body>
-	<div id="app" class="loading-shell">
-		<div class="loading-shell__message">${webviewStrings.loading}</div>
-	</div>
+	<div id="app" class="v2-loading">${webviewStrings.loading}</div>
 	<script nonce="${nonce}">window.__XLSX_DIFF_STRINGS__ = ${strings};</script>
 	<script nonce="${nonce}" src="${scriptUri}"></script>
 </body>
@@ -438,113 +413,51 @@ export class XlsxDiffPanel {
                     if (!this.diffModel) {
                         return;
                     }
-                    this.state = setActiveSheet(this.diffModel, this.state, message.sheetKey);
-                    await this.render();
-                    return;
-                case "setFilter":
-                    if (!this.diffModel) {
+
+                    if (!this.diffModel.sheets.some((sheet) => sheet.key === message.sheetKey)) {
                         return;
                     }
-                    this.state = setFilterMode(this.diffModel, this.state, message.filter);
+
+                    this.activeSheetKey = message.sheetKey;
                     await this.render();
-                    return;
-                case "setPage":
-                    if (!this.diffModel) {
-                        return;
-                    }
-                    this.state = setCurrentPage(this.diffModel, this.state, message.page);
-                    await this.render();
-                    return;
-                case "prevPage":
-                    if (!this.diffModel) {
-                        return;
-                    }
-                    this.state = movePageCursor(this.diffModel, this.state, -1);
-                    await this.render();
-                    return;
-                case "nextPage":
-                    if (!this.diffModel) {
-                        return;
-                    }
-                    this.state = movePageCursor(this.diffModel, this.state, 1);
-                    await this.render();
-                    return;
-                case "prevDiff":
-                    if (!this.diffModel) {
-                        return;
-                    }
-                    this.state = moveDiffCursor(this.diffModel, this.state, -1);
-                    await this.render();
-                    return;
-                case "nextDiff":
-                    if (!this.diffModel) {
-                        return;
-                    }
-                    this.state = moveDiffCursor(this.diffModel, this.state, 1);
-                    await this.render();
-                    return;
-                case "selectCell":
-                    if (!this.diffModel) {
-                        return;
-                    }
-                    this.state = setHighlightedDiffCell(
-                        this.diffModel,
-                        this.state,
-                        message.rowNumber,
-                        message.columnNumber
-                    );
-                    await this.render();
-                    return;
-                case "syncHighlightedDiffCell":
-                    if (!this.diffModel) {
-                        return;
-                    }
-                    this.state = setHighlightedDiffCell(
-                        this.diffModel,
-                        this.state,
-                        message.rowNumber,
-                        message.columnNumber
-                    );
                     return;
                 case "saveEdits": {
                     if (!this.diffModel || message.edits.length === 0) {
                         return;
                     }
 
-                    // Resolve each edit's sheet name from its sheetKey (supports multi-sheet saves)
                     const leftCellEdits: CellEdit[] = message.edits
-                        .filter((e) => e.side === "left")
-                        .flatMap((e) => {
-                            const sheet = this.diffModel!.sheets.find((s) => s.key === e.sheetKey);
+                        .filter((edit) => edit.side === "left")
+                        .flatMap((edit) => {
+                            const sheet = this.diffModel!.sheets.find((item) => item.key === edit.sheetKey);
                             return sheet?.leftSheet
                                 ? [
                                       {
                                           sheetName: sheet.leftSheet.name,
-                                          rowNumber: e.rowNumber,
-                                          columnNumber: e.columnNumber,
-                                          value: e.value,
+                                          rowNumber: edit.rowNumber,
+                                          columnNumber: edit.columnNumber,
+                                          value: edit.value,
                                       },
                                   ]
                                 : [];
                         });
 
                     const rightCellEdits: CellEdit[] = message.edits
-                        .filter((e) => e.side === "right")
-                        .flatMap((e) => {
-                            const sheet = this.diffModel!.sheets.find((s) => s.key === e.sheetKey);
+                        .filter((edit) => edit.side === "right")
+                        .flatMap((edit) => {
+                            const sheet = this.diffModel!.sheets.find((item) => item.key === edit.sheetKey);
                             return sheet?.rightSheet
                                 ? [
                                       {
                                           sheetName: sheet.rightSheet.name,
-                                          rowNumber: e.rowNumber,
-                                          columnNumber: e.columnNumber,
-                                          value: e.value,
+                                          rowNumber: edit.rowNumber,
+                                          columnNumber: edit.columnNumber,
+                                          value: edit.value,
                                       },
                                   ]
                                 : [];
                         });
 
-                    // Suppress the auto-refresh that the file writes below will trigger
                     this.suppressAutoRefreshUntil = Date.now() + 2000;
 
                     await Promise.all([
@@ -556,11 +469,12 @@ export class XlsxDiffPanel {
                             : Promise.resolve(),
                     ]);
 
-                    await this.enqueueReload({ silent: true });
+                    await this.enqueueReload({ silent: true, clearPendingEdits: true });
                     return;
                 }
                 case "swap": {
-                    this.setFileUris(this.rightFileUri, this.leftFileUri);
+                    const previousLeftFileUri = this.leftFileUri;
+                    this.setFileUris(this.rightFileUri, previousLeftFileUri);
                     await this.enqueueReload({ clearPendingEdits: true });
                     return;
                 }
@@ -596,30 +510,23 @@ export class XlsxDiffPanel {
         ]);
 
         this.diffModel = buildWorkbookDiff(leftWorkbook, rightWorkbook);
-        this.state = this.diffModel.sheets.length
-            ? normalizePanelState(
-                  this.diffModel,
-                  this.state.activeSheetKey ? this.state : createInitialPanelState(this.diffModel)
-              )
-            : createInitialPanelState(this.diffModel);
+        this.activeSheetKey =
+            this.diffModel.sheets.find((sheet) => sheet.key === this.activeSheetKey)?.key ??
+            this.diffModel.sheets[0]?.key ??
+            null;
 
-        const renderModel = createRenderModel(this.diffModel, this.state);
-        this.panel.title = renderModel.title;
-        await this.render(renderModel, { silent, clearPendingEdits });
+        await this.render(undefined, { clearPendingEdits });
     }
 
     private async render(
-        renderModel?: RenderModel,
-        {
-            silent = false,
-            clearPendingEdits = false,
-        }: { silent?: boolean; clearPendingEdits?: boolean } = {}
+        renderModel?: DiffPanelRenderModel,
+        { clearPendingEdits = false }: { clearPendingEdits?: boolean } = {}
     ): Promise<void> {
         if (!this.diffModel) {
             return;
         }
 
-        const payload = renderModel ?? createRenderModel(this.diffModel, this.state);
+        const payload = renderModel ?? createDiffPanelRenderModel(this.diffModel, this.activeSheetKey);
         this.panel.title = payload.title;
 
         if (!this.isWebviewReady) {
@@ -631,8 +538,20 @@ export class XlsxDiffPanel {
         await this.panel.webview.postMessage({
             type: "render",
             payload,
-            silent,
             clearPendingEdits,
         });
+    }
+
+    private async handleError(error: unknown): Promise<void> {
+        const errorMessage = toErrorMessage(error);
+        console.error(error);
+        await vscode.window.showErrorMessage(errorMessage);
+
+        if (this.isWebviewReady) {
+            await this.panel.webview.postMessage({
+                type: "error",
+                message: errorMessage,
+            });
+        }
     }
 }

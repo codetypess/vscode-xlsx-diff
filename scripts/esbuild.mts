@@ -37,19 +37,6 @@ async function main() {
         plugins: [esbuildProblemMatcherPlugin],
     });
 
-    const webviewCtx = await context({
-        entryPoints: ["src/webview/panel.ts"],
-        bundle: true,
-        format: "iife",
-        minify: production,
-        sourcemap: !production,
-        sourcesContent: false,
-        platform: "browser",
-        outfile: "media/panel.js",
-        logLevel: "silent",
-        plugins: [esbuildProblemMatcherPlugin],
-    });
-
     const editorWebviewCtx = await context({
         entryPoints: ["src/webview/editorPanel.ts"],
         bundle: true,
@@ -63,19 +50,32 @@ async function main() {
         plugins: [esbuildProblemMatcherPlugin],
     });
 
+    const diffPanelWebviewCtx = await context({
+        entryPoints: ["src/webview/panel.ts"],
+        bundle: true,
+        format: "iife",
+        minify: production,
+        sourcemap: !production,
+        sourcesContent: false,
+        platform: "browser",
+        outfile: "media/panel.js",
+        logLevel: "silent",
+        plugins: [esbuildProblemMatcherPlugin],
+    });
+
     if (watch) {
         await extensionCtx.watch();
-        await webviewCtx.watch();
         await editorWebviewCtx.watch();
+        await diffPanelWebviewCtx.watch();
         return;
     }
 
     await extensionCtx.rebuild();
     await extensionCtx.dispose();
-    await webviewCtx.rebuild();
-    await webviewCtx.dispose();
     await editorWebviewCtx.rebuild();
     await editorWebviewCtx.dispose();
+    await diffPanelWebviewCtx.rebuild();
+    await diffPanelWebviewCtx.dispose();
 }
 
 main().catch((error) => {

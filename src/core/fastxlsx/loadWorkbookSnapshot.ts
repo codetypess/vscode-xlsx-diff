@@ -139,6 +139,21 @@ export async function loadWorkbookSnapshot(
         });
     }
 
+    if (filePathOrUri.scheme === "file") {
+        const [workbook, fileStats] = await Promise.all([
+            Workbook.open(filePathOrUri.fsPath),
+            stat(filePathOrUri.fsPath),
+        ]);
+
+        return createWorkbookSnapshot(workbook, {
+            filePath: getWorkbookResourcePathLabel(filePathOrUri),
+            fileName: getWorkbookResourceName(filePathOrUri),
+            fileSize: fileStats.size,
+            modifiedTime: fileStats.mtime.toISOString(),
+            isReadonly: isWorkbookResourceReadOnly(filePathOrUri),
+        });
+    }
+
     const archiveData = await vscode.workspace.fs.readFile(filePathOrUri);
     const workbook = Workbook.fromUint8Array(archiveData);
     const resourceName = getWorkbookResourceName(filePathOrUri);
@@ -146,17 +161,6 @@ export async function loadWorkbookSnapshot(
     const resourceDetail = await getWorkbookResourceDetail(filePathOrUri);
     const resourceFilePath =
         filePathOrUri.scheme === "git" ? decodeURIComponent(filePathOrUri.path) : undefined;
-
-    if (filePathOrUri.scheme === "file") {
-        const fileStats = await stat(filePathOrUri.fsPath);
-        return createWorkbookSnapshot(workbook, {
-            filePath: resourcePath,
-            fileName: resourceName,
-            fileSize: fileStats.size,
-            modifiedTime: fileStats.mtime.toISOString(),
-            isReadonly: isWorkbookResourceReadOnly(filePathOrUri),
-        });
-    }
 
     const resourceStats = resourceFilePath
         ? await stat(resourceFilePath).catch(() => undefined)

@@ -24,7 +24,10 @@ export function activate(context: vscode.ExtensionContext) {
                 return;
             }
 
-            void Promise.all([XlsxDiffPanel.refreshAll(), XlsxEditorPanel.refreshAll()]);
+            void Promise.all([
+                XlsxDiffPanel.refreshAll(),
+                XlsxEditorPanel.refreshAll(),
+            ]);
         }),
         vscode.commands.registerCommand(COMMAND_COMPARE_TWO_FILES, async () => {
             await compareTwoFiles(context.extensionUri);

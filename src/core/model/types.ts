@@ -1,4 +1,3 @@
-export type RowFilterMode = "all" | "diffs" | "same";
 export type SheetComparisonKind = "matched" | "renamed" | "added" | "removed";
 export type CellDiffStatus = "equal" | "modified" | "added" | "removed";
 
@@ -160,64 +159,6 @@ export interface WorkbookDiffModel {
     totalDiffCells: number;
 }
 
-export interface GridCellView {
-    key: string;
-    address: string;
-    status: CellDiffStatus;
-    diffIndex: number | null;
-    leftPresent: boolean;
-    rightPresent: boolean;
-    leftValue: string;
-    rightValue: string;
-    leftFormula: string | null;
-    rightFormula: string | null;
-}
-
-export interface GridRowView {
-    rowNumber: number;
-    hasDiff: boolean;
-    isHighlighted: boolean;
-    diffTone: CellDiffStatus;
-    cells: GridCellView[];
-}
-
-export interface PageSlice {
-    filter: RowFilterMode;
-    currentPage: number;
-    totalPages: number;
-    totalRows: number;
-    visibleRowCount: number;
-    rangeLabel: string;
-    columns: string[];
-    columnDiffTones: Array<CellDiffStatus | null>;
-    rows: GridRowView[];
-    diffRowCount: number;
-    diffCellCount: number;
-    sameRowCount: number;
-    highlightedDiffRow: number | null;
-    highlightedDiffCell: DiffCellLocation | null;
-    mergedRangesChanged: boolean;
-}
-
-export interface PanelState {
-    activeSheetKey: string | null;
-    filter: RowFilterMode;
-    currentPage: number;
-    highlightedDiffCellKey: string | null;
-}
-
-export interface SheetTabView {
-    key: string;
-    label: string;
-    kind: SheetComparisonKind;
-    diffRowCount: number;
-    diffCellCount: number;
-    mergedRangesChanged: boolean;
-    hasDiff: boolean;
-    diffTone: CellDiffStatus;
-    isActive: boolean;
-}
-
 export interface WorkbookFileView {
     fileName: string;
     filePath: string;
@@ -226,32 +167,4 @@ export interface WorkbookFileView {
     detailValue?: string;
     modifiedTimeLabel: string;
     isReadonly: boolean;
-}
-
-export interface RenderModel {
-    title: string;
-    leftFile: WorkbookFileView;
-    rightFile: WorkbookFileView;
-    summary: {
-        totalSheets: number;
-        diffSheets: number;
-        diffRows: number;
-        diffCells: number;
-    };
-    activeSheet: {
-        key: string;
-        label: string;
-        kind: SheetComparisonKind;
-        leftName: string | null;
-        rightName: string | null;
-        hasDiff: boolean;
-        mergedRangesChanged: boolean;
-    };
-    filter: RowFilterMode;
-    page: PageSlice;
-    sheets: SheetTabView[];
-    canPrevPage: boolean;
-    canNextPage: boolean;
-    canPrevDiff: boolean;
-    canNextDiff: boolean;
 }

@@ -1,5 +1,8 @@
 import * as vscode from "vscode";
-import { WEBVIEW_TYPE_DIFF_PANEL, WEBVIEW_TYPE_EDITOR_PANEL } from "../constants";
+import {
+    WEBVIEW_TYPE_DIFF_PANEL,
+    WEBVIEW_TYPE_EDITOR_PANEL,
+} from "../constants";
 import { resolveUnknownGitWorkbookDiff } from "../git/scmDiffFallback";
 import { resolveUnknownSvnWorkbookDiff } from "../svn/scmDiffFallback";
 import { XlsxDiffPanel } from "../webview/diffPanel";
@@ -91,10 +94,7 @@ function getCustomWorkbookEditorTab(tab: vscode.Tab): CustomWorkbookEditorTab | 
 }
 
 function isXlsxDiffPanelTab(tab: vscode.Tab): boolean {
-    return (
-        tab.input instanceof vscode.TabInputWebview &&
-        tab.input.viewType.endsWith(WEBVIEW_TYPE_DIFF_PANEL)
-    );
+    return tab.input instanceof vscode.TabInputWebview && tab.input.viewType === WEBVIEW_TYPE_DIFF_PANEL;
 }
 
 function getCustomWorkbookEditorTabs(): CustomWorkbookEditorTab[] {
