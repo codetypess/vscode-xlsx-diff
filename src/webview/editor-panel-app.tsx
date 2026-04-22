@@ -2549,6 +2549,13 @@ function updateView(view: ViewState): void {
         return;
     }
 
+    if (view.kind === "app") {
+        React.startTransition(() => {
+            setView(view);
+        });
+        return;
+    }
+
     flushSync(() => {
         setView(view);
     });
@@ -3713,6 +3720,7 @@ function EditorPane({
                 </div>
             ) : (
                 <EditorVirtualGrid
+                    key={currentModel.activeSheet.key}
                     currentModel={currentModel}
                     pendingSummary={pendingSummary}
                     view={view}
