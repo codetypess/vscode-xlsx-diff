@@ -105,6 +105,8 @@ suite("Editor render model", () => {
         assert.strictEqual(renderModel.selection?.address, "R205C1");
         assert.strictEqual(renderModel.activeSheet.rowCount, 205);
         assert.strictEqual(renderModel.activeSheet.cells["205:1"]?.displayValue, "tail");
+        assert.strictEqual(renderModel.page.startRow, 6);
+        assert.strictEqual(renderModel.page.endRow, 205);
     });
 
     test("surfaces full active sheet columns and sparse cells", () => {
@@ -163,7 +165,7 @@ suite("Editor render model", () => {
         assert.strictEqual(renderModel.activeSheet.columnCount, 10);
     });
 
-    test("exposes locked sheets without truncating sparse cell data", () => {
+    test("keeps large locked sheets paged until selection moves into the sparse region", () => {
         const workbook = createWorkbook({}, [
             createSheet("Sheet1", [createCell(240, 2, "tail")], 400, 4, [], {
                 columnCount: 1,
@@ -178,13 +180,39 @@ suite("Editor render model", () => {
             createInitialEditorPanelState(workbook)
         );
 
-        assert.strictEqual(renderModel.activeSheet.cells["240:2"]?.displayValue, "tail");
+        assert.strictEqual(renderModel.page.startRow, 3);
+        assert.strictEqual(renderModel.page.endRow, 202);
+        assert.strictEqual(renderModel.activeSheet.cells["240:2"], undefined);
         assert.deepStrictEqual(renderModel.activeSheet.freezePane, {
             columnCount: 1,
             rowCount: 2,
             topLeftCell: "B3",
             activePane: "bottomRight",
         });
+    });
+
+    test("loads a sparse tail cell after selection moves the viewport window", () => {
+        const workbook = createWorkbook({}, [
+            createSheet("Sheet1", [createCell(240, 2, "tail")], 400, 4, [], {
+                columnCount: 1,
+                rowCount: 2,
+                topLeftCell: "B3",
+                activePane: "bottomRight",
+            }),
+        ]);
+
+        const selectedState = setSelectedEditorCell(
+            workbook,
+            createInitialEditorPanelState(workbook),
+            240,
+            2
+        );
+        const renderModel = createEditorRenderModel(workbook, selectedState);
+
+        assert.strictEqual(renderModel.selection?.address, "R240C2");
+        assert.strictEqual(renderModel.activeSheet.cells["240:2"]?.displayValue, "tail");
+        assert.ok(renderModel.page.startRow <= 240);
+        assert.ok(renderModel.page.endRow >= 240);
     });
 
     test("keeps frozen-row selections in the render model", () => {
