@@ -8,7 +8,6 @@ import {
     createInitialEditorPanelState,
     setActiveEditorSheet,
     setSelectedEditorCell,
-    setEditorViewportStartRow,
 } from "../webview/editor-render-model";
 
 function createCell(rowNumber: number, columnNumber: number, displayValue: string): CellSnapshot {
@@ -90,7 +89,7 @@ suite("Editor render model", () => {
         assert.strictEqual(renderModel.canSave, false);
     });
 
-    test("moves selection into the visible virtualized window", () => {
+    test("keeps the selected sparse cell in the render model", () => {
         const workbook = createWorkbook({}, [
             createSheet("Sheet1", [createCell(205, 1, "tail")], 205, 1),
         ]);
@@ -104,26 +103,22 @@ suite("Editor render model", () => {
         const renderModel = createEditorRenderModel(workbook, state);
 
         assert.strictEqual(renderModel.selection?.address, "R205C1");
-        assert.strictEqual(renderModel.page.rows[0].rowNumber, 6);
-        assert.strictEqual(renderModel.page.rows[199].cells[0].isSelected, true);
+        assert.strictEqual(renderModel.activeSheet.rowCount, 205);
+        assert.strictEqual(renderModel.activeSheet.cells["205:1"]?.displayValue, "tail");
     });
 
-    test("renders a sliding row window when viewport start row changes", () => {
+    test("surfaces full active sheet columns and sparse cells", () => {
         const workbook = createWorkbook({}, [
-            createSheet("Sheet1", [createCell(240, 1, "tail")], 400, 1),
+            createSheet("Sheet1", [createCell(2, 2, "value"), createCell(4, 3, "tail")], 400, 3),
         ]);
-
-        const state = setEditorViewportStartRow(
+        const renderModel = createEditorRenderModel(
             workbook,
-            createInitialEditorPanelState(workbook),
-            121
+            createInitialEditorPanelState(workbook)
         );
-        const renderModel = createEditorRenderModel(workbook, state);
 
-        assert.strictEqual(renderModel.page.startRow, 121);
-        assert.strictEqual(renderModel.page.rows[0]?.rowNumber, 121);
-        assert.strictEqual(renderModel.page.endRow, 320);
-        assert.strictEqual(renderModel.page.rows[renderModel.page.rows.length - 1]?.rowNumber, 320);
+        assert.deepStrictEqual(renderModel.activeSheet.columns, ["A", "B", "C"]);
+        assert.strictEqual(renderModel.activeSheet.cells["2:2"]?.displayValue, "value");
+        assert.strictEqual(renderModel.activeSheet.cells["4:3"]?.displayValue, "tail");
     });
 
     test("switches sheets and preserves sparse cells as blanks", () => {
@@ -138,8 +133,8 @@ suite("Editor render model", () => {
 
         assert.strictEqual(renderModel.activeSheet.label, "Second");
         assert.strictEqual(renderModel.activeSheet.hasMergedRanges, true);
-        assert.strictEqual(renderModel.page.rows[0].cells[0].value, "");
-        assert.strictEqual(renderModel.page.rows[1].cells[1].value, "value");
+        assert.deepStrictEqual(renderModel.activeSheet.columns, ["A", "B"]);
+        assert.strictEqual(renderModel.activeSheet.cells["2:2"]?.displayValue, "value");
         assert.strictEqual(renderModel.summary.totalNonEmptyCells, 2);
     });
 
@@ -164,41 +159,13 @@ suite("Editor render model", () => {
             topLeftCell: "B3",
             activePane: "bottomRight",
         });
-        assert.deepStrictEqual(
-            renderModel.page.frozenRows.map((row) => row.rowNumber),
-            [1, 2]
-        );
+        assert.strictEqual(renderModel.activeSheet.rowCount, 10);
+        assert.strictEqual(renderModel.activeSheet.columnCount, 10);
     });
 
-    test("keeps frozen rows separate when virtualizing a locked sheet", () => {
+    test("exposes locked sheets without truncating sparse cell data", () => {
         const workbook = createWorkbook({}, [
             createSheet("Sheet1", [createCell(240, 2, "tail")], 400, 4, [], {
-                columnCount: 1,
-                rowCount: 2,
-                topLeftCell: "B3",
-                activePane: "bottomRight",
-            }),
-        ]);
-
-        const state = setEditorViewportStartRow(
-            workbook,
-            createInitialEditorPanelState(workbook),
-            121
-        );
-        const renderModel = createEditorRenderModel(workbook, state);
-
-        assert.deepStrictEqual(
-            renderModel.page.frozenRows.map((row) => row.rowNumber),
-            [1, 2]
-        );
-        assert.strictEqual(renderModel.page.startRow, 121);
-        assert.strictEqual(renderModel.page.rows[0]?.rowNumber, 121);
-        assert.strictEqual(renderModel.page.endRow, 320);
-    });
-
-    test("keeps the scrollable window below frozen rows on shorter locked sheets", () => {
-        const workbook = createWorkbook({}, [
-            createSheet("Sheet1", [createCell(150, 2, "tail")], 150, 4, [], {
                 columnCount: 1,
                 rowCount: 2,
                 topLeftCell: "B3",
@@ -211,16 +178,16 @@ suite("Editor render model", () => {
             createInitialEditorPanelState(workbook)
         );
 
-        assert.deepStrictEqual(
-            renderModel.page.frozenRows.map((row) => row.rowNumber),
-            [1, 2]
-        );
-        assert.strictEqual(renderModel.page.startRow, 3);
-        assert.strictEqual(renderModel.page.rows[0]?.rowNumber, 3);
-        assert.strictEqual(renderModel.page.endRow, 150);
+        assert.strictEqual(renderModel.activeSheet.cells["240:2"]?.displayValue, "tail");
+        assert.deepStrictEqual(renderModel.activeSheet.freezePane, {
+            columnCount: 1,
+            rowCount: 2,
+            topLeftCell: "B3",
+            activePane: "bottomRight",
+        });
     });
 
-    test("keeps viewport position when selecting a frozen row", () => {
+    test("keeps frozen-row selections in the render model", () => {
         const workbook = createWorkbook({}, [
             createSheet("Sheet1", [createCell(240, 2, "tail")], 400, 4, [], {
                 columnCount: 1,
@@ -230,16 +197,20 @@ suite("Editor render model", () => {
             }),
         ]);
 
-        const scrolledState = setEditorViewportStartRow(
+        const selectedState = setSelectedEditorCell(
             workbook,
             createInitialEditorPanelState(workbook),
-            121
+            1,
+            1
         );
-        const selectedState = setSelectedEditorCell(workbook, scrolledState, 1, 1);
         const renderModel = createEditorRenderModel(workbook, selectedState);
 
         assert.strictEqual(renderModel.selection?.address, "A1");
-        assert.strictEqual(renderModel.page.startRow, 121);
-        assert.strictEqual(renderModel.page.rows[0]?.rowNumber, 121);
+        assert.deepStrictEqual(renderModel.activeSheet.freezePane, {
+            columnCount: 1,
+            rowCount: 2,
+            topLeftCell: "B3",
+            activePane: "bottomRight",
+        });
     });
 });

@@ -38,7 +38,7 @@ async function main() {
     });
 
     const editorWebviewCtx = await context({
-        entryPoints: ["src/webview/editor-panel.ts"],
+        entryPoints: ["src/webview/editor-webview.ts"],
         bundle: true,
         format: "iife",
         minify: production,

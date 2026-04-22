@@ -5,13 +5,21 @@ import {
     DEFAULT_EDITOR_WINDOW_OVERSCAN,
     DEFAULT_EDITOR_WINDOW_SIZE,
 } from "../constants";
-import type {
-    EditorGridCellView,
-    EditorGridRowView,
-    EditorRenderModel,
-    EditorSheetTabView,
-} from "../core/model/types";
-import { getColumnLabel } from "../core/model/cells";
+import type { CellSnapshot, EditorRenderModel, EditorSheetTabView } from "../core/model/types";
+import { createCellKey, getColumnLabel } from "../core/model/cells";
+import {
+    EDITOR_VIRTUAL_COLUMN_WIDTH,
+    EDITOR_VIRTUAL_HEADER_HEIGHT,
+    EDITOR_VIRTUAL_ROW_HEIGHT,
+    clampEditorScrollPosition,
+    createEditorColumnWindow,
+    createEditorRowWindow,
+    getEditorContentSize,
+    getEditorRowHeaderWidth,
+    getEditorScrollPositionForCell,
+    getFrozenEditorCounts,
+} from "./editor-virtual-grid";
+import { getApproximateViewportStartRowForScrollPosition } from "./editor-panel-scroll";
 import { getFreezePaneCountsForCell, hasLockedView } from "./view-lock";
 
 interface VsCodeApi {
@@ -85,6 +93,21 @@ interface CellRange {
     endRow: number;
     startColumn: number;
     endColumn: number;
+}
+
+interface EditorGridCellView {
+    key: string;
+    address: string;
+    value: string;
+    formula: string | null;
+    isPresent: boolean;
+    isSelected: boolean;
+}
+
+interface EditorGridRowView {
+    rowNumber: number;
+    isSelected: boolean;
+    cells: EditorGridCellView[];
 }
 
 interface EditingCell extends CellPosition {
@@ -236,6 +259,67 @@ const ACTIVE_SCROLL_LAYOUT_DELAY_MS = 140;
 const WHEEL_DELTA_LINE_MODE = 1;
 const WHEEL_DELTA_PAGE_MODE = 2;
 const WHEEL_LINE_SCROLL_PIXELS = 40;
+const DEFAULT_EDITOR_VIEWPORT_HEIGHT = 480;
+const DEFAULT_EDITOR_VIEWPORT_WIDTH = 960;
+
+interface VirtualViewportState {
+    scrollTop: number;
+    scrollLeft: number;
+    viewportHeight: number;
+    viewportWidth: number;
+    rowHeaderWidth: number;
+    frozenRowCount: number;
+    frozenColumnCount: number;
+    rowNumbers: number[];
+    columnNumbers: number[];
+}
+
+function getViewportElement(): HTMLElement | null {
+    return document.querySelector<HTMLElement>('[data-role="grid-scroll-main"]');
+}
+
+function getVirtualViewportState(currentModel: EditorRenderModel | null): VirtualViewportState | null {
+    if (!currentModel) {
+        return null;
+    }
+
+    const pane = getViewportElement();
+    const viewportHeight = pane?.clientHeight ?? DEFAULT_EDITOR_VIEWPORT_HEIGHT;
+    const viewportWidth = pane?.clientWidth ?? DEFAULT_EDITOR_VIEWPORT_WIDTH;
+    const scrollTop = pane?.scrollTop ?? 0;
+    const scrollLeft = pane?.scrollLeft ?? 0;
+    const rowHeaderWidth = getEditorRowHeaderWidth(currentModel.activeSheet.rowCount);
+    const { rowCount: frozenRowCount, columnCount: frozenColumnCount } = getFrozenEditorCounts({
+        rowCount: currentModel.activeSheet.rowCount,
+        columnCount: currentModel.activeSheet.columnCount,
+        freezePane: currentModel.activeSheet.freezePane,
+    });
+    const rowWindow = createEditorRowWindow({
+        totalRows: currentModel.activeSheet.rowCount,
+        frozenRowCount,
+        scrollTop,
+        viewportHeight,
+    });
+    const columnWindow = createEditorColumnWindow({
+        totalColumns: currentModel.activeSheet.columnCount,
+        frozenColumnCount,
+        scrollLeft,
+        viewportWidth,
+        rowHeaderWidth,
+    });
+
+    return {
+        scrollTop,
+        scrollLeft,
+        viewportHeight,
+        viewportWidth,
+        rowHeaderWidth,
+        frozenRowCount,
+        frozenColumnCount,
+        rowNumbers: rowWindow.rowNumbers,
+        columnNumbers: columnWindow.columnNumbers,
+    };
+}
 
 function getViewportShiftRowCount(): number {
     return Math.max(1, DEFAULT_EDITOR_WINDOW_SIZE - DEFAULT_EDITOR_WINDOW_OVERSCAN * 2);
@@ -509,6 +593,23 @@ function maybeRequestViewportForScroll(pane: HTMLElement): void {
     const baseRow = getScrollableViewportBaseRow(model);
     const currentStartRow = model.page.startRow;
     const currentEndRow = model.page.endRow;
+    const directViewportStartRow = getApproximateViewportStartRowForScrollPosition({
+        baseRow,
+        maxStartRow: getMaxViewportStartRow(model),
+        totalScrollableRows: getScrollableViewportRowCount(model),
+        visibleRowCount: model.page.visibleRowCount,
+        scrollTop: pane.scrollTop,
+        maxScrollTop: Math.max(0, pane.scrollHeight - pane.clientHeight),
+    });
+
+    // Large scrollbar jumps should snap the data window near the dragged position
+    // instead of paging forward/backward in multiple extension round trips.
+    if (Math.abs(directViewportStartRow - currentStartRow) > getViewportShiftRowCount()) {
+        lastObservedPaneScrollTop = pane.scrollTop;
+        requestViewportStartRow(directViewportStartRow);
+        return;
+    }
+
     const { firstVisibleRow, lastVisibleRow } = getVisibleScrollableRowRange(model, pane);
     const previousScrollTop = lastObservedPaneScrollTop;
     lastObservedPaneScrollTop = pane.scrollTop;
@@ -606,9 +707,33 @@ function getScrollableRowsForCurrentView(currentModel: EditorRenderModel): Edito
     return currentModel.page.rows.filter((row) => row.rowNumber > rowCount);
 }
 
+function getCellSnapshot(
+    rowNumber: number,
+    columnNumber: number,
+    currentModel: EditorRenderModel | null = model
+): CellSnapshot | null {
+    if (!currentModel) {
+        return null;
+    }
+
+    return currentModel.activeSheet.cells[createCellKey(rowNumber, columnNumber)] ?? null;
+}
+
 function getCellView(rowNumber: number, columnNumber: number): EditorGridCellView | null {
-    const row = getRenderableRows(model).find((item) => item.rowNumber === rowNumber);
-    return row?.cells[columnNumber - 1] ?? null;
+    if (!model) {
+        return null;
+    }
+
+    const cell = getCellSnapshot(rowNumber, columnNumber, model);
+    return {
+        key: createCellKey(rowNumber, columnNumber),
+        address: cell?.address ?? `${getColumnLabel(columnNumber)}${rowNumber}`,
+        value: cell?.displayValue ?? "",
+        formula: cell?.formula ?? null,
+        isPresent: Boolean(cell),
+        isSelected:
+            selectedCell?.rowNumber === rowNumber && selectedCell.columnNumber === columnNumber,
+    };
 }
 
 function isGridCellEditable(cell: EditorGridCellView | null): boolean {
@@ -791,9 +916,9 @@ function getViewLockTarget(): { rowCount: number; columnCount: number } | null {
               }
             : null) ??
         getSelectionStartCell() ??
-        (getFirstRenderableRow(model)
+        (model.activeSheet.rowCount > 0 && model.activeSheet.columnCount > 0
             ? {
-                  rowNumber: getFirstRenderableRow(model)!.rowNumber,
+                  rowNumber: 1,
                   columnNumber: 1,
               }
             : null);
@@ -1396,6 +1521,35 @@ function normalizeWheelDelta(delta: number, deltaMode: number, viewportSize: num
     return delta;
 }
 
+function forwardVirtualGridWheel(event: React.WheelEvent<HTMLElement>): void {
+    const viewport = getViewportElement();
+    if (!viewport) {
+        return;
+    }
+
+    let deltaX = normalizeWheelDelta(event.deltaX, event.deltaMode, viewport.clientWidth);
+    let deltaY = normalizeWheelDelta(event.deltaY, event.deltaMode, viewport.clientHeight);
+
+    if (event.shiftKey && deltaX === 0 && deltaY !== 0) {
+        deltaX = deltaY;
+        deltaY = 0;
+    }
+
+    if (deltaX === 0 && deltaY === 0) {
+        return;
+    }
+
+    event.preventDefault();
+    viewport.scrollLeft = clampScrollPosition(
+        viewport.scrollLeft + deltaX,
+        viewport.scrollWidth - viewport.clientWidth
+    );
+    viewport.scrollTop = clampScrollPosition(
+        viewport.scrollTop + deltaY,
+        viewport.scrollHeight - viewport.clientHeight
+    );
+}
+
 function forwardFrozenPaneWheel(event: React.WheelEvent<HTMLElement>): void {
     const bottomRightPane = getFrozenPaneElement("bottom-right");
     if (!bottomRightPane) {
@@ -1540,45 +1694,65 @@ function getStickyPaneInsets(pane: HTMLElement): { top: number; left: number } {
 }
 
 function revealSelectedCell(): void {
-    if (!selectedCell) {
+    if (!selectedCell || !model) {
         return;
     }
 
-    const paneName = getSelectedCellPaneName(model, selectedCell);
-    const pane =
-        (paneName ? getFrozenPaneElement(paneName) : null) ??
-        document.querySelector<HTMLElement>(".pane__table");
-    const target = pane?.querySelector<HTMLElement>(
-        `[data-role="grid-cell"][data-row-number="${selectedCell.rowNumber}"][data-column-number="${selectedCell.columnNumber}"]`
-    );
-    if (!pane || !target) {
+    const pane = getViewportElement();
+    if (!pane) {
         return;
     }
 
-    const paneRect = pane.getBoundingClientRect();
-    const elementRect = target.getBoundingClientRect();
-    const stickyInsets = paneName ? { top: 0, left: 0 } : getStickyPaneInsets(pane);
-    let top = pane.scrollTop;
-    let left = pane.scrollLeft;
+    const rowHeaderWidth = getEditorRowHeaderWidth(model.activeSheet.rowCount);
+    const { rowCount: frozenRowCount, columnCount: frozenColumnCount } = getFrozenEditorCounts({
+        rowCount: model.activeSheet.rowCount,
+        columnCount: model.activeSheet.columnCount,
+        freezePane: model.activeSheet.freezePane,
+    });
+    const contentSize = getEditorContentSize({
+        rowCount: model.activeSheet.rowCount,
+        columnCount: model.activeSheet.columnCount,
+        rowHeaderWidth,
+    });
+    const stickyTop =
+        EDITOR_VIRTUAL_HEADER_HEIGHT + frozenRowCount * EDITOR_VIRTUAL_ROW_HEIGHT;
+    const stickyLeft =
+        rowHeaderWidth + frozenColumnCount * EDITOR_VIRTUAL_COLUMN_WIDTH;
+    let nextTop = pane.scrollTop;
+    let nextLeft = pane.scrollLeft;
 
-    if (elementRect.top < paneRect.top + stickyInsets.top) {
-        top -= paneRect.top + stickyInsets.top - elementRect.top;
-    } else if (elementRect.bottom > paneRect.bottom) {
-        top += elementRect.bottom - paneRect.bottom;
+    if (selectedCell.rowNumber > frozenRowCount) {
+        const cellTop =
+            EDITOR_VIRTUAL_HEADER_HEIGHT +
+            (selectedCell.rowNumber - 1) * EDITOR_VIRTUAL_ROW_HEIGHT;
+        const cellBottom = cellTop + EDITOR_VIRTUAL_ROW_HEIGHT;
+        const visibleTop = pane.scrollTop + stickyTop;
+        const visibleBottom = pane.scrollTop + pane.clientHeight;
+
+        if (cellTop < visibleTop) {
+            nextTop = cellTop - stickyTop;
+        } else if (cellBottom > visibleBottom) {
+            nextTop = cellBottom - pane.clientHeight;
+        }
     }
 
-    if (elementRect.left < paneRect.left + stickyInsets.left) {
-        left -= paneRect.left + stickyInsets.left - elementRect.left;
-    } else if (elementRect.right > paneRect.right) {
-        left += elementRect.right - paneRect.right;
+    if (selectedCell.columnNumber > frozenColumnCount) {
+        const cellLeft =
+            rowHeaderWidth +
+            (selectedCell.columnNumber - 1) * EDITOR_VIRTUAL_COLUMN_WIDTH;
+        const cellRight = cellLeft + EDITOR_VIRTUAL_COLUMN_WIDTH;
+        const visibleLeft = pane.scrollLeft + stickyLeft;
+        const visibleRight = pane.scrollLeft + pane.clientWidth;
+
+        if (cellLeft < visibleLeft) {
+            nextLeft = cellLeft - stickyLeft;
+        } else if (cellRight > visibleRight) {
+            nextLeft = cellRight - pane.clientWidth;
+        }
     }
 
-    pane.scrollTop = clampScrollPosition(top, pane.scrollHeight - pane.clientHeight);
-    pane.scrollLeft = clampScrollPosition(left, pane.scrollWidth - pane.clientWidth);
-
-    if (paneName) {
-        syncFrozenPaneScroll(paneName, pane);
-    }
+    pane.scrollTop = clampEditorScrollPosition(nextTop, contentSize.height - pane.clientHeight);
+    pane.scrollLeft = clampEditorScrollPosition(nextLeft, contentSize.width - pane.clientWidth);
 }
 
 function isCellVisible(cell: CellPosition | null): boolean {
@@ -1586,9 +1760,19 @@ function isCellVisible(cell: CellPosition | null): boolean {
         return false;
     }
 
-    return getRenderableRows(model).some(
-        (row) => row.rowNumber === cell.rowNumber && cell.columnNumber <= row.cells.length
-    );
+    const viewportState = getVirtualViewportState(model);
+    if (!viewportState) {
+        return false;
+    }
+
+    const rowVisible =
+        cell.rowNumber <= viewportState.frozenRowCount ||
+        viewportState.rowNumbers.includes(cell.rowNumber);
+    const columnVisible =
+        cell.columnNumber <= viewportState.frozenColumnCount ||
+        viewportState.columnNumbers.includes(cell.columnNumber);
+
+    return rowVisible && columnVisible;
 }
 
 function syncSelectedCellToHost(): void {
@@ -1660,7 +1844,7 @@ function setRenderedRowSelectionState(rowNumber: number, isActive: boolean): voi
 
 function setRenderedColumnSelectionState(columnNumber: number, isActive: boolean): void {
     for (const header of document.querySelectorAll<HTMLElement>(
-        `th.grid__column[data-column-number="${columnNumber}"]`
+        `[data-role="grid-column-header"][data-column-number="${columnNumber}"]`
     )) {
         header.classList.toggle("grid__column--active", isActive);
     }
@@ -1793,14 +1977,7 @@ function prepareSelectionForRender({
 }): boolean {
     let shouldReveal = revealSelection;
 
-    if (
-        useModelSelection &&
-        model?.selection &&
-        isCellVisible({
-            rowNumber: model.selection.rowNumber,
-            columnNumber: model.selection.columnNumber,
-        })
-    ) {
+    if (useModelSelection && model?.selection) {
         selectedCell = {
             rowNumber: model.selection.rowNumber,
             columnNumber: model.selection.columnNumber,
@@ -1812,7 +1989,7 @@ function prepareSelectionForRender({
         return shouldReveal;
     }
 
-    if (pendingSelectionAfterRender && isCellVisible(pendingSelectionAfterRender)) {
+    if (pendingSelectionAfterRender) {
         selectedCell = {
             rowNumber: pendingSelectionAfterRender.rowNumber,
             columnNumber: pendingSelectionAfterRender.columnNumber,
@@ -1844,8 +2021,8 @@ function prepareSelectionForRender({
               rowNumber: model.selection.rowNumber,
               columnNumber: model.selection.columnNumber,
           }
-        : getFirstRenderableRow(model)
-          ? { rowNumber: getFirstRenderableRow(model)!.rowNumber, columnNumber: 1 }
+        : model && model.activeSheet.rowCount > 0 && model.activeSheet.columnCount > 0
+          ? { rowNumber: 1, columnNumber: 1 }
           : null;
 
     if (selectedCell) {
@@ -2211,24 +2388,15 @@ function getSelectionBounds(): {
         return null;
     }
 
-    const currentSelectedCell = selectedCell;
-    const boundsRows =
-        hasFrozenRowGap(model) && currentSelectedCell
-            ? getFrozenRowsForCurrentView(model).some(
-                  (row) => row.rowNumber === currentSelectedCell.rowNumber
-              )
-                ? getFrozenRowsForCurrentView(model)
-                : model.page.rows
-            : getRenderableRows(model);
-    if (boundsRows.length === 0) {
+    if (model.activeSheet.rowCount === 0 || model.activeSheet.columnCount === 0) {
         return null;
     }
 
     return {
-        minRow: boundsRows[0]!.rowNumber,
-        maxRow: boundsRows[boundsRows.length - 1]!.rowNumber,
+        minRow: 1,
+        maxRow: model.activeSheet.rowCount,
         minColumn: 1,
-        maxColumn: model.page.columns.length,
+        maxColumn: model.activeSheet.columnCount,
     };
 }
 
@@ -2249,10 +2417,9 @@ function ensureSelection(): CellPosition | null {
         return selectedCell;
     }
 
-    const firstRow = getFirstRenderableRow(model);
-    if (firstRow) {
+    if (model && model.activeSheet.rowCount > 0 && model.activeSheet.columnCount > 0) {
         selectedCell = {
-            rowNumber: firstRow.rowNumber,
+            rowNumber: 1,
             columnNumber: 1,
         };
         selectionAnchorCell = selectedCell;
@@ -2298,27 +2465,32 @@ function moveSelectionByViewportWindow(direction: -1 | 1): void {
         return;
     }
 
-    const shiftRowCount = Math.max(1, model.page.rows.length - 1);
+    const viewportState = getVirtualViewportState(model);
+    const shiftRowCount = Math.max(
+        1,
+        Math.floor(
+            Math.max(
+                (viewportState?.viewportHeight ?? DEFAULT_EDITOR_VIEWPORT_HEIGHT) -
+                    EDITOR_VIRTUAL_HEADER_HEIGHT,
+                EDITOR_VIRTUAL_ROW_HEIGHT
+            ) / EDITOR_VIRTUAL_ROW_HEIGHT
+        ) - 1
+    );
     const nextRowNumber = Math.max(
         1,
         Math.min(model.activeSheet.rowCount, selection.rowNumber + direction * shiftRowCount)
     );
-    const nextViewportStartRow = model.page.startRow + direction * shiftRowCount;
-
-    if (
-        nextRowNumber === selection.rowNumber &&
-        nextViewportStartRow === model.page.startRow
-    ) {
+    if (nextRowNumber === selection.rowNumber) {
         return;
     }
 
-    pendingSelectionAfterRender = {
-        rowNumber: nextRowNumber,
-        columnNumber: selection.columnNumber,
-        reveal: true,
-    };
-
-    vscode.postMessage({ type: "setViewportStartRow", rowNumber: nextViewportStartRow });
+    setSelectedCellLocal(
+        {
+            rowNumber: nextRowNumber,
+            columnNumber: selection.columnNumber,
+        },
+        { reveal: true }
+    );
 }
 
 function submitSearch(direction: "next" | "prev"): void {
@@ -2837,34 +3009,354 @@ function isCellWithinSelectionRange(
     );
 }
 
-interface GridCellProps {
-    cell: EditorGridCellView;
-    sheetKey: string;
-    canEdit: boolean;
-    pendingEdit?: PendingEdit;
-    columnNumber: number;
-    rowNumber: number;
-    selectionRange: CellRange | null;
-    hasExpandedRange: boolean;
-    currentSelection: CellPosition | null;
-    editingCell: EditingCell | null;
+interface EditorVirtualGridMetrics extends VirtualViewportState {
+    contentWidth: number;
+    contentHeight: number;
+    frozenRowNumbers: number[];
+    frozenColumnNumbers: number[];
+    stickyTopHeight: number;
+    stickyLeftWidth: number;
 }
 
-const MemoGridCell = React.memo(function GridCell({
-    cell,
-    sheetKey,
-    canEdit,
-    pendingEdit,
+function createSequentialNumbers(count: number): number[] {
+    return Array.from({ length: count }, (_, index) => index + 1);
+}
+
+function getEditorGridItemStyle({
+    top,
+    left,
+    width,
+    height,
+}: {
+    top: number;
+    left: number;
+    width: number;
+    height: number;
+}): React.CSSProperties {
+    return {
+        width: `${width}px`,
+        height: `${height}px`,
+        transform: `translate(${left}px, ${top}px)`,
+    };
+}
+
+function getEditorGridTop(rowNumber: number): number {
+    return EDITOR_VIRTUAL_HEADER_HEIGHT + (rowNumber - 1) * EDITOR_VIRTUAL_ROW_HEIGHT;
+}
+
+function getEditorGridLeft(rowHeaderWidth: number, columnNumber: number): number {
+    return rowHeaderWidth + (columnNumber - 1) * EDITOR_VIRTUAL_COLUMN_WIDTH;
+}
+
+function createEditorVirtualGridMetrics(
+    currentModel: EditorRenderModel,
+    element: HTMLElement | null,
+    fallbackScrollState?: ScrollState | null
+): EditorVirtualGridMetrics {
+    const viewportHeight = element?.clientHeight ?? DEFAULT_EDITOR_VIEWPORT_HEIGHT;
+    const viewportWidth = element?.clientWidth ?? DEFAULT_EDITOR_VIEWPORT_WIDTH;
+    const scrollTop = element?.scrollTop ?? fallbackScrollState?.top ?? 0;
+    const scrollLeft = element?.scrollLeft ?? fallbackScrollState?.left ?? 0;
+    const rowHeaderWidth = getEditorRowHeaderWidth(currentModel.activeSheet.rowCount);
+    const { rowCount: frozenRowCount, columnCount: frozenColumnCount } = getFrozenEditorCounts({
+        rowCount: currentModel.activeSheet.rowCount,
+        columnCount: currentModel.activeSheet.columnCount,
+        freezePane: currentModel.activeSheet.freezePane,
+    });
+    const rowWindow = createEditorRowWindow({
+        totalRows: currentModel.activeSheet.rowCount,
+        frozenRowCount,
+        scrollTop,
+        viewportHeight,
+    });
+    const columnWindow = createEditorColumnWindow({
+        totalColumns: currentModel.activeSheet.columnCount,
+        frozenColumnCount,
+        scrollLeft,
+        viewportWidth,
+        rowHeaderWidth,
+    });
+    const contentSize = getEditorContentSize({
+        rowCount: currentModel.activeSheet.rowCount,
+        columnCount: currentModel.activeSheet.columnCount,
+        rowHeaderWidth,
+    });
+
+    return {
+        scrollTop,
+        scrollLeft,
+        viewportHeight,
+        viewportWidth,
+        rowHeaderWidth,
+        frozenRowCount,
+        frozenColumnCount,
+        rowNumbers: rowWindow.rowNumbers,
+        columnNumbers: columnWindow.columnNumbers,
+        contentWidth: contentSize.width,
+        contentHeight: contentSize.height,
+        frozenRowNumbers: createSequentialNumbers(frozenRowCount),
+        frozenColumnNumbers: createSequentialNumbers(frozenColumnCount),
+        stickyTopHeight:
+            EDITOR_VIRTUAL_HEADER_HEIGHT + frozenRowCount * EDITOR_VIRTUAL_ROW_HEIGHT,
+        stickyLeftWidth:
+            rowHeaderWidth + frozenColumnCount * EDITOR_VIRTUAL_COLUMN_WIDTH,
+    };
+}
+
+function useEditorVirtualGrid(
+    currentModel: EditorRenderModel,
+    initialScrollState: ScrollState | null,
+    revision: number
+): {
+    viewportRef: React.RefObject<HTMLDivElement | null>;
+    metrics: EditorVirtualGridMetrics;
+    handleScroll(event: React.UIEvent<HTMLDivElement>): void;
+} {
+    const viewportRef = React.useRef<HTMLDivElement | null>(null);
+    const scrollFrameRef = React.useRef(0);
+    const latestScrollElementRef = React.useRef<HTMLDivElement | null>(null);
+    const [metrics, setMetrics] = React.useState<EditorVirtualGridMetrics>(() =>
+        createEditorVirtualGridMetrics(currentModel, null, initialScrollState)
+    );
+
+    React.useLayoutEffect(() => {
+        const element = viewportRef.current;
+        if (!element) {
+            setMetrics(createEditorVirtualGridMetrics(currentModel, null, initialScrollState));
+            return;
+        }
+
+        const rowHeaderWidth = getEditorRowHeaderWidth(currentModel.activeSheet.rowCount);
+        const contentSize = getEditorContentSize({
+            rowCount: currentModel.activeSheet.rowCount,
+            columnCount: currentModel.activeSheet.columnCount,
+            rowHeaderWidth,
+        });
+        const nextTop = clampEditorScrollPosition(
+            initialScrollState?.top ?? element.scrollTop,
+            contentSize.height - element.clientHeight
+        );
+        const nextLeft = clampEditorScrollPosition(
+            initialScrollState?.left ?? element.scrollLeft,
+            contentSize.width - element.clientWidth
+        );
+
+        if (element.scrollTop !== nextTop) {
+            element.scrollTop = nextTop;
+        }
+
+        if (element.scrollLeft !== nextLeft) {
+            element.scrollLeft = nextLeft;
+        }
+
+        const syncMetrics = () => {
+            setMetrics(createEditorVirtualGridMetrics(currentModel, element));
+        };
+
+        syncMetrics();
+
+        let resizeObserver: ResizeObserver | null = null;
+        const handleResize = () => {
+            syncMetrics();
+        };
+
+        if (typeof ResizeObserver !== "undefined") {
+            resizeObserver = new ResizeObserver(() => {
+                syncMetrics();
+            });
+            resizeObserver.observe(element);
+        } else {
+            window.addEventListener("resize", handleResize);
+        }
+
+        return () => {
+            if (scrollFrameRef.current) {
+                cancelAnimationFrame(scrollFrameRef.current);
+                scrollFrameRef.current = 0;
+            }
+
+            resizeObserver?.disconnect();
+            window.removeEventListener("resize", handleResize);
+        };
+    }, [
+        currentModel.activeSheet.key,
+        currentModel.activeSheet.rowCount,
+        currentModel.activeSheet.columnCount,
+        currentModel.activeSheet.freezePane?.rowCount ?? 0,
+        currentModel.activeSheet.freezePane?.columnCount ?? 0,
+        initialScrollState?.top ?? 0,
+        initialScrollState?.left ?? 0,
+        revision,
+    ]);
+
+    const handleScroll = (event: React.UIEvent<HTMLDivElement>) => {
+        latestScrollElementRef.current = event.currentTarget;
+        if (scrollFrameRef.current) {
+            return;
+        }
+
+        scrollFrameRef.current = requestAnimationFrame(() => {
+            scrollFrameRef.current = 0;
+            const element = latestScrollElementRef.current;
+            if (!element) {
+                return;
+            }
+
+            setMetrics(createEditorVirtualGridMetrics(currentModel, element));
+        });
+    };
+
+    return {
+        viewportRef,
+        metrics,
+        handleScroll,
+    };
+}
+
+function EditorCornerHeader({
+    rowHeaderWidth,
+}: {
+    rowHeaderWidth: number;
+}): React.ReactElement {
+    return (
+        <div
+            aria-hidden
+            className="editor-grid__item editor-grid__item--corner editor-grid__item--header grid__row-number"
+            style={getEditorGridItemStyle({
+                top: 0,
+                left: 0,
+                width: rowHeaderWidth,
+                height: EDITOR_VIRTUAL_HEADER_HEIGHT,
+            })}
+        >
+            <span className="grid__row-label">
+                <span>#</span>
+            </span>
+        </div>
+    );
+}
+
+function EditorColumnHeaderCell({
+    label,
     columnNumber,
+    hasPending,
+    selectionRange,
+    top,
+    left,
+}: {
+    label: string;
+    columnNumber: number;
+    hasPending: boolean;
+    selectionRange: CellRange | null;
+    top: number;
+    left: number;
+}): React.ReactElement {
+    const isActiveColumn = isColumnWithinSelectionRange(selectionRange, columnNumber);
+
+    return (
+        <div
+            className={classNames([
+                "editor-grid__item",
+                "editor-grid__item--header",
+                "grid__column",
+                hasPending && "grid__column--diff",
+                hasPending && "grid__column--pending",
+                isActiveColumn && "grid__column--active",
+            ])}
+            data-column-number={columnNumber}
+            data-role="grid-column-header"
+            style={getEditorGridItemStyle({
+                top,
+                left,
+                width: EDITOR_VIRTUAL_COLUMN_WIDTH,
+                height: EDITOR_VIRTUAL_HEADER_HEIGHT,
+            })}
+        >
+            <span className="grid__column-label">
+                {hasPending ? <PendingMarker /> : null}
+                <span>{label}</span>
+            </span>
+        </div>
+    );
+}
+
+function EditorRowHeaderCell({
     rowNumber,
+    hasPending,
+    selectionRange,
+    top,
+    rowHeaderWidth,
+}: {
+    rowNumber: number;
+    hasPending: boolean;
+    selectionRange: CellRange | null;
+    top: number;
+    rowHeaderWidth: number;
+}): React.ReactElement {
+    const isActiveRow = isRowWithinSelectionRange(selectionRange, rowNumber);
+
+    return (
+        <div
+            className={classNames([
+                "editor-grid__item",
+                "editor-grid__item--row-header",
+                "grid__row-number",
+                hasPending && "grid__row-number--pending",
+                isActiveRow && "grid__row-number--active",
+            ])}
+            data-role="grid-row-header"
+            data-row-number={rowNumber}
+            style={getEditorGridItemStyle({
+                top,
+                left: 0,
+                width: rowHeaderWidth,
+                height: EDITOR_VIRTUAL_ROW_HEIGHT,
+            })}
+        >
+            <span className="grid__row-label">
+                {hasPending ? <PendingMarker /> : null}
+                <span>{rowNumber}</span>
+            </span>
+        </div>
+    );
+}
+
+function EditorVirtualCell({
+    currentModel,
+    rowNumber,
+    columnNumber,
+    top,
+    left,
     selectionRange,
     hasExpandedRange,
     currentSelection,
-    editingCell,
-}: GridCellProps): React.ReactElement {
-    const value = pendingEdit ? pendingEdit.value : cell.value;
+    activeEditingCell,
+}: {
+    currentModel: EditorRenderModel;
+    rowNumber: number;
+    columnNumber: number;
+    top: number;
+    left: number;
+    selectionRange: CellRange | null;
+    hasExpandedRange: boolean;
+    currentSelection: CellPosition | null;
+    activeEditingCell: EditingCell | null;
+}): React.ReactElement {
+    const cell =
+        getCellView(rowNumber, columnNumber) ?? {
+            key: createCellKey(rowNumber, columnNumber),
+            address: getCellAddressLabel(rowNumber, columnNumber),
+            value: "",
+            formula: null,
+            isPresent: false,
+            isSelected: false,
+        };
+    const pendingEdit = pendingEdits.get(
+        getPendingEditKey(currentModel.activeSheet.key, rowNumber, columnNumber)
+    );
+    const value = pendingEdit?.value ?? cell.value;
     const formula = pendingEdit ? null : cell.formula;
-    const editable = isGridCellEditable(cell);
+    const editable = Boolean(currentModel.canEdit && !cell.formula);
     const isPrimarySelection =
         !hasExpandedRange &&
         currentSelection?.rowNumber === rowNumber &&
@@ -2872,12 +3364,15 @@ const MemoGridCell = React.memo(function GridCell({
     const isSelected = isCellWithinSelectionRange(selectionRange, rowNumber, columnNumber);
     const isActiveRow = isRowWithinSelectionRange(selectionRange, rowNumber);
     const isActiveColumn = isColumnWithinSelectionRange(selectionRange, columnNumber);
-    const isEditing = editingCell?.rowNumber === rowNumber && editingCell.columnNumber === columnNumber;
+    const isEditing =
+        activeEditingCell?.rowNumber === rowNumber &&
+        activeEditingCell.columnNumber === columnNumber;
 
     return (
-        <td
+        <div
             aria-selected={isSelected}
             className={classNames([
+                "editor-grid__item",
                 "grid__cell",
                 isSelected && "grid__cell--selected-range",
                 isPrimarySelection && "grid__cell--selected",
@@ -2892,6 +3387,12 @@ const MemoGridCell = React.memo(function GridCell({
             data-editable={editable}
             data-role="grid-cell"
             data-row-number={rowNumber}
+            style={getEditorGridItemStyle({
+                top,
+                left,
+                width: EDITOR_VIRTUAL_COLUMN_WIDTH,
+                height: EDITOR_VIRTUAL_ROW_HEIGHT,
+            })}
             title={getCellTooltip(cell.address, value, formula)}
             onPointerDown={(event) => {
                 if (event.button !== 0) {
@@ -2931,7 +3432,7 @@ const MemoGridCell = React.memo(function GridCell({
                 );
             }}
             onDoubleClick={(event) => {
-                if (!canEdit || !editable) {
+                if (!currentModel.canEdit || !editable) {
                     return;
                 }
 
@@ -2940,418 +3441,252 @@ const MemoGridCell = React.memo(function GridCell({
             }}
         >
             <div className="grid__cell-content">
-                {isEditing && editingCell?.sheetKey === sheetKey ? (
-                    <CellEditor edit={editingCell} />
+                {isEditing && activeEditingCell?.sheetKey === currentModel.activeSheet.key ? (
+                    <CellEditor edit={activeEditingCell} />
                 ) : (
                     <CellValue formula={formula} value={value} />
                 )}
             </div>
-        </td>
+        </div>
     );
-}, (previousProps, nextProps) => {
-    return (
-        previousProps.cell === nextProps.cell &&
-        previousProps.sheetKey === nextProps.sheetKey &&
-        previousProps.canEdit === nextProps.canEdit &&
-        arePendingEditsEqual(previousProps.pendingEdit, nextProps.pendingEdit) &&
-        previousProps.columnNumber === nextProps.columnNumber &&
-        previousProps.rowNumber === nextProps.rowNumber &&
-        areSelectionRangesEqual(previousProps.selectionRange, nextProps.selectionRange) &&
-        previousProps.hasExpandedRange === nextProps.hasExpandedRange &&
-        areCellPositionsEqual(previousProps.currentSelection, nextProps.currentSelection) &&
-        areEditingCellsEqual(previousProps.editingCell, nextProps.editingCell)
-    );
-});
-
-interface GridColumnHeaderCellProps {
-    label: string;
-    columnNumber: number;
-    hasPending: boolean;
-    selectionRange: CellRange | null;
 }
 
-const MemoGridColumnHeaderCell = React.memo(function GridColumnHeaderCell({
-    label,
-    columnNumber,
-    hasPending,
-    selectionRange,
-}: GridColumnHeaderCellProps): React.ReactElement {
-    const isActiveColumn = isColumnWithinSelectionRange(selectionRange, columnNumber);
-
-    return (
-        <th
-            key={columnNumber}
-            className={classNames([
-                "grid__column",
-                hasPending && "grid__column--diff",
-                hasPending && "grid__column--pending",
-                isActiveColumn && "grid__column--active",
-            ])}
-            data-column-number={columnNumber}
-        >
-            <span className="grid__column-label">
-                {hasPending ? <PendingMarker /> : null}
-                <span>{label}</span>
-            </span>
-        </th>
-    );
-}, (previousProps, nextProps) => {
-    return (
-        previousProps.label === nextProps.label &&
-        previousProps.columnNumber === nextProps.columnNumber &&
-        previousProps.hasPending === nextProps.hasPending &&
-        areSelectionRangesEqual(previousProps.selectionRange, nextProps.selectionRange)
-    );
-});
-
-interface GridRowHeaderCellProps {
-    rowNumber: number;
-    hasPending: boolean;
-    selectionRange: CellRange | null;
-}
-
-const MemoGridRowHeaderCell = React.memo(function GridRowHeaderCell({
-    rowNumber,
-    hasPending,
-    selectionRange,
-}: GridRowHeaderCellProps): React.ReactElement {
-    const isActiveRow = isRowWithinSelectionRange(selectionRange, rowNumber);
-
-    return (
-        <th
-            className={classNames([
-                "grid__row-number",
-                hasPending && "grid__row-number--pending",
-                isActiveRow && "grid__row-number--active",
-            ])}
-            data-role="grid-row-header"
-            data-row-number={rowNumber}
-        >
-            <span className="grid__row-label">
-                {hasPending ? <PendingMarker /> : null}
-                <span>{rowNumber}</span>
-            </span>
-        </th>
-    );
-}, (previousProps, nextProps) => {
-    return (
-        previousProps.rowNumber === nextProps.rowNumber &&
-        previousProps.hasPending === nextProps.hasPending &&
-        areSelectionRangesEqual(previousProps.selectionRange, nextProps.selectionRange)
-    );
-});
-
-interface GridRowProps {
-    row: EditorGridRowView;
-    columnNumbers: number[];
-    includeRowHeaders: boolean;
-    activeSheetKey: string;
-    canEdit: boolean;
-    pendingRow: boolean;
-    pendingEditsByColumn?: ReadonlyMap<number, PendingEdit>;
-    selectionRange: CellRange | null;
-    hasExpandedRange: boolean;
-    currentSelection: CellPosition | null;
-    editingCell: EditingCell | null;
-}
-
-const MemoGridRow = React.memo(function GridRow({
-    row,
-    columnNumbers,
-    includeRowHeaders,
-    activeSheetKey,
-    canEdit,
-    pendingRow,
-    pendingEditsByColumn,
-    selectionRange,
-    hasExpandedRange,
-    currentSelection,
-    editingCell,
-}: GridRowProps): React.ReactElement {
-    return (
-        <tr
-            data-role="grid-row"
-            data-row-number={row.rowNumber}
-        >
-            {includeRowHeaders ? (
-                <MemoGridRowHeaderCell
-                    rowNumber={row.rowNumber}
-                    hasPending={pendingRow}
-                    selectionRange={selectionRange}
-                />
-            ) : null}
-            {columnNumbers.map((columnNumber) => (
-                <MemoGridCell
-                    key={`${row.rowNumber}:${columnNumber}`}
-                    cell={row.cells[columnNumber - 1]!}
-                    sheetKey={activeSheetKey}
-                    canEdit={canEdit}
-                    pendingEdit={pendingEditsByColumn?.get(columnNumber)}
-                    columnNumber={columnNumber}
-                    rowNumber={row.rowNumber}
-                    selectionRange={selectionRange}
-                    hasExpandedRange={hasExpandedRange}
-                    currentSelection={currentSelection}
-                    editingCell={editingCell}
-                />
-            ))}
-        </tr>
-    );
-}, (previousProps, nextProps) => {
-    return (
-        previousProps.row === nextProps.row &&
-        areColumnNumbersEqual(previousProps.columnNumbers, nextProps.columnNumbers) &&
-        previousProps.includeRowHeaders === nextProps.includeRowHeaders &&
-        previousProps.activeSheetKey === nextProps.activeSheetKey &&
-        previousProps.canEdit === nextProps.canEdit &&
-        previousProps.pendingRow === nextProps.pendingRow &&
-        previousProps.pendingEditsByColumn === nextProps.pendingEditsByColumn &&
-        areSelectionRangesEqual(previousProps.selectionRange, nextProps.selectionRange) &&
-        previousProps.hasExpandedRange === nextProps.hasExpandedRange &&
-        areCellPositionsEqual(previousProps.currentSelection, nextProps.currentSelection) &&
-        areEditingCellsEqual(previousProps.editingCell, nextProps.editingCell)
-    );
-});
-
-function GridSectionTable({
+function EditorVirtualGrid({
     currentModel,
     pendingSummary,
-    rows,
-    columnNumbers,
-    includeHeader,
-    includeRowHeaders,
-    split = false,
-    topSpacerHeight = 0,
-    bottomSpacerHeight = 0,
+    view,
 }: {
     currentModel: EditorRenderModel;
     pendingSummary: PendingSummary;
-    rows: EditorGridRowView[];
-    columnNumbers: number[];
-    includeHeader: boolean;
-    includeRowHeaders: boolean;
-    split?: boolean;
-    topSpacerHeight?: number;
-    bottomSpacerHeight?: number;
-}): React.ReactElement | null {
-    const hasHeader = includeHeader && (includeRowHeaders || columnNumbers.length > 0);
-    const hasBody = rows.length > 0 && (includeRowHeaders || columnNumbers.length > 0);
+    view: Extract<ViewState, { kind: "app" }>;
+}): React.ReactElement {
+    const { viewportRef, metrics, handleScroll } = useEditorVirtualGrid(
+        currentModel,
+        view.scrollState,
+        view.revision
+    );
     const selectionRange = getSelectionRange();
     const hasExpandedRange = hasExpandedSelection(selectionRange);
-    const activeSheetKey = currentModel.activeSheet.key;
-    const canEdit = currentModel.canEdit;
     const currentSelection = selectedCell;
     const activeEditingCell = editingCell;
-    const pendingEditsByRow = new Map<number, Map<number, PendingEdit>>();
-    for (const pendingEdit of pendingEdits.values()) {
-        if (pendingEdit.sheetKey !== activeSheetKey) {
-            continue;
-        }
+    const bodyItems: React.ReactElement[] = [];
+    const topItems: React.ReactElement[] = [];
+    const leftItems: React.ReactElement[] = [];
+    const cornerItems: React.ReactElement[] = [
+        <EditorCornerHeader
+            key="corner"
+            rowHeaderWidth={metrics.rowHeaderWidth}
+        />,
+    ];
 
-        const rowPendingEdits = pendingEditsByRow.get(pendingEdit.rowNumber);
-        if (rowPendingEdits) {
-            rowPendingEdits.set(pendingEdit.columnNumber, pendingEdit);
-            continue;
-        }
-
-        pendingEditsByRow.set(
-            pendingEdit.rowNumber,
-            new Map([[pendingEdit.columnNumber, pendingEdit]])
+    for (const columnNumber of metrics.columnNumbers) {
+        topItems.push(
+            <EditorColumnHeaderCell
+                key={`top:header:${columnNumber}`}
+                label={
+                    currentModel.activeSheet.columns[columnNumber - 1] ??
+                    getColumnLabel(columnNumber)
+                }
+                columnNumber={columnNumber}
+                hasPending={pendingSummary.columns.has(columnNumber)}
+                selectionRange={selectionRange}
+                top={0}
+                left={getEditorGridLeft(metrics.rowHeaderWidth, columnNumber)}
+            />
         );
     }
 
-    if (!hasHeader && !hasBody) {
-        return null;
+    for (const columnNumber of metrics.frozenColumnNumbers) {
+        cornerItems.push(
+            <EditorColumnHeaderCell
+                key={`corner:header:${columnNumber}`}
+                label={
+                    currentModel.activeSheet.columns[columnNumber - 1] ??
+                    getColumnLabel(columnNumber)
+                }
+                columnNumber={columnNumber}
+                hasPending={pendingSummary.columns.has(columnNumber)}
+                selectionRange={selectionRange}
+                top={0}
+                left={getEditorGridLeft(metrics.rowHeaderWidth, columnNumber)}
+            />
+        );
     }
 
-    return (
-        <table className={classNames(["grid", split && "grid--split"])}>
-            <colgroup>
-                {includeRowHeaders ? <col data-role="grid-row-header-col" /> : null}
-                {columnNumbers.map((columnNumber) => (
-                    <col
-                        key={columnNumber}
-                        data-column-number={columnNumber}
-                        data-role="grid-column-col"
-                    />
-                ))}
-            </colgroup>
-            {includeHeader ? (
-                <thead>
-                    <tr data-role="grid-header-row">
-                        {includeRowHeaders ? <th className="grid__row-number">#</th> : null}
-                        {columnNumbers.map((columnNumber) => (
-                            <MemoGridColumnHeaderCell
-                                key={columnNumber}
-                                label={currentModel.page.columns[columnNumber - 1]!}
-                                columnNumber={columnNumber}
-                                hasPending={pendingSummary.columns.has(columnNumber)}
-                                selectionRange={selectionRange}
-                            />
-                        ))}
-                    </tr>
-                </thead>
-            ) : null}
-            <tbody>
-                {topSpacerHeight > 0 ? (
-                    <tr aria-hidden="true" className="grid__spacer-row">
-                        <td
-                            className="grid__spacer-cell"
-                            colSpan={columnNumbers.length + (includeRowHeaders ? 1 : 0)}
-                            style={{ height: `${topSpacerHeight}px` }}
-                        />
-                    </tr>
-                ) : null}
-                {rows.map((row) => {
-                    return (
-                        <MemoGridRow
-                            key={`${row.rowNumber}:${includeRowHeaders ? "row" : "cell"}:${columnNumbers[0] ?? 0}`}
-                            row={row}
-                            columnNumbers={columnNumbers}
-                            includeRowHeaders={includeRowHeaders}
-                            activeSheetKey={activeSheetKey}
-                            canEdit={canEdit}
-                            pendingRow={pendingSummary.rows.has(row.rowNumber)}
-                            pendingEditsByColumn={pendingEditsByRow.get(row.rowNumber)}
-                            selectionRange={selectionRange}
-                            hasExpandedRange={hasExpandedRange}
-                            currentSelection={currentSelection}
-                            editingCell={activeEditingCell}
-                        />
-                    );
-                })}
-                {bottomSpacerHeight > 0 ? (
-                    <tr aria-hidden="true" className="grid__spacer-row">
-                        <td
-                            className="grid__spacer-cell"
-                            colSpan={columnNumbers.length + (includeRowHeaders ? 1 : 0)}
-                            style={{ height: `${bottomSpacerHeight}px` }}
-                        />
-                    </tr>
-                ) : null}
-            </tbody>
-        </table>
-    );
-}
+    for (const rowNumber of metrics.rowNumbers) {
+        leftItems.push(
+            <EditorRowHeaderCell
+                key={`left:row:${rowNumber}`}
+                rowNumber={rowNumber}
+                hasPending={pendingSummary.rows.has(rowNumber)}
+                selectionRange={selectionRange}
+                top={getEditorGridTop(rowNumber)}
+                rowHeaderWidth={metrics.rowHeaderWidth}
+            />
+        );
 
-function EditorTable({
-    currentModel,
-    pendingSummary,
-}: {
-    currentModel: EditorRenderModel;
-    pendingSummary: PendingSummary;
-}): React.ReactElement | null {
-    if (currentModel.page.rows.length === 0) {
-        return <div className="empty-table">{STRINGS.noRowsAvailable}</div>;
+        for (const columnNumber of metrics.columnNumbers) {
+            bodyItems.push(
+                <EditorVirtualCell
+                    key={`body:${rowNumber}:${columnNumber}`}
+                    currentModel={currentModel}
+                    rowNumber={rowNumber}
+                    columnNumber={columnNumber}
+                    top={getEditorGridTop(rowNumber)}
+                    left={getEditorGridLeft(metrics.rowHeaderWidth, columnNumber)}
+                    selectionRange={selectionRange}
+                    hasExpandedRange={hasExpandedRange}
+                    currentSelection={currentSelection}
+                    activeEditingCell={activeEditingCell}
+                />
+            );
+        }
+
+        for (const columnNumber of metrics.frozenColumnNumbers) {
+            leftItems.push(
+                <EditorVirtualCell
+                    key={`left:${rowNumber}:${columnNumber}`}
+                    currentModel={currentModel}
+                    rowNumber={rowNumber}
+                    columnNumber={columnNumber}
+                    top={getEditorGridTop(rowNumber)}
+                    left={getEditorGridLeft(metrics.rowHeaderWidth, columnNumber)}
+                    selectionRange={selectionRange}
+                    hasExpandedRange={hasExpandedRange}
+                    currentSelection={currentSelection}
+                    activeEditingCell={activeEditingCell}
+                />
+            );
+        }
     }
 
-    return (
-        <GridSectionTable
-            currentModel={currentModel}
-            pendingSummary={pendingSummary}
-            rows={currentModel.page.rows}
-            columnNumbers={currentModel.page.columns.map((_, index) => index + 1)}
-            includeHeader={true}
-            includeRowHeaders={true}
-            topSpacerHeight={getTopSpacerHeight(currentModel)}
-            bottomSpacerHeight={getBottomSpacerHeight(currentModel)}
-        />
-    );
-}
+    for (const rowNumber of metrics.frozenRowNumbers) {
+        cornerItems.push(
+            <EditorRowHeaderCell
+                key={`corner:row:${rowNumber}`}
+                rowNumber={rowNumber}
+                hasPending={pendingSummary.rows.has(rowNumber)}
+                selectionRange={selectionRange}
+                top={getEditorGridTop(rowNumber)}
+                rowHeaderWidth={metrics.rowHeaderWidth}
+            />
+        );
 
-function FrozenEditorTable({
-    currentModel,
-    pendingSummary,
-}: {
-    currentModel: EditorRenderModel;
-    pendingSummary: PendingSummary;
-}): React.ReactElement {
-    const { columnCount } = getVisibleFreezeCounts(currentModel);
-    const frozenRows = getFrozenRowsForCurrentView(currentModel);
-    const scrollableRows = getScrollableRowsForCurrentView(currentModel);
-    const topSpacerHeight = getTopSpacerHeight(currentModel);
-    const bottomSpacerHeight = getBottomSpacerHeight(currentModel);
-    const frozenColumnNumbers = Array.from({ length: columnCount }, (_, index) => index + 1);
-    const scrollColumnNumbers = Array.from(
-        { length: Math.max(currentModel.page.columns.length - columnCount, 0) },
-        (_, index) => columnCount + index + 1
-    );
+        for (const columnNumber of metrics.columnNumbers) {
+            topItems.push(
+                <EditorVirtualCell
+                    key={`top:${rowNumber}:${columnNumber}`}
+                    currentModel={currentModel}
+                    rowNumber={rowNumber}
+                    columnNumber={columnNumber}
+                    top={getEditorGridTop(rowNumber)}
+                    left={getEditorGridLeft(metrics.rowHeaderWidth, columnNumber)}
+                    selectionRange={selectionRange}
+                    hasExpandedRange={hasExpandedRange}
+                    currentSelection={currentSelection}
+                    activeEditingCell={activeEditingCell}
+                />
+            );
+        }
+
+        for (const columnNumber of metrics.frozenColumnNumbers) {
+            cornerItems.push(
+                <EditorVirtualCell
+                    key={`corner:${rowNumber}:${columnNumber}`}
+                    currentModel={currentModel}
+                    rowNumber={rowNumber}
+                    columnNumber={columnNumber}
+                    top={getEditorGridTop(rowNumber)}
+                    left={getEditorGridLeft(metrics.rowHeaderWidth, columnNumber)}
+                    selectionRange={selectionRange}
+                    hasExpandedRange={hasExpandedRange}
+                    currentSelection={currentSelection}
+                    activeEditingCell={activeEditingCell}
+                />
+            );
+        }
+    }
+
+    React.useLayoutEffect(() => {
+        if (!view.revealSelection) {
+            return;
+        }
+
+        revealSelectedCell();
+    }, [view.revision, view.revealSelection]);
 
     return (
-        <div className="pane__table pane__table--split">
-            <div className="freeze-grid">
+        <div className="pane__table editor-grid-shell">
+            <div
+                ref={viewportRef}
+                className="editor-grid__viewport"
+                data-role="grid-scroll-main"
+                onScroll={handleScroll}
+            >
                 <div
-                    className="freeze-grid__pane freeze-grid__pane--top-left"
-                    data-pane="top-left"
-                    onWheel={forwardFrozenPaneWheel}
-                >
-                    <GridSectionTable
-                        currentModel={currentModel}
-                        pendingSummary={pendingSummary}
-                        rows={frozenRows}
-                        columnNumbers={frozenColumnNumbers}
-                        includeHeader={true}
-                        includeRowHeaders={true}
-                        split={true}
-                    />
-                </div>
-                <div
-                    className="freeze-grid__pane freeze-grid__pane--top-right"
-                    data-pane="top-right"
-                    onWheel={forwardFrozenPaneWheel}
-                    onScroll={(event) => syncFrozenPaneScroll("top-right", event.currentTarget)}
-                >
-                    <GridSectionTable
-                        currentModel={currentModel}
-                        pendingSummary={pendingSummary}
-                        rows={frozenRows}
-                        columnNumbers={scrollColumnNumbers}
-                        includeHeader={true}
-                        includeRowHeaders={false}
-                        split={true}
-                    />
-                </div>
-                <div
-                    className="freeze-grid__pane freeze-grid__pane--bottom-left"
-                    data-pane="bottom-left"
-                    onWheel={forwardFrozenPaneWheel}
-                    onScroll={(event) => {
-                        syncFrozenPaneScroll("bottom-left", event.currentTarget);
-                        scheduleViewportRequestForScroll(event.currentTarget);
+                    className="editor-grid__canvas"
+                    style={{
+                        width: `${metrics.contentWidth}px`,
+                        height: `${metrics.contentHeight}px`,
                     }}
                 >
-                    <GridSectionTable
-                        currentModel={currentModel}
-                        pendingSummary={pendingSummary}
-                        rows={scrollableRows}
-                        columnNumbers={frozenColumnNumbers}
-                        includeHeader={false}
-                        includeRowHeaders={true}
-                        split={true}
-                        topSpacerHeight={topSpacerHeight}
-                        bottomSpacerHeight={bottomSpacerHeight}
-                    />
+                    {bodyItems}
                 </div>
+            </div>
+            <div
+                className="editor-grid__overlay editor-grid__overlay--top"
+                style={{
+                    width: `${metrics.viewportWidth}px`,
+                    height: `${metrics.stickyTopHeight}px`,
+                }}
+                onWheel={forwardVirtualGridWheel}
+            >
                 <div
-                    className="freeze-grid__pane freeze-grid__pane--bottom-right"
-                    data-pane="bottom-right"
-                    data-role="grid-scroll-main"
-                    onScroll={(event) => {
-                        syncFrozenPaneScroll("bottom-right", event.currentTarget);
-                        scheduleViewportRequestForScroll(event.currentTarget);
+                    className="editor-grid__track editor-grid__track--x"
+                    style={{
+                        width: `${metrics.contentWidth}px`,
+                        height: `${metrics.stickyTopHeight}px`,
+                        transform: `translateX(-${metrics.scrollLeft}px)`,
                     }}
                 >
-                    <GridSectionTable
-                        currentModel={currentModel}
-                        pendingSummary={pendingSummary}
-                        rows={scrollableRows}
-                        columnNumbers={scrollColumnNumbers}
-                        includeHeader={false}
-                        includeRowHeaders={false}
-                        split={true}
-                        topSpacerHeight={topSpacerHeight}
-                        bottomSpacerHeight={bottomSpacerHeight}
-                    />
+                    {topItems}
+                </div>
+            </div>
+            <div
+                className="editor-grid__overlay editor-grid__overlay--left"
+                style={{
+                    width: `${metrics.stickyLeftWidth}px`,
+                    height: `${metrics.viewportHeight}px`,
+                }}
+                onWheel={forwardVirtualGridWheel}
+            >
+                <div
+                    className="editor-grid__track editor-grid__track--y"
+                    style={{
+                        width: `${metrics.stickyLeftWidth}px`,
+                        height: `${metrics.contentHeight}px`,
+                        transform: `translateY(-${metrics.scrollTop}px)`,
+                    }}
+                >
+                    {leftItems}
+                </div>
+            </div>
+            <div
+                className="editor-grid__overlay editor-grid__overlay--corner"
+                style={{
+                    width: `${metrics.stickyLeftWidth}px`,
+                    height: `${metrics.stickyTopHeight}px`,
+                }}
+                onWheel={forwardVirtualGridWheel}
+            >
+                <div
+                    className="editor-grid__track"
+                    style={{
+                        width: `${metrics.stickyLeftWidth}px`,
+                        height: `${metrics.stickyTopHeight}px`,
+                    }}
+                >
+                    {cornerItems}
                 </div>
             </div>
         </div>
@@ -3361,29 +3696,27 @@ function FrozenEditorTable({
 function EditorPane({
     currentModel,
     pendingSummary,
+    view,
 }: {
     currentModel: EditorRenderModel;
     pendingSummary: PendingSummary;
+    view: Extract<ViewState, { kind: "app" }>;
 }): React.ReactElement {
-    const viewLocked = hasLockedView(currentModel.activeSheet.freezePane);
-    const hasVisibleRows =
-        currentModel.page.rows.length > 0 || currentModel.page.frozenRows.length > 0;
+    const hasVisibleCells =
+        currentModel.activeSheet.rowCount > 0 && currentModel.activeSheet.columnCount > 0;
 
     return (
         <section className="pane pane--single pane--editor">
-            {!hasVisibleRows ? (
+            {!hasVisibleCells ? (
                 <div className="pane__table">
                     <div className="empty-table">{STRINGS.noRowsAvailable}</div>
                 </div>
-            ) : viewLocked ? (
-                <FrozenEditorTable currentModel={currentModel} pendingSummary={pendingSummary} />
             ) : (
-                <div
-                    className="pane__table"
-                    onScroll={(event) => scheduleViewportRequestForScroll(event.currentTarget)}
-                >
-                    <EditorTable currentModel={currentModel} pendingSummary={pendingSummary} />
-                </div>
+                <EditorVirtualGrid
+                    currentModel={currentModel}
+                    pendingSummary={pendingSummary}
+                    view={view}
+                />
             )}
         </section>
     );
@@ -3495,43 +3828,16 @@ function Status({
 
 function EditorApp({ view }: { view: Extract<ViewState, { kind: "app" }> }): React.ReactElement {
     const pendingSummary = getPendingSummary(view.model.activeSheet.key);
-    const viewLocked = hasLockedView(view.model.activeSheet.freezePane);
-
-    React.useLayoutEffect(() => {
-        restorePaneScrollState(view.scrollState);
-        if (!view.syncLayout) {
-            if (view.revealSelection) {
-                revealSelectedCell();
-            }
-            return;
-        }
-
-        if (viewLocked) {
-            clearFrozenPaneLayout();
-            scheduleFrozenPaneLayoutSync({
-                revealSelection: view.revealSelection,
-                forceColumnMeasurement: true,
-            });
-            return;
-        }
-
-        scheduleGridMetricRefresh({
-            revealSelection: view.revealSelection,
-            viewLocked,
-        });
-    }, [
-        viewLocked,
-        view.model.activeSheet.freezePane,
-        view.revision,
-        view.revealSelection,
-        view.scrollState,
-    ]);
 
     return (
         <div className="app app--editor">
             <EditorToolbar currentModel={view.model} />
             <section className="panes panes--single">
-                <EditorPane currentModel={view.model} pendingSummary={pendingSummary} />
+                <EditorPane
+                    currentModel={view.model}
+                    pendingSummary={pendingSummary}
+                    view={view}
+                />
             </section>
             <Status currentModel={view.model} pendingSummary={pendingSummary} />
             <TabContextMenu currentModel={view.model} />
@@ -3572,15 +3878,13 @@ function Root(): React.ReactElement {
 }
 
 window.addEventListener("resize", () => {
-    if (hasLockedView(model?.activeSheet.freezePane)) {
-        clearFrozenPaneLayout();
-        scheduleFrozenPaneLayoutSync({ forceColumnMeasurement: true });
+    if (!model) {
         return;
     }
 
-    scheduleGridMetricRefresh({
-        viewLocked: false,
-        forceColumnMeasurement: true,
+    renderApp({
+        commitEditing: false,
+        syncLayout: false,
     });
 });
 

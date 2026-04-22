@@ -114,6 +114,8 @@ export interface EditorActiveSheetView {
     label: string;
     rowCount: number;
     columnCount: number;
+    columns: string[];
+    cells: Record<string, CellSnapshot>;
     hasData: boolean;
     mergedRangeCount: number;
     hasMergedRanges: boolean;

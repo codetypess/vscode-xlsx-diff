@@ -2,8 +2,6 @@ import { DEFAULT_EDITOR_WINDOW_SIZE } from "../constants";
 import { createCellKey, getColumnLabel } from "../core/model/cells";
 import { isChineseDisplayLanguage } from "../display-language";
 import {
-    type EditorGridCellView,
-    type EditorGridRowView,
     type EditorPanelState,
     type EditorRenderModel,
     type EditorSelectedCell,
@@ -135,80 +133,6 @@ function createWorkbookFileView(workbook: WorkbookSnapshot): WorkbookFileView {
         modifiedTimeLabel: workbook.modifiedTimeLabel ?? formatModifiedTime(workbook.modifiedTime),
         isReadonly: workbook.isReadonly ?? false,
     };
-}
-
-function createRowsForRange(
-    sheet: SheetSnapshot,
-    startRow: number,
-    endRow: number,
-    selectedCell: EditorSelectedCell | null,
-    columns: string[]
-): EditorGridRowView[] {
-    if (sheet.rowCount === 0 || startRow > endRow) {
-        return [];
-    }
-
-    const rows: EditorGridRowView[] = [];
-
-    for (
-        let rowNumber = Math.max(startRow, 1);
-        rowNumber <= Math.min(endRow, sheet.rowCount);
-        rowNumber += 1
-    ) {
-        const cells: EditorGridCellView[] = columns.map((columnLabel, columnIndex) => {
-            const columnNumber = columnIndex + 1;
-            const cellKey = createCellKey(rowNumber, columnNumber);
-            const cell = sheet.cells[cellKey];
-            const isSelected =
-                selectedCell?.rowNumber === rowNumber && selectedCell.columnNumber === columnNumber;
-
-            return {
-                key: cellKey,
-                address: cell?.address ?? `${columnLabel}${rowNumber}`,
-                value: cell?.displayValue ?? "",
-                formula: cell?.formula ?? null,
-                isPresent: Boolean(cell),
-                isSelected,
-            };
-        });
-
-        rows.push({
-            rowNumber,
-            isSelected: selectedCell?.rowNumber === rowNumber,
-            cells,
-        });
-    }
-
-    return rows;
-}
-
-function createPageRows(
-    sheet: SheetSnapshot,
-    viewportStartRow: number,
-    selectedCell: EditorSelectedCell | null,
-    columns: string[]
-): EditorGridRowView[] {
-    const startRow = clampViewportStartRow(sheet, viewportStartRow);
-    return createRowsForRange(
-        sheet,
-        startRow,
-        Math.min(sheet.rowCount, startRow + DEFAULT_EDITOR_WINDOW_SIZE - 1),
-        selectedCell,
-        columns
-    );
-}
-
-function createFrozenRows(
-    sheet: SheetSnapshot,
-    selectedCell: EditorSelectedCell | null,
-    columns: string[]
-): EditorGridRowView[] {
-    const frozenRowCount = Math.max(
-        0,
-        Math.min(sheet.freezePane?.rowCount ?? 0, Math.max(sheet.rowCount - 1, 0))
-    );
-
-    return createRowsForRange(sheet, 1, frozenRowCount, selectedCell, columns);
 }
 
 function getViewportStartRowForSelection(sheet: SheetSnapshot, rowNumber: number): number {
@@ -427,6 +351,8 @@ export function createEditorRenderModel(
                 label: getUntitledSheetLabel(),
                 rowCount: 0,
                 columnCount: 0,
+                columns: [],
+                cells: {},
                 hasData: false,
                 mergedRangeCount: 0,
                 hasMergedRanges: false,
@@ -459,13 +385,6 @@ export function createEditorRenderModel(
     const columns = Array.from({ length: activeSheet.columnCount }, (_, index) =>
         getColumnLabel(index + 1)
     );
-    const pageRows = createPageRows(
-        activeSheet,
-        normalizedState.viewportStartRow,
-        normalizedState.selectedCell,
-        columns
-    );
-    const frozenRows = createFrozenRows(activeSheet, normalizedState.selectedCell, columns);
     const selection = createSelectionView(activeSheet, normalizedState.selectedCell);
     const sheets: EditorSheetTabView[] = sheetEntries.map((entry) => ({
         key: entry.key,
@@ -485,6 +404,8 @@ export function createEditorRenderModel(
             label: getSheetLabel(activeSheet),
             rowCount: activeSheet.rowCount,
             columnCount: activeSheet.columnCount,
+            columns,
+            cells: activeSheet.cells,
             hasData: Object.keys(activeSheet.cells).length > 0,
             mergedRangeCount: activeSheet.mergedRanges.length,
             hasMergedRanges: activeSheet.mergedRanges.length > 0,
@@ -496,16 +417,14 @@ export function createEditorRenderModel(
         canEdit: !file.isReadonly,
         page: {
             totalRows: activeSheet.rowCount,
-            visibleRowCount: pageRows.length,
+            visibleRowCount: Math.max(0, activeSheet.rowCount - (activeSheet.freezePane?.rowCount ?? 0)),
             rangeLabel:
-                pageRows.length === 0
-                    ? "No rows"
-                    : `${pageRows[0].rowNumber}-${pageRows[pageRows.length - 1].rowNumber}`,
-            startRow: pageRows[0]?.rowNumber ?? 0,
-            endRow: pageRows[pageRows.length - 1]?.rowNumber ?? 0,
+                activeSheet.rowCount === 0 ? "No rows" : `1-${activeSheet.rowCount}`,
+            startRow: activeSheet.rowCount === 0 ? 0 : 1,
+            endRow: activeSheet.rowCount,
             columns,
-            frozenRows,
-            rows: pageRows,
+            frozenRows: [],
+            rows: [],
         },
         sheets,
         canUndoStructuralEdits: options.canUndoStructuralEdits ?? false,

@@ -2,8 +2,8 @@ import * as vscode from "vscode";
 import { WEBVIEW_TYPE_EDITOR_PANEL } from "../constants";
 import { type WorkbookEditState } from "../core/fastxlsx/write-cell-value";
 import { rememberRecentWorkbookResourceUri } from "../scm/recent-workbook-resource-context";
+import { XlsxEditorPanel } from "./editor-panel";
 import { XlsxEditorDocument } from "./xlsx-editor-document";
-import { XlsxEditorPanel } from "./xlsx-editor-panel";
 
 export class XlsxCustomEditorProvider
     implements vscode.CustomEditorProvider<XlsxEditorDocument>, vscode.Disposable
