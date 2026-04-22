@@ -1,1 +1,1 @@
-import "./diffPanelApp";
+import "./diff-panel-app";

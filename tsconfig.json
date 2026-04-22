@@ -23,6 +23,6 @@
 	],
 	"exclude": [
 		"src/webview/panel.ts",
-		"src/webview/editorPanel.ts"
+		"src/webview/editor-panel.ts"
 	]
 }

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { launchCompare } from "./lib/openCompareUri.mjs";
+import { launchCompare } from "./lib/open-compare-uri.mjs";
 
 function printUsage() {
     process.stderr.write(

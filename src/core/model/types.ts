@@ -9,6 +9,12 @@ export interface DiffCellLocation {
     diffIndex: number;
 }
 
+export interface DiffRowAlignment {
+    rowNumber: number;
+    leftRowNumber: number | null;
+    rightRowNumber: number | null;
+}
+
 export interface CellSnapshot {
     key: string;
     rowNumber: number;
@@ -144,6 +150,7 @@ export interface SheetDiffModel {
     rightSheetName: string | null;
     rowCount: number;
     columnCount: number;
+    alignedRows: DiffRowAlignment[];
     diffRows: number[];
     diffCells: DiffCellLocation[];
     diffCellCount: number;

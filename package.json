@@ -155,7 +155,7 @@
     "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
     "watch:tsc-webview": "tsc --noEmit --watch --project tsconfig.webview.json",
     "package": "npm run check-types && npm run lint && tsx scripts/esbuild.mts --production",
-    "compile-tests": "tsc -p . --outDir out",
+    "compile-tests": "node -e \"require('fs').rmSync('out', { recursive: true, force: true })\" && tsc -p . --outDir out",
     "watch-tests": "tsc -p . -w --outDir out",
     "pretest": "npm run compile-tests && npm run compile && npm run lint",
     "check-types": "npm-run-all check-types:*",

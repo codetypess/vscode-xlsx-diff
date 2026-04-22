@@ -1,18 +1,18 @@
 import * as vscode from "vscode";
-import { compareActiveWith } from "./commands/compareActiveWith";
-import { compareTwoFiles } from "./commands/compareTwoFiles";
-import { openEditor } from "./commands/openEditor";
+import { compareActiveWith } from "./commands/compare-active-with";
+import { compareTwoFiles } from "./commands/compare-two-files";
+import { openEditor } from "./commands/open-editor";
 import {
     COMMAND_COMPARE_ACTIVE_WITH,
     COMMAND_COMPARE_TWO_FILES,
     COMMAND_OPEN_EDITOR,
 } from "./constants";
-import { affectsDisplayLanguage } from "./displayLanguage";
-import { XlsxDiffUriHandler } from "./git/uriHandler";
-import { registerScmWorkbookDiffInterceptor } from "./scm/scmDiffInterceptor";
-import { XlsxDiffPanel } from "./webview/diffPanel";
-import { XlsxCustomEditorProvider } from "./webview/xlsxCustomEditorProvider";
-import { XlsxEditorPanel } from "./webview/xlsxEditorPanel";
+import { affectsDisplayLanguage } from "./display-language";
+import { XlsxDiffUriHandler } from "./git/uri-handler";
+import { registerScmWorkbookDiffInterceptor } from "./scm/scm-diff-interceptor";
+import { XlsxDiffPanel } from "./webview/diff-panel";
+import { XlsxCustomEditorProvider } from "./webview/xlsx-custom-editor-provider";
+import { XlsxEditorPanel } from "./webview/xlsx-editor-panel";
 
 export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(

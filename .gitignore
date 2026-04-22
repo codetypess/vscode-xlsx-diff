@@ -4,6 +4,6 @@ node_modules
 .vscode-test/
 *.vsix
 diff-view.jpg
-# snapshot.png
+snapshot.png
 media/*.js
 media/*.js.map
