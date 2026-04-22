@@ -268,6 +268,12 @@ body {
     grid-template-columns: minmax(0, 1fr);
 }
 
+.files--diff {
+    gap: 0;
+    padding: 0;
+    border-bottom: 0;
+}
+
 .file-card {
     padding: 10px 12px;
     border: 1px solid var(--vscode-panel-border);
@@ -277,6 +283,18 @@ body {
         color-mix(in srgb, var(--vscode-editor-background) 91%, white 9%)
     );
     min-width: 0;
+}
+
+.file-card--diff {
+    padding: 12px;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    border-bottom: 1px solid var(--vscode-panel-border);
+}
+
+.files--diff .file-card--diff + .file-card--diff {
+    border-left: 2px solid var(--vscode-panel-border);
 }
 
 .file-card__name {
@@ -334,6 +352,11 @@ body {
     padding: 0;
 }
 
+.panes--diff {
+    gap: 0;
+    padding: 0;
+}
+
 .pane {
     min-width: 0;
     min-height: 0;
@@ -354,6 +377,17 @@ body {
     border-radius: 0;
     background: transparent;
     grid-template-rows: minmax(0, 1fr);
+}
+
+.pane--diff {
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    grid-template-rows: minmax(0, 1fr);
+}
+
+.panes--diff .pane--diff + .pane--diff {
+    border-left: 2px solid var(--vscode-panel-border);
 }
 
 .pane__header {
@@ -389,10 +423,19 @@ body {
     display: none;
 }
 
+.pane--diff .pane__header {
+    display: none;
+}
+
 .pane__table {
     position: relative;
     min-height: 0;
     overflow: auto;
+}
+
+.pane__table--diff {
+    background: var(--vscode-editor-background);
+    height: 100%;
 }
 
 .pane--editor .pane__table {
@@ -473,6 +516,20 @@ body {
     z-index: 4;
 }
 
+.pane__table--diff .grid thead th:first-child {
+    background: var(
+        --vscode-sideBarSectionHeader-background,
+        color-mix(in srgb, var(--vscode-editor-background) 88%, white 12%)
+    );
+}
+
+.pane__table--diff .grid th:first-child {
+    background: var(
+        --vscode-sideBarSectionHeader-background,
+        color-mix(in srgb, var(--vscode-editor-background) 88%, white 12%)
+    );
+}
+
 .grid--split {
     min-width: auto;
 }
@@ -494,6 +551,13 @@ body {
 
 .grid--split .grid__row-number {
     background: color-mix(in srgb, var(--vscode-editor-background) 94%, black 6%);
+}
+
+.pane__table--diff .grid--split .grid__row-number {
+    background: var(
+        --vscode-sideBarSectionHeader-background,
+        color-mix(in srgb, var(--vscode-editor-background) 88%, white 12%)
+    );
 }
 
 .grid__column--frozen,

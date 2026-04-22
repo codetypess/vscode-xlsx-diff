@@ -971,7 +971,7 @@ function Toolbar({ currentModel }: { currentModel: RenderModel }): React.ReactEl
 
 function FileCard({ file }: { file: WorkbookFileView }): React.ReactElement {
     return (
-        <div className="file-card">
+        <div className="file-card file-card--diff">
             <div className="file-card__name" title={file.filePath}>
                 <span className="file-card__name-text">{file.fileName}</span>
                 {file.isReadonly ? (
@@ -1233,23 +1233,15 @@ function Pane({
     currentModel,
     pendingSummary,
     side,
-    title,
 }: {
     currentModel: RenderModel;
     pendingSummary: PendingSummary;
     side: Side;
-    title: string;
 }): React.ReactElement {
     return (
-        <section className="pane" data-side={side}>
-            <div className="pane__header">
-                <div className="pane__title">{title}</div>
-                {currentModel.activeSheet.mergedRangesChanged ? (
-                    <span className="badge badge--warn">{STRINGS.mergedRangesChanged}</span>
-                ) : null}
-            </div>
+        <section className="pane pane--diff" data-side={side}>
             <div
-                className="pane__table"
+                className="pane__table pane__table--diff"
                 data-side={side}
                 onScroll={(event) => syncPaneScroll(event.currentTarget)}
             >
@@ -1365,22 +1357,20 @@ function DiffApp({ view }: { view: Extract<ViewState, { kind: "app" }> }): React
     return (
         <div className="app">
             <Toolbar currentModel={view.model} />
-            <section className="files">
+            <section className="files files--diff">
                 <FileCard file={view.model.leftFile} />
                 <FileCard file={view.model.rightFile} />
             </section>
-            <section className="panes">
+            <section className="panes panes--diff">
                 <Pane
                     currentModel={view.model}
                     pendingSummary={pendingSummary}
                     side="left"
-                    title={STRINGS.left}
                 />
                 <Pane
                     currentModel={view.model}
                     pendingSummary={pendingSummary}
                     side="right"
-                    title={STRINGS.right}
                 />
             </section>
             <Status currentModel={view.model} pendingSummary={pendingSummary} />
