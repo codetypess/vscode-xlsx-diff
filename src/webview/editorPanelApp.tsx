@@ -145,6 +145,7 @@ type ViewState =
           revealSelection: boolean;
           revision: number;
           scrollState: ScrollState | null;
+          syncLayout: boolean;
       };
 
 const DEFAULT_STRINGS = {
@@ -1723,22 +1724,18 @@ function syncLocalSimpleSelectionDom(
     updateSelectedCellAddressBadge();
 }
 
-function canUseLockedViewLocalSelectionUpdate(
+function canUseLocalSimpleSelectionUpdate(
     nextCell: CellPosition | null,
     {
-        reveal,
         anchorCell,
     }: {
-        reveal: boolean;
         anchorCell: CellPosition | null;
     }
 ): boolean {
     return Boolean(
         nextCell &&
             model &&
-            hasLockedView(model.activeSheet.freezePane) &&
             !editingCell &&
-            !reveal &&
             isCellVisible(nextCell) &&
             !hasExpandedSelection() &&
             isSimpleSelection(nextCell, anchorCell)
@@ -1759,8 +1756,7 @@ function setSelectedCellLocal(
 ): void {
     const previousCell = selectedCell;
     const nextAnchorCell = nextCell ? (anchorCell ?? nextCell) : null;
-    const canUseLocalUpdate = canUseLockedViewLocalSelectionUpdate(nextCell, {
-        reveal,
+    const canUseLocalUpdate = canUseLocalSimpleSelectionUpdate(nextCell, {
         anchorCell: nextAnchorCell,
     });
 
@@ -1775,10 +1771,17 @@ function setSelectedCellLocal(
 
     if (canUseLocalUpdate) {
         syncLocalSimpleSelectionDom(previousCell, nextCell);
+        if (reveal) {
+            revealSelectedCell();
+        }
         return;
     }
 
-    renderApp({ commitEditing: false, revealSelection: reveal });
+    renderApp({
+        commitEditing: false,
+        revealSelection: reveal,
+        syncLayout: false,
+    });
 }
 
 function prepareSelectionForRender({
@@ -2191,7 +2194,11 @@ function startEditCell(rowNumber: number, columnNumber: number, currentValue: st
         value: currentValue,
     };
     syncSelectedCellToHost();
-    renderApp({ commitEditing: false, revealSelection: true });
+    renderApp({
+        commitEditing: false,
+        revealSelection: true,
+        syncLayout: false,
+    });
 }
 
 function getSelectionBounds(): {
@@ -2391,10 +2398,12 @@ function renderApp({
     commitEditing = true,
     revealSelection = false,
     useModelSelection = false,
+    syncLayout = true,
 }: {
     commitEditing?: boolean;
     revealSelection?: boolean;
     useModelSelection?: boolean;
+    syncLayout?: boolean;
 } = {}): void {
     if (!model) {
         renderLoading(STRINGS.loading);
@@ -2418,6 +2427,7 @@ function renderApp({
         revealSelection: shouldRevealSelection,
         revision: viewRevision,
         scrollState,
+        syncLayout,
     });
 }
 
@@ -2707,47 +2717,162 @@ function CellEditor({ edit }: { edit: EditingCell }): React.ReactElement {
     );
 }
 
-function GridCell({
-    cell,
-    columnNumber,
-    row,
-    selectionRange,
-    hasExpandedRange,
-}: {
+function areSelectionRangesEqual(left: CellRange | null, right: CellRange | null): boolean {
+    if (left === right) {
+        return true;
+    }
+
+    if (!left || !right) {
+        return left === right;
+    }
+
+    return (
+        left.startRow === right.startRow &&
+        left.endRow === right.endRow &&
+        left.startColumn === right.startColumn &&
+        left.endColumn === right.endColumn
+    );
+}
+
+function areCellPositionsEqual(
+    left: Pick<CellPosition, "rowNumber" | "columnNumber"> | null,
+    right: Pick<CellPosition, "rowNumber" | "columnNumber"> | null
+): boolean {
+    if (left === right) {
+        return true;
+    }
+
+    if (!left || !right) {
+        return left === right;
+    }
+
+    return left.rowNumber === right.rowNumber && left.columnNumber === right.columnNumber;
+}
+
+function areEditingCellsEqual(left: EditingCell | null, right: EditingCell | null): boolean {
+    if (left === right) {
+        return true;
+    }
+
+    if (!left || !right) {
+        return left === right;
+    }
+
+    return (
+        left.sheetKey === right.sheetKey &&
+        left.rowNumber === right.rowNumber &&
+        left.columnNumber === right.columnNumber &&
+        left.value === right.value
+    );
+}
+
+function arePendingEditsEqual(
+    left: PendingEdit | undefined,
+    right: PendingEdit | undefined
+): boolean {
+    if (left === right) {
+        return true;
+    }
+
+    if (!left || !right) {
+        return left === right;
+    }
+
+    return (
+        left.sheetKey === right.sheetKey &&
+        left.rowNumber === right.rowNumber &&
+        left.columnNumber === right.columnNumber &&
+        left.value === right.value
+    );
+}
+
+function areColumnNumbersEqual(left: number[], right: number[]): boolean {
+    if (left === right) {
+        return true;
+    }
+
+    if (left.length !== right.length) {
+        return false;
+    }
+
+    for (let index = 0; index < left.length; index += 1) {
+        if (left[index] !== right[index]) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+function isRowWithinSelectionRange(selectionRange: CellRange | null, rowNumber: number): boolean {
+    return Boolean(
+        selectionRange &&
+            rowNumber >= selectionRange.startRow &&
+            rowNumber <= selectionRange.endRow
+    );
+}
+
+function isColumnWithinSelectionRange(
+    selectionRange: CellRange | null,
+    columnNumber: number
+): boolean {
+    return Boolean(
+        selectionRange &&
+            columnNumber >= selectionRange.startColumn &&
+            columnNumber <= selectionRange.endColumn
+    );
+}
+
+function isCellWithinSelectionRange(
+    selectionRange: CellRange | null,
+    rowNumber: number,
+    columnNumber: number
+): boolean {
+    return Boolean(
+        selectionRange &&
+            rowNumber >= selectionRange.startRow &&
+            rowNumber <= selectionRange.endRow &&
+            columnNumber >= selectionRange.startColumn &&
+            columnNumber <= selectionRange.endColumn
+    );
+}
+
+interface GridCellProps {
     cell: EditorGridCellView;
+    sheetKey: string;
+    canEdit: boolean;
+    pendingEdit?: PendingEdit;
     columnNumber: number;
-    row: EditorGridRowView;
+    rowNumber: number;
     selectionRange: CellRange | null;
     hasExpandedRange: boolean;
-}): React.ReactElement {
-    const pendingKey = getPendingEditKey(model!.activeSheet.key, row.rowNumber, columnNumber);
-    const pendingEdit = pendingEdits.get(pendingKey);
+    currentSelection: CellPosition | null;
+    editingCell: EditingCell | null;
+}
+
+const MemoGridCell = React.memo(function GridCell({
+    cell,
+    sheetKey,
+    canEdit,
+    pendingEdit,
+    columnNumber,
+    rowNumber,
+    selectionRange,
+    hasExpandedRange,
+    currentSelection,
+    editingCell,
+}: GridCellProps): React.ReactElement {
     const value = pendingEdit ? pendingEdit.value : cell.value;
     const formula = pendingEdit ? null : cell.formula;
     const editable = isGridCellEditable(cell);
     const isPrimarySelection =
         !hasExpandedRange &&
-        selectedCell?.rowNumber === row.rowNumber &&
-        selectedCell.columnNumber === columnNumber;
-    const isSelected = Boolean(
-        selectionRange &&
-        row.rowNumber >= selectionRange.startRow &&
-        row.rowNumber <= selectionRange.endRow &&
-        columnNumber >= selectionRange.startColumn &&
-        columnNumber <= selectionRange.endColumn
-    );
-    const isActiveRow = Boolean(
-        selectionRange &&
-            row.rowNumber >= selectionRange.startRow &&
-            row.rowNumber <= selectionRange.endRow
-    );
-    const isActiveColumn = Boolean(
-        selectionRange &&
-            columnNumber >= selectionRange.startColumn &&
-            columnNumber <= selectionRange.endColumn
-    );
-    const isEditing =
-        editingCell?.rowNumber === row.rowNumber && editingCell.columnNumber === columnNumber;
+        currentSelection?.rowNumber === rowNumber &&
+        currentSelection.columnNumber === columnNumber;
+    const isSelected = isCellWithinSelectionRange(selectionRange, rowNumber, columnNumber);
+    const isActiveRow = isRowWithinSelectionRange(selectionRange, rowNumber);
+    const isActiveColumn = isColumnWithinSelectionRange(selectionRange, columnNumber);
+    const isEditing = editingCell?.rowNumber === rowNumber && editingCell.columnNumber === columnNumber;
 
     return (
         <td
@@ -2761,12 +2886,12 @@ function GridCell({
                 !editable && "grid__cell--locked",
                 pendingEdit && "grid__cell--pending",
                 isEditing && "grid__cell--editing",
-                ...getSelectionOutlineClasses(row.rowNumber, columnNumber, selectionRange),
+                ...getSelectionOutlineClasses(rowNumber, columnNumber, selectionRange),
             ])}
             data-column-number={columnNumber}
             data-editable={editable}
             data-role="grid-cell"
-            data-row-number={row.rowNumber}
+            data-row-number={rowNumber}
             title={getCellTooltip(cell.address, value, formula)}
             onPointerDown={(event) => {
                 if (event.button !== 0) {
@@ -2774,12 +2899,12 @@ function GridCell({
                 }
 
                 closeTabContextMenu({ refresh: false });
-                startSelectionDrag(event.pointerId, { rowNumber: row.rowNumber, columnNumber });
+                startSelectionDrag(event.pointerId, { rowNumber, columnNumber });
                 setSelectedCellLocal(
-                    { rowNumber: row.rowNumber, columnNumber },
+                    { rowNumber, columnNumber },
                     {
                         syncHost: false,
-                        anchorCell: { rowNumber: row.rowNumber, columnNumber },
+                        anchorCell: { rowNumber, columnNumber },
                     }
                 );
             }}
@@ -2795,7 +2920,7 @@ function GridCell({
                 }
 
                 setSelectedCellLocal(
-                    { rowNumber: row.rowNumber, columnNumber },
+                    { rowNumber, columnNumber },
                     {
                         syncHost: true,
                         anchorCell:
@@ -2806,16 +2931,16 @@ function GridCell({
                 );
             }}
             onDoubleClick={(event) => {
-                if (!model?.canEdit || !editable) {
+                if (!canEdit || !editable) {
                     return;
                 }
 
                 event.preventDefault();
-                startEditCell(row.rowNumber, columnNumber, value);
+                startEditCell(rowNumber, columnNumber, value);
             }}
         >
             <div className="grid__cell-content">
-                {isEditing && editingCell ? (
+                {isEditing && editingCell?.sheetKey === sheetKey ? (
                     <CellEditor edit={editingCell} />
                 ) : (
                     <CellValue formula={formula} value={value} />
@@ -2823,25 +2948,35 @@ function GridCell({
             </div>
         </td>
     );
+}, (previousProps, nextProps) => {
+    return (
+        previousProps.cell === nextProps.cell &&
+        previousProps.sheetKey === nextProps.sheetKey &&
+        previousProps.canEdit === nextProps.canEdit &&
+        arePendingEditsEqual(previousProps.pendingEdit, nextProps.pendingEdit) &&
+        previousProps.columnNumber === nextProps.columnNumber &&
+        previousProps.rowNumber === nextProps.rowNumber &&
+        areSelectionRangesEqual(previousProps.selectionRange, nextProps.selectionRange) &&
+        previousProps.hasExpandedRange === nextProps.hasExpandedRange &&
+        areCellPositionsEqual(previousProps.currentSelection, nextProps.currentSelection) &&
+        areEditingCellsEqual(previousProps.editingCell, nextProps.editingCell)
+    );
+});
+
+interface GridColumnHeaderCellProps {
+    label: string;
+    columnNumber: number;
+    hasPending: boolean;
+    selectionRange: CellRange | null;
 }
 
-function GridColumnHeaderCell({
-    currentModel,
-    pendingSummary,
+const MemoGridColumnHeaderCell = React.memo(function GridColumnHeaderCell({
+    label,
     columnNumber,
+    hasPending,
     selectionRange,
-}: {
-    currentModel: EditorRenderModel;
-    pendingSummary: PendingSummary;
-    columnNumber: number;
-    selectionRange: CellRange | null;
-}): React.ReactElement {
-    const hasPending = pendingSummary.columns.has(columnNumber);
-    const isActiveColumn = Boolean(
-        selectionRange &&
-            columnNumber >= selectionRange.startColumn &&
-            columnNumber <= selectionRange.endColumn
-    );
+}: GridColumnHeaderCellProps): React.ReactElement {
+    const isActiveColumn = isColumnWithinSelectionRange(selectionRange, columnNumber);
 
     return (
         <th
@@ -2856,27 +2991,31 @@ function GridColumnHeaderCell({
         >
             <span className="grid__column-label">
                 {hasPending ? <PendingMarker /> : null}
-                <span>{currentModel.page.columns[columnNumber - 1]}</span>
+                <span>{label}</span>
             </span>
         </th>
     );
+}, (previousProps, nextProps) => {
+    return (
+        previousProps.label === nextProps.label &&
+        previousProps.columnNumber === nextProps.columnNumber &&
+        previousProps.hasPending === nextProps.hasPending &&
+        areSelectionRangesEqual(previousProps.selectionRange, nextProps.selectionRange)
+    );
+});
+
+interface GridRowHeaderCellProps {
+    rowNumber: number;
+    hasPending: boolean;
+    selectionRange: CellRange | null;
 }
 
-function GridRowHeaderCell({
-    pendingSummary,
-    row,
+const MemoGridRowHeaderCell = React.memo(function GridRowHeaderCell({
+    rowNumber,
+    hasPending,
     selectionRange,
-}: {
-    pendingSummary: PendingSummary;
-    row: EditorGridRowView;
-    selectionRange: CellRange | null;
-}): React.ReactElement {
-    const hasPending = pendingSummary.rows.has(row.rowNumber);
-    const isActiveRow = Boolean(
-        selectionRange &&
-            row.rowNumber >= selectionRange.startRow &&
-            row.rowNumber <= selectionRange.endRow
-    );
+}: GridRowHeaderCellProps): React.ReactElement {
+    const isActiveRow = isRowWithinSelectionRange(selectionRange, rowNumber);
 
     return (
         <th
@@ -2886,15 +3025,93 @@ function GridRowHeaderCell({
                 isActiveRow && "grid__row-number--active",
             ])}
             data-role="grid-row-header"
-            data-row-number={row.rowNumber}
+            data-row-number={rowNumber}
         >
             <span className="grid__row-label">
                 {hasPending ? <PendingMarker /> : null}
-                <span>{row.rowNumber}</span>
+                <span>{rowNumber}</span>
             </span>
         </th>
     );
+}, (previousProps, nextProps) => {
+    return (
+        previousProps.rowNumber === nextProps.rowNumber &&
+        previousProps.hasPending === nextProps.hasPending &&
+        areSelectionRangesEqual(previousProps.selectionRange, nextProps.selectionRange)
+    );
+});
+
+interface GridRowProps {
+    row: EditorGridRowView;
+    columnNumbers: number[];
+    includeRowHeaders: boolean;
+    activeSheetKey: string;
+    canEdit: boolean;
+    pendingRow: boolean;
+    pendingEditsByColumn?: ReadonlyMap<number, PendingEdit>;
+    selectionRange: CellRange | null;
+    hasExpandedRange: boolean;
+    currentSelection: CellPosition | null;
+    editingCell: EditingCell | null;
 }
+
+const MemoGridRow = React.memo(function GridRow({
+    row,
+    columnNumbers,
+    includeRowHeaders,
+    activeSheetKey,
+    canEdit,
+    pendingRow,
+    pendingEditsByColumn,
+    selectionRange,
+    hasExpandedRange,
+    currentSelection,
+    editingCell,
+}: GridRowProps): React.ReactElement {
+    return (
+        <tr
+            data-role="grid-row"
+            data-row-number={row.rowNumber}
+        >
+            {includeRowHeaders ? (
+                <MemoGridRowHeaderCell
+                    rowNumber={row.rowNumber}
+                    hasPending={pendingRow}
+                    selectionRange={selectionRange}
+                />
+            ) : null}
+            {columnNumbers.map((columnNumber) => (
+                <MemoGridCell
+                    key={`${row.rowNumber}:${columnNumber}`}
+                    cell={row.cells[columnNumber - 1]!}
+                    sheetKey={activeSheetKey}
+                    canEdit={canEdit}
+                    pendingEdit={pendingEditsByColumn?.get(columnNumber)}
+                    columnNumber={columnNumber}
+                    rowNumber={row.rowNumber}
+                    selectionRange={selectionRange}
+                    hasExpandedRange={hasExpandedRange}
+                    currentSelection={currentSelection}
+                    editingCell={editingCell}
+                />
+            ))}
+        </tr>
+    );
+}, (previousProps, nextProps) => {
+    return (
+        previousProps.row === nextProps.row &&
+        areColumnNumbersEqual(previousProps.columnNumbers, nextProps.columnNumbers) &&
+        previousProps.includeRowHeaders === nextProps.includeRowHeaders &&
+        previousProps.activeSheetKey === nextProps.activeSheetKey &&
+        previousProps.canEdit === nextProps.canEdit &&
+        previousProps.pendingRow === nextProps.pendingRow &&
+        previousProps.pendingEditsByColumn === nextProps.pendingEditsByColumn &&
+        areSelectionRangesEqual(previousProps.selectionRange, nextProps.selectionRange) &&
+        previousProps.hasExpandedRange === nextProps.hasExpandedRange &&
+        areCellPositionsEqual(previousProps.currentSelection, nextProps.currentSelection) &&
+        areEditingCellsEqual(previousProps.editingCell, nextProps.editingCell)
+    );
+});
 
 function GridSectionTable({
     currentModel,
@@ -2921,6 +3138,28 @@ function GridSectionTable({
     const hasBody = rows.length > 0 && (includeRowHeaders || columnNumbers.length > 0);
     const selectionRange = getSelectionRange();
     const hasExpandedRange = hasExpandedSelection(selectionRange);
+    const activeSheetKey = currentModel.activeSheet.key;
+    const canEdit = currentModel.canEdit;
+    const currentSelection = selectedCell;
+    const activeEditingCell = editingCell;
+    const pendingEditsByRow = new Map<number, Map<number, PendingEdit>>();
+    for (const pendingEdit of pendingEdits.values()) {
+        if (pendingEdit.sheetKey !== activeSheetKey) {
+            continue;
+        }
+
+        const rowPendingEdits = pendingEditsByRow.get(pendingEdit.rowNumber);
+        if (rowPendingEdits) {
+            rowPendingEdits.set(pendingEdit.columnNumber, pendingEdit);
+            continue;
+        }
+
+        pendingEditsByRow.set(
+            pendingEdit.rowNumber,
+            new Map([[pendingEdit.columnNumber, pendingEdit]])
+        );
+    }
+
     if (!hasHeader && !hasBody) {
         return null;
     }
@@ -2942,11 +3181,11 @@ function GridSectionTable({
                     <tr data-role="grid-header-row">
                         {includeRowHeaders ? <th className="grid__row-number">#</th> : null}
                         {columnNumbers.map((columnNumber) => (
-                            <GridColumnHeaderCell
+                            <MemoGridColumnHeaderCell
                                 key={columnNumber}
-                                currentModel={currentModel}
-                                pendingSummary={pendingSummary}
+                                label={currentModel.page.columns[columnNumber - 1]!}
                                 columnNumber={columnNumber}
+                                hasPending={pendingSummary.columns.has(columnNumber)}
                                 selectionRange={selectionRange}
                             />
                         ))}
@@ -2965,29 +3204,20 @@ function GridSectionTable({
                 ) : null}
                 {rows.map((row) => {
                     return (
-                        <tr
+                        <MemoGridRow
                             key={`${row.rowNumber}:${includeRowHeaders ? "row" : "cell"}:${columnNumbers[0] ?? 0}`}
-                            data-role="grid-row"
-                            data-row-number={row.rowNumber}
-                        >
-                            {includeRowHeaders ? (
-                                <GridRowHeaderCell
-                                    pendingSummary={pendingSummary}
-                                    row={row}
-                                    selectionRange={selectionRange}
-                                />
-                            ) : null}
-                            {columnNumbers.map((columnNumber) => (
-                                <GridCell
-                                    key={`${row.rowNumber}:${columnNumber}`}
-                                    cell={row.cells[columnNumber - 1]!}
-                                    columnNumber={columnNumber}
-                                    row={row}
-                                    selectionRange={selectionRange}
-                                    hasExpandedRange={hasExpandedRange}
-                                />
-                            ))}
-                        </tr>
+                            row={row}
+                            columnNumbers={columnNumbers}
+                            includeRowHeaders={includeRowHeaders}
+                            activeSheetKey={activeSheetKey}
+                            canEdit={canEdit}
+                            pendingRow={pendingSummary.rows.has(row.rowNumber)}
+                            pendingEditsByColumn={pendingEditsByRow.get(row.rowNumber)}
+                            selectionRange={selectionRange}
+                            hasExpandedRange={hasExpandedRange}
+                            currentSelection={currentSelection}
+                            editingCell={activeEditingCell}
+                        />
                     );
                 })}
                 {bottomSpacerHeight > 0 ? (
@@ -3269,6 +3499,13 @@ function EditorApp({ view }: { view: Extract<ViewState, { kind: "app" }> }): Rea
 
     React.useLayoutEffect(() => {
         restorePaneScrollState(view.scrollState);
+        if (!view.syncLayout) {
+            if (view.revealSelection) {
+                revealSelectedCell();
+            }
+            return;
+        }
+
         if (viewLocked) {
             clearFrozenPaneLayout();
             scheduleFrozenPaneLayoutSync({
