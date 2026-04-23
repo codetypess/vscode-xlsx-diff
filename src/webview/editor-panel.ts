@@ -41,7 +41,6 @@ import {
     createInitialEditorPanelState,
     normalizeEditorPanelState,
     setActiveEditorSheet,
-    setEditorViewportStartRow,
     setSelectedEditorCell,
 } from "./editor-render-model";
 import { hasLockedView } from "./view-lock";
@@ -71,13 +70,6 @@ function getWebviewStrings(): EditorPanelStrings {
             findNext: "下一个",
             gotoPlaceholder: "A1 或 Sheet1!B2",
             goto: "定位",
-            size: "大小",
-            modified: "修改时间",
-            sheet: "工作表",
-            rows: "行",
-            noRows: "无行",
-            visibleRows: "可见行",
-            readOnly: "只读",
             save: "保存",
             lockView: "锁定视图",
             unlockView: "取消锁定视图",
@@ -90,20 +82,11 @@ function getWebviewStrings(): EditorPanelStrings {
             sheetNameDuplicate: "工作表名称已存在。",
             sheetNameTooLong: "工作表名称不能超过 31 个字符。",
             sheetNameInvalidChars: "工作表名称不能包含 \\ / ? * [ ] : 等字符。",
-            totalSheets: "总工作表",
-            totalRows: "总行数",
-            nonEmptyCells: "非空单元格",
             selectedCell: "当前单元格",
             noCellSelected: "未选择",
-            mergedRanges: "合并区域",
-            pendingChanges: "待保存修改",
             noRowsAvailable: "当前视图没有可显示的行。",
-            readOnlyBadge: "只读模式",
             localChangesBlockedReload:
                 "工作簿文件已在磁盘上变化。请先保存或放弃当前未保存修改，再刷新。",
-            confirmReloadDiscard: "刷新会丢弃当前未保存修改，是否继续？",
-            discardChangesAndReload: "放弃修改并刷新",
-            keepEditing: "继续编辑",
             displayLanguageRefreshBlocked: "当前有未保存修改，语言变更将在保存或手动刷新后生效。",
             noSearchMatches: "没有找到匹配的单元格。",
             invalidCellReference:
@@ -125,13 +108,6 @@ function getWebviewStrings(): EditorPanelStrings {
         findNext: "Next Match",
         gotoPlaceholder: "A1 or Sheet1!B2",
         goto: "Go",
-        size: "Size",
-        modified: "Modified",
-        sheet: "Sheet",
-        rows: "Rows",
-        noRows: "No rows",
-        visibleRows: "Visible rows",
-        readOnly: "Read-only",
         save: "Save",
         lockView: "Lock View",
         unlockView: "Unlock View",
@@ -144,20 +120,11 @@ function getWebviewStrings(): EditorPanelStrings {
         sheetNameDuplicate: "A sheet with this name already exists.",
         sheetNameTooLong: "Sheet names must be 31 characters or fewer.",
         sheetNameInvalidChars: "Sheet names cannot contain \\ / ? * [ ] or :.",
-        totalSheets: "Sheets",
-        totalRows: "Rows",
-        nonEmptyCells: "Non-empty cells",
         selectedCell: "Selected cell",
         noCellSelected: "None",
-        mergedRanges: "Merged ranges",
-        pendingChanges: "Pending changes",
         noRowsAvailable: "No rows available in this view.",
-        readOnlyBadge: "Read-only",
         localChangesBlockedReload:
             "The workbook changed on disk. Save or discard your pending edits before reloading.",
-        confirmReloadDiscard: "Reloading will discard your pending edits. Continue?",
-        discardChangesAndReload: "Discard Changes and Reload",
-        keepEditing: "Keep Editing",
         displayLanguageRefreshBlocked:
             "Pending edits are open. Display language changes will apply after you save or reload the editor.",
         noSearchMatches: "No matching cells were found.",
@@ -186,7 +153,6 @@ export class XlsxEditorPanel {
     private workbook: WorkbookSnapshot | null = null;
     private state: EditorPanelState = {
         activeSheetKey: null,
-        viewportStartRow: 1,
         selectedCell: null,
     };
     private isWebviewReady = false;
@@ -451,22 +417,6 @@ export class XlsxEditorPanel {
 </html>`;
     }
 
-    private async confirmDiscardPendingEdits(): Promise<boolean> {
-        if (!this.document.hasPendingEdits()) {
-            return true;
-        }
-
-        const strings = getWebviewStrings();
-        const choice = await vscode.window.showWarningMessage(
-            strings.confirmReloadDiscard,
-            { modal: true },
-            strings.discardChangesAndReload,
-            strings.keepEditing
-        );
-
-        return choice === strings.discardChangesAndReload;
-    }
-
     private async handleMessage(message: EditorWebviewMessage): Promise<void> {
         try {
             switch (message.type) {
@@ -496,18 +446,6 @@ export class XlsxEditorPanel {
                     return;
                 case "renameSheet":
                     await this.renamePendingSheet(message.sheetKey);
-                    return;
-                case "setViewportStartRow":
-                    if (!this.getWorkingWorkbook()) {
-                        return;
-                    }
-                    this.state = setEditorViewportStartRow(
-                        this.getWorkingWorkbook()!,
-                        this.state,
-                        message.rowNumber,
-                        this.getSheetEntries()
-                    );
-                    await this.render(undefined, { silent: true });
                     return;
                 case "search": {
                     if (!this.getWorkingWorkbook()) {

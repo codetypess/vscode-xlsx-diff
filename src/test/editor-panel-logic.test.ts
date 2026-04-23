@@ -75,7 +75,6 @@ suite("Editor panel logic", () => {
         const sheetEntries = createWorkingSheetEntries(workbook);
         const state: EditorPanelState = {
             activeSheetKey: "sheet:0",
-            viewportStartRow: 1,
             selectedCell: { rowNumber: 1, columnNumber: 1 },
         };
 
@@ -157,7 +156,6 @@ suite("Editor panel state helpers", () => {
         const sheetEntries = createWorkingSheetEntries(workbook);
         const state: EditorPanelState = {
             activeSheetKey: "sheet:0",
-            viewportStartRow: 2,
             selectedCell: { rowNumber: 1, columnNumber: 1 },
         };
         const pendingCellEdits = [

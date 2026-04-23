@@ -18,7 +18,6 @@ export type EditorWebviewMessage =
     | { type: "addSheet" }
     | { type: "deleteSheet"; sheetKey: string }
     | { type: "renameSheet"; sheetKey: string }
-    | { type: "setViewportStartRow"; rowNumber: number }
     | {
           type: "search";
           query: string;
@@ -47,13 +46,6 @@ export interface XlsxEditorPanelController {
 export interface EditorPanelStrings {
     loading: string;
     reload: string;
-    size: string;
-    modified: string;
-    sheet: string;
-    rows: string;
-    noRows: string;
-    visibleRows: string;
-    readOnly: string;
     save: string;
     lockView: string;
     unlockView: string;
@@ -73,19 +65,10 @@ export interface EditorPanelStrings {
     findNext: string;
     gotoPlaceholder: string;
     goto: string;
-    totalSheets: string;
-    totalRows: string;
-    nonEmptyCells: string;
     selectedCell: string;
     noCellSelected: string;
-    mergedRanges: string;
-    pendingChanges: string;
     noRowsAvailable: string;
-    readOnlyBadge: string;
     localChangesBlockedReload: string;
-    confirmReloadDiscard: string;
-    discardChangesAndReload: string;
-    keepEditing: string;
     displayLanguageRefreshBlocked: string;
     noSearchMatches: string;
     invalidCellReference: string;

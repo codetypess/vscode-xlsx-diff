@@ -33,16 +33,13 @@ interface WebviewStrings {
     all: string;
     diffs: string;
     same: string;
-    allRows: string;
     diffRows: string;
     sameRows: string;
     prevDiff: string;
     nextDiff: string;
     sheets: string;
     diffCells: string;
-    diffRowsShort: string;
     rows: string;
-    columns: string;
     filter: string;
     visibleRows: string;
     currentDiff: string;
@@ -52,7 +49,6 @@ interface WebviewStrings {
     modified: string;
     size: string;
     readOnly: string;
-    mergedRangesChanged: string;
     noSheet: string;
     noRows: string;
 }
@@ -78,16 +74,13 @@ function getWebviewStrings(): WebviewStrings {
             all: "全部",
             diffs: "差异",
             same: "相同",
-            allRows: "全部行",
             diffRows: "差异行",
             sameRows: "相同行",
             prevDiff: "上一处差异",
             nextDiff: "下一处差异",
             sheets: "工作表",
             diffCells: "差异单元格",
-            diffRowsShort: "差异行",
             rows: "行",
-            columns: "列",
             filter: "筛选",
             visibleRows: "可见行",
             currentDiff: "当前差异",
@@ -97,7 +90,6 @@ function getWebviewStrings(): WebviewStrings {
             modified: "修改时间",
             size: "大小",
             readOnly: "只读",
-            mergedRangesChanged: "合并区域已变化",
             noSheet: "没有可显示的工作表。",
             noRows: "当前工作表没有可显示的行。",
         };
@@ -110,16 +102,13 @@ function getWebviewStrings(): WebviewStrings {
         all: "All",
         diffs: "Diffs",
         same: "Same",
-        allRows: "All Rows",
         diffRows: "Diff Rows",
         sameRows: "Same Rows",
         prevDiff: "Prev Diff",
         nextDiff: "Next Diff",
         sheets: "Sheets",
         diffCells: "Diff Cells",
-        diffRowsShort: "Diff Rows",
         rows: "Rows",
-        columns: "Columns",
         filter: "Filter",
         visibleRows: "Visible Rows",
         currentDiff: "Current Diff",
@@ -129,7 +118,6 @@ function getWebviewStrings(): WebviewStrings {
         modified: "Modified",
         size: "Size",
         readOnly: "Read-only",
-        mergedRangesChanged: "Merged ranges changed",
         noSheet: "No sheet is available.",
         noRows: "No rows are available in this sheet.",
     };

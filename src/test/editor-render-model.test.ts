@@ -56,7 +56,7 @@ function createWorkbook(
 }
 
 suite("Editor render model", () => {
-    test("keeps file detail, readonly state, and save flags aligned", () => {
+    test("keeps title, readonly state, and edit flags aligned", () => {
         const workbook = createWorkbook(
             {
                 detailLabel: "Commit",
@@ -75,18 +75,8 @@ suite("Editor render model", () => {
         );
 
         assert.strictEqual(renderModel.title, "editor.xlsx (d4ce7e0)");
-        assert.deepStrictEqual(renderModel.file, {
-            fileName: "editor.xlsx",
-            filePath: "/tmp/editor.xlsx",
-            fileSizeLabel: "128 B",
-            detailLabel: "Commit",
-            detailValue: "d4ce7e0",
-            modifiedTimeLabel: "Apr 18, 2026, 6:51 AM",
-            isReadonly: true,
-        });
         assert.strictEqual(renderModel.hasPendingEdits, true);
         assert.strictEqual(renderModel.canEdit, false);
-        assert.strictEqual(renderModel.canSave, false);
     });
 
     test("keeps the selected sparse cell in the render model", () => {
@@ -105,8 +95,6 @@ suite("Editor render model", () => {
         assert.strictEqual(renderModel.selection?.address, "R205C1");
         assert.strictEqual(renderModel.activeSheet.rowCount, 205);
         assert.strictEqual(renderModel.activeSheet.cells["205:1"]?.displayValue, "tail");
-        assert.strictEqual(renderModel.page.startRow, 6);
-        assert.strictEqual(renderModel.page.endRow, 205);
     });
 
     test("surfaces full active sheet columns and sparse cells", () => {
@@ -133,11 +121,11 @@ suite("Editor render model", () => {
         const state = setActiveEditorSheet(workbook, initialState, targetSheetKey);
         const renderModel = createEditorRenderModel(workbook, state);
 
-        assert.strictEqual(renderModel.activeSheet.label, "Second");
-        assert.strictEqual(renderModel.activeSheet.hasMergedRanges, true);
+        assert.strictEqual(renderModel.activeSheet.key, targetSheetKey);
+        assert.strictEqual(renderModel.sheets[1]?.label, "Second");
+        assert.strictEqual(renderModel.sheets[1]?.isActive, true);
         assert.deepStrictEqual(renderModel.activeSheet.columns, ["A", "B"]);
         assert.strictEqual(renderModel.activeSheet.cells["2:2"]?.displayValue, "value");
-        assert.strictEqual(renderModel.summary.totalNonEmptyCells, 2);
     });
 
     test("surfaces freeze pane state for the active sheet", () => {
@@ -165,14 +153,21 @@ suite("Editor render model", () => {
         assert.strictEqual(renderModel.activeSheet.columnCount, 10);
     });
 
-    test("keeps large locked sheets paged until selection moves into the sparse region", () => {
+    test("keeps the full active sheet cell map available for large locked sheets", () => {
         const workbook = createWorkbook({}, [
-            createSheet("Sheet1", [createCell(240, 2, "tail")], 400, 4, [], {
+            createSheet(
+                "Sheet1",
+                [createCell(240, 2, "near-tail"), createCell(360, 2, "far-tail")],
+                400,
+                4,
+                [],
+                {
                 columnCount: 1,
                 rowCount: 2,
                 topLeftCell: "B3",
                 activePane: "bottomRight",
-            }),
+                }
+            ),
         ]);
 
         const renderModel = createEditorRenderModel(
@@ -180,9 +175,8 @@ suite("Editor render model", () => {
             createInitialEditorPanelState(workbook)
         );
 
-        assert.strictEqual(renderModel.page.startRow, 3);
-        assert.strictEqual(renderModel.page.endRow, 202);
-        assert.strictEqual(renderModel.activeSheet.cells["240:2"], undefined);
+        assert.strictEqual(renderModel.activeSheet.cells["240:2"]?.displayValue, "near-tail");
+        assert.strictEqual(renderModel.activeSheet.cells["360:2"]?.displayValue, "far-tail");
         assert.deepStrictEqual(renderModel.activeSheet.freezePane, {
             columnCount: 1,
             rowCount: 2,
@@ -211,8 +205,6 @@ suite("Editor render model", () => {
 
         assert.strictEqual(renderModel.selection?.address, "R240C2");
         assert.strictEqual(renderModel.activeSheet.cells["240:2"]?.displayValue, "tail");
-        assert.ok(renderModel.page.startRow <= 240);
-        assert.ok(renderModel.page.endRow >= 240);
     });
 
     test("keeps frozen-row selections in the render model", () => {

@@ -68,76 +68,32 @@ export interface EditorSelectionView extends EditorSelectedCell {
     isPresent: boolean;
 }
 
-export interface EditorGridCellView {
-    key: string;
-    address: string;
-    value: string;
-    formula: string | null;
-    isPresent: boolean;
-    isSelected: boolean;
-}
-
-export interface EditorGridRowView {
-    rowNumber: number;
-    isSelected: boolean;
-    cells: EditorGridCellView[];
-}
-
-export interface EditorPageSlice {
-    totalRows: number;
-    visibleRowCount: number;
-    rangeLabel: string;
-    startRow: number;
-    endRow: number;
-    columns: string[];
-    frozenRows: EditorGridRowView[];
-    rows: EditorGridRowView[];
-}
-
 export interface EditorPanelState {
     activeSheetKey: string | null;
-    viewportStartRow: number;
     selectedCell: EditorSelectedCell | null;
 }
 
 export interface EditorSheetTabView {
     key: string;
     label: string;
-    rowCount: number;
-    columnCount: number;
-    hasData: boolean;
     isActive: boolean;
 }
 
 export interface EditorActiveSheetView {
     key: string;
-    label: string;
     rowCount: number;
     columnCount: number;
     columns: string[];
     cells: Record<string, CellSnapshot>;
-    hasData: boolean;
-    mergedRangeCount: number;
-    hasMergedRanges: boolean;
     freezePane: SheetFreezePaneSnapshot | null;
-}
-
-export interface EditorWorkbookSummary {
-    totalSheets: number;
-    totalRows: number;
-    totalNonEmptyCells: number;
 }
 
 export interface EditorRenderModel {
     title: string;
-    file: WorkbookFileView;
-    summary: EditorWorkbookSummary;
     activeSheet: EditorActiveSheetView;
     selection: EditorSelectionView | null;
     hasPendingEdits: boolean;
-    canSave: boolean;
     canEdit: boolean;
-    page: EditorPageSlice;
     sheets: EditorSheetTabView[];
     canUndoStructuralEdits: boolean;
     canRedoStructuralEdits: boolean;
@@ -166,14 +122,4 @@ export interface WorkbookDiffModel {
     totalDiffSheets: number;
     totalDiffRows: number;
     totalDiffCells: number;
-}
-
-export interface WorkbookFileView {
-    fileName: string;
-    filePath: string;
-    fileSizeLabel: string;
-    detailLabel?: string;
-    detailValue?: string;
-    modifiedTimeLabel: string;
-    isReadonly: boolean;
 }

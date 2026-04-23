@@ -1,10 +1,6 @@
 import * as React from "react";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
-import {
-    DEFAULT_EDITOR_WINDOW_OVERSCAN,
-    DEFAULT_EDITOR_WINDOW_SIZE,
-} from "../constants";
 import type { CellSnapshot, EditorRenderModel, EditorSheetTabView } from "../core/model/types";
 import { createCellKey, getColumnLabel } from "../core/model/cells";
 import {
@@ -16,10 +12,8 @@ import {
     createEditorRowWindow,
     getEditorContentSize,
     getEditorRowHeaderWidth,
-    getEditorScrollPositionForCell,
     getFrozenEditorCounts,
 } from "./editor-virtual-grid";
-import { getApproximateViewportStartRowForScrollPosition } from "./editor-panel-scroll";
 import { getFreezePaneCountsForCell, hasLockedView } from "./view-lock";
 
 interface VsCodeApi {
@@ -34,7 +28,6 @@ type OutgoingMessage =
     | { type: "addSheet" }
     | { type: "deleteSheet"; sheetKey: string }
     | { type: "renameSheet"; sheetKey: string }
-    | { type: "setViewportStartRow"; rowNumber: number }
     | {
           type: "search";
           query: string;
@@ -104,12 +97,6 @@ interface EditorGridCellView {
     isSelected: boolean;
 }
 
-interface EditorGridRowView {
-    rowNumber: number;
-    isSelected: boolean;
-    cells: EditorGridCellView[];
-}
-
 interface EditingCell extends CellPosition {
     sheetKey: string;
     value: string;
@@ -157,8 +144,6 @@ interface SelectionDragState {
     pointerId: number;
 }
 
-type FrozenPaneName = "top-left" | "top-right" | "bottom-left" | "bottom-right";
-
 type ViewState =
     | { kind: "loading"; message: string }
     | { kind: "error"; message: string }
@@ -168,7 +153,6 @@ type ViewState =
           revealSelection: boolean;
           revision: number;
           scrollState: ScrollState | null;
-          syncLayout: boolean;
       };
 
 const DEFAULT_STRINGS = {
@@ -184,13 +168,6 @@ const DEFAULT_STRINGS = {
     searchRegex: "Use Regular Expression",
     searchMatchCase: "Match Case",
     searchWholeWord: "Match Whole Word",
-    size: "Size",
-    modified: "Modified",
-    sheet: "Sheet",
-    rows: "Rows",
-    noRows: "No rows",
-    visibleRows: "Visible rows",
-    readOnly: "Read-only",
     save: "Save",
     lockView: "Lock View",
     unlockView: "Unlock View",
@@ -199,12 +176,7 @@ const DEFAULT_STRINGS = {
     renameSheet: "Rename Sheet",
     selectedCell: "Selected cell",
     noCellSelected: "None",
-    totalSheets: "Sheets",
-    totalRows: "Rows",
-    nonEmptyCells: "Non-empty cells",
-    mergedRanges: "Merged ranges",
     noRowsAvailable: "No rows available in this view.",
-    readOnlyBadge: "Read-only",
 };
 
 type Strings = typeof DEFAULT_STRINGS;
@@ -234,28 +206,12 @@ let setViewState: React.Dispatch<React.SetStateAction<ViewState>> | null = null;
 let tabContextMenu: TabContextMenuState | null = null;
 let selectionDragState: SelectionDragState | null = null;
 let suppressNextCellClick = false;
-let frozenPaneLayoutFrame = 0;
-let deferredGridLayoutTimer = 0;
-let isSyncingFrozenPaneScroll = false;
-let lastRequestedViewportStartRow: number | null = null;
-let queuedViewportStartRow: number | null = null;
-let lastObservedPaneScrollTop: number | null = null;
-let lastMeasuredSheetKey: string | null = null;
-let pendingViewportScrollFrame = 0;
-let pendingViewportScrollPane: HTMLElement | null = null;
-let lastScrollActivityAt = 0;
-const rowHeightByNumber = new Map<number, number>();
-const columnWidthByNumber = new Map<number, number>();
 let searchOptions: SearchOptions = {
     isRegexp: false,
     matchCase: false,
     wholeWord: false,
 };
 
-const ESTIMATED_EDITOR_ROW_HEIGHT = 28;
-const EDITOR_COLUMN_MIN_WIDTH = 108;
-const EDITOR_COLUMN_MAX_WIDTH = 240;
-const ACTIVE_SCROLL_LAYOUT_DELAY_MS = 140;
 const WHEEL_DELTA_LINE_MODE = 1;
 const WHEEL_DELTA_PAGE_MODE = 2;
 const WHEEL_LINE_SCROLL_PIXELS = 40;
@@ -319,22 +275,6 @@ function getVirtualViewportState(currentModel: EditorRenderModel | null): Virtua
         rowNumbers: rowWindow.rowNumbers,
         columnNumbers: columnWindow.columnNumbers,
     };
-}
-
-function getViewportShiftRowCount(): number {
-    return Math.max(1, DEFAULT_EDITOR_WINDOW_SIZE - DEFAULT_EDITOR_WINDOW_OVERSCAN * 2);
-}
-
-function getNow(): number {
-    return globalThis.performance?.now() ?? Date.now();
-}
-
-function recordScrollActivity(): void {
-    lastScrollActivityAt = getNow();
-}
-
-function isActivelyScrolling(): boolean {
-    return getNow() - lastScrollActivityAt < ACTIVE_SCROLL_LAYOUT_DELAY_MS;
 }
 
 function getPendingEditKey(sheetKey: string, rowNumber: number, columnNumber: number): string {
@@ -403,310 +343,6 @@ function getCellTooltip(address: string, value: string, formula: string | null):
     return lines.join("\n");
 }
 
-function getRenderableRows(currentModel: EditorRenderModel | null): EditorGridRowView[] {
-    if (!currentModel) {
-        return [];
-    }
-
-    const rows: EditorGridRowView[] = [];
-    const seenRows = new Set<number>();
-    for (const row of [...currentModel.page.frozenRows, ...currentModel.page.rows]) {
-        if (seenRows.has(row.rowNumber)) {
-            continue;
-        }
-
-        seenRows.add(row.rowNumber);
-        rows.push(row);
-    }
-
-    return rows;
-}
-
-function getApproximateRowHeight(
-    currentModel: EditorRenderModel | null,
-    rowNumber: number
-): number {
-    return rowHeightByNumber.get(rowNumber) ?? ESTIMATED_EDITOR_ROW_HEIGHT;
-}
-
-function getApproximateRowSpanHeight(
-    currentModel: EditorRenderModel | null,
-    startRow: number,
-    endRow: number
-): number {
-    if (endRow < startRow) {
-        return 0;
-    }
-
-    let height = 0;
-    for (let rowNumber = Math.max(startRow, 1); rowNumber <= endRow; rowNumber += 1) {
-        height += getApproximateRowHeight(currentModel, rowNumber);
-    }
-
-    return height;
-}
-
-function getVisibleScrollableRowRange(
-    currentModel: EditorRenderModel,
-    pane: HTMLElement
-): { firstVisibleRow: number; lastVisibleRow: number } {
-    const rows = currentModel.page.rows;
-    const baseRow = getScrollableViewportBaseRow(currentModel);
-    if (rows.length === 0) {
-        return {
-            firstVisibleRow: baseRow,
-            lastVisibleRow: baseRow,
-        };
-    }
-
-    let rowIndex = 0;
-    let offsetWithinWindow = Math.max(0, pane.scrollTop - getTopSpacerHeight(currentModel));
-    while (rowIndex < rows.length) {
-        const rowHeight = getApproximateRowHeight(currentModel, rows[rowIndex].rowNumber);
-        if (offsetWithinWindow < rowHeight) {
-            break;
-        }
-
-        offsetWithinWindow -= rowHeight;
-        rowIndex += 1;
-    }
-
-    const clampedRowIndex = Math.min(rowIndex, rows.length - 1);
-    const firstVisibleRow = rows[clampedRowIndex]?.rowNumber ?? rows[0].rowNumber;
-    let lastVisibleRow = firstVisibleRow;
-    let remainingHeight = pane.clientHeight + offsetWithinWindow;
-
-    for (let visibleRowIndex = clampedRowIndex; visibleRowIndex < rows.length; visibleRowIndex += 1) {
-        const row = rows[visibleRowIndex];
-        if (!row) {
-            break;
-        }
-
-        lastVisibleRow = row.rowNumber;
-        remainingHeight -= getApproximateRowHeight(currentModel, row.rowNumber);
-        if (remainingHeight <= 0) {
-            break;
-        }
-    }
-
-    return { firstVisibleRow, lastVisibleRow };
-}
-
-function getTopSpacerHeight(currentModel: EditorRenderModel): number {
-    const baseRow = getScrollableViewportBaseRow(currentModel);
-    if (currentModel.page.startRow <= baseRow) {
-        return 0;
-    }
-
-    return getApproximateRowSpanHeight(currentModel, baseRow, currentModel.page.startRow - 1);
-}
-
-function getBottomSpacerHeight(currentModel: EditorRenderModel): number {
-    if (currentModel.page.endRow <= 0 || currentModel.page.endRow >= currentModel.page.totalRows) {
-        return 0;
-    }
-
-    return getApproximateRowSpanHeight(
-        currentModel,
-        currentModel.page.endRow + 1,
-        currentModel.page.totalRows
-    );
-}
-
-function getScrollableViewportBaseRow(currentModel: EditorRenderModel | null): number {
-    if (!currentModel) {
-        return 1;
-    }
-
-    return Math.max(
-        1,
-        hasLockedView(currentModel.activeSheet.freezePane)
-            ? Math.min(
-                  (currentModel.activeSheet.freezePane?.rowCount ?? 0) + 1,
-                  currentModel.page.totalRows
-              )
-            : 1
-    );
-}
-
-function getScrollableViewportRowCount(currentModel: EditorRenderModel | null): number {
-    if (!currentModel) {
-        return 0;
-    }
-
-    return Math.max(
-        0,
-        currentModel.page.totalRows - getScrollableViewportBaseRow(currentModel) + 1
-    );
-}
-
-function getMaxViewportStartRow(currentModel: EditorRenderModel | null): number {
-    if (!currentModel) {
-        return 1;
-    }
-
-    const baseRow = getScrollableViewportBaseRow(currentModel);
-    return Math.max(currentModel.page.totalRows - DEFAULT_EDITOR_WINDOW_SIZE + 1, baseRow);
-}
-
-function hasPendingViewportRequest(currentModel: EditorRenderModel | null): boolean {
-    return Boolean(
-        currentModel &&
-            lastRequestedViewportStartRow !== null &&
-            lastRequestedViewportStartRow !== currentModel.page.startRow
-    );
-}
-
-function requestViewportStartRow(rowNumber: number): void {
-    if (!model) {
-        return;
-    }
-
-    const minRowNumber = getScrollableViewportBaseRow(model);
-    const clampedRowNumber = Math.max(
-        minRowNumber,
-        Math.min(rowNumber, getMaxViewportStartRow(model))
-    );
-    if (clampedRowNumber === model.page.startRow || clampedRowNumber === lastRequestedViewportStartRow) {
-        return;
-    }
-
-    if (hasPendingViewportRequest(model)) {
-        queuedViewportStartRow = clampedRowNumber;
-        return;
-    }
-
-    queuedViewportStartRow = null;
-    lastRequestedViewportStartRow = clampedRowNumber;
-    vscode.postMessage({ type: "setViewportStartRow", rowNumber: clampedRowNumber });
-}
-
-function maybeRequestViewportForScroll(pane: HTMLElement): void {
-    if (!model) {
-        return;
-    }
-
-    if (getScrollableViewportRowCount(model) <= model.page.visibleRowCount) {
-        return;
-    }
-
-    const baseRow = getScrollableViewportBaseRow(model);
-    const currentStartRow = model.page.startRow;
-    const currentEndRow = model.page.endRow;
-    const directViewportStartRow = getApproximateViewportStartRowForScrollPosition({
-        baseRow,
-        maxStartRow: getMaxViewportStartRow(model),
-        totalScrollableRows: getScrollableViewportRowCount(model),
-        visibleRowCount: model.page.visibleRowCount,
-        scrollTop: pane.scrollTop,
-        maxScrollTop: Math.max(0, pane.scrollHeight - pane.clientHeight),
-    });
-
-    // Large scrollbar jumps should snap the data window near the dragged position
-    // instead of paging forward/backward in multiple extension round trips.
-    if (Math.abs(directViewportStartRow - currentStartRow) > getViewportShiftRowCount()) {
-        lastObservedPaneScrollTop = pane.scrollTop;
-        requestViewportStartRow(directViewportStartRow);
-        return;
-    }
-
-    const { firstVisibleRow, lastVisibleRow } = getVisibleScrollableRowRange(model, pane);
-    const previousScrollTop = lastObservedPaneScrollTop;
-    lastObservedPaneScrollTop = pane.scrollTop;
-    if (previousScrollTop === null || pane.scrollTop === previousScrollTop) {
-        return;
-    }
-
-    const isScrollingDown = pane.scrollTop > previousScrollTop;
-    const shiftRowCount = getViewportShiftRowCount();
-
-    if (isScrollingDown) {
-        const remainingRowsBelowViewport = currentEndRow - lastVisibleRow;
-        if (remainingRowsBelowViewport > DEFAULT_EDITOR_WINDOW_OVERSCAN) {
-            return;
-        }
-
-        requestViewportStartRow(currentStartRow + shiftRowCount);
-        return;
-    }
-
-    const rowsAboveViewport = firstVisibleRow - currentStartRow;
-    if (rowsAboveViewport > DEFAULT_EDITOR_WINDOW_OVERSCAN) {
-        return;
-    }
-
-    requestViewportStartRow(currentStartRow - shiftRowCount);
-}
-
-function scheduleViewportRequestForScroll(pane: HTMLElement): void {
-    recordScrollActivity();
-    pendingViewportScrollPane = pane;
-
-    if (pendingViewportScrollFrame) {
-        return;
-    }
-
-    pendingViewportScrollFrame = requestAnimationFrame(() => {
-        pendingViewportScrollFrame = 0;
-        const nextPane = pendingViewportScrollPane;
-        pendingViewportScrollPane = null;
-        if (!nextPane) {
-            return;
-        }
-
-        maybeRequestViewportForScroll(nextPane);
-    });
-}
-
-function hasFrozenRowGap(currentModel: EditorRenderModel | null): boolean {
-    if (!currentModel || currentModel.page.frozenRows.length === 0 || currentModel.page.rows.length === 0) {
-        return false;
-    }
-
-    const lastFrozenRow = currentModel.page.frozenRows[currentModel.page.frozenRows.length - 1];
-    const firstPageRow = currentModel.page.rows[0];
-    return Boolean(lastFrozenRow && firstPageRow && lastFrozenRow.rowNumber + 1 < firstPageRow.rowNumber);
-}
-
-function getFirstRenderableRow(currentModel: EditorRenderModel | null): EditorGridRowView | null {
-    return getRenderableRows(currentModel)[0] ?? null;
-}
-
-function getVisibleFreezeCounts(
-    currentModel: EditorRenderModel | null
-): { rowCount: number; columnCount: number } {
-    if (!currentModel || !hasLockedView(currentModel.activeSheet.freezePane)) {
-        return { rowCount: 0, columnCount: 0 };
-    }
-
-    return {
-        rowCount: Math.max(
-            0,
-            Math.min(
-                currentModel.activeSheet.freezePane.rowCount,
-                Math.max(currentModel.activeSheet.rowCount - 1, 0)
-            )
-        ),
-        columnCount: Math.max(
-            0,
-            Math.min(
-                currentModel.activeSheet.freezePane.columnCount,
-                Math.max(currentModel.activeSheet.columnCount - 1, 0)
-            )
-        ),
-    };
-}
-
-function getFrozenRowsForCurrentView(currentModel: EditorRenderModel): EditorGridRowView[] {
-    const { rowCount } = getVisibleFreezeCounts(currentModel);
-    return currentModel.page.frozenRows.filter((row) => row.rowNumber <= rowCount);
-}
-
-function getScrollableRowsForCurrentView(currentModel: EditorRenderModel): EditorGridRowView[] {
-    const { rowCount } = getVisibleFreezeCounts(currentModel);
-    return currentModel.page.rows.filter((row) => row.rowNumber > rowCount);
-}
-
 function getCellSnapshot(
     rowNumber: number,
     columnNumber: number,
@@ -765,27 +401,6 @@ function getSelectionRange(): CellRange | null {
 function hasExpandedSelection(range: CellRange | null = getSelectionRange()): boolean {
     return Boolean(
         range && (range.startRow !== range.endRow || range.startColumn !== range.endColumn)
-    );
-}
-
-function isRowInSelection(rowNumber: number): boolean {
-    const range = getSelectionRange();
-    return Boolean(range && rowNumber >= range.startRow && rowNumber <= range.endRow);
-}
-
-function isColumnInSelection(columnNumber: number): boolean {
-    const range = getSelectionRange();
-    return Boolean(range && columnNumber >= range.startColumn && columnNumber <= range.endColumn);
-}
-
-function isCellInSelection(rowNumber: number, columnNumber: number): boolean {
-    const range = getSelectionRange();
-    return Boolean(
-        range &&
-        rowNumber >= range.startRow &&
-        rowNumber <= range.endRow &&
-        columnNumber >= range.startColumn &&
-        columnNumber <= range.endColumn
     );
 }
 
@@ -1072,443 +687,6 @@ function getPaneScrollState(): ScrollState | null {
     };
 }
 
-function restorePaneScrollState(scrollState: ScrollState | null): void {
-    if (!scrollState) {
-        return;
-    }
-
-    const pane =
-        document.querySelector<HTMLElement>('[data-role="grid-scroll-main"]') ??
-        document.querySelector<HTMLElement>(".pane__table");
-    if (!pane) {
-        return;
-    }
-
-    pane.scrollTop = clampScrollPosition(scrollState.top, pane.scrollHeight - pane.clientHeight);
-    pane.scrollLeft = clampScrollPosition(scrollState.left, pane.scrollWidth - pane.clientWidth);
-    lastObservedPaneScrollTop = pane.scrollTop;
-
-    if (pane.dataset.pane === "bottom-right") {
-        syncFrozenPaneScroll("bottom-right", pane);
-    }
-}
-
-function clampGridColumnWidth(width: number): number {
-    return Math.max(EDITOR_COLUMN_MIN_WIDTH, Math.min(width, EDITOR_COLUMN_MAX_WIDTH));
-}
-
-function applyCachedGridColumnWidths(): void {
-    for (const column of document.querySelectorAll<HTMLElement>(
-        '[data-role="grid-column-col"][data-column-number]'
-    )) {
-        const columnNumber = Number(column.dataset.columnNumber);
-        if (!Number.isInteger(columnNumber)) {
-            continue;
-        }
-
-        const width = columnWidthByNumber.get(columnNumber);
-        column.style.width = width ? `${width}px` : "";
-    }
-}
-
-function hasMeasuredVisibleGridColumnWidths(): boolean {
-    const columnElements = document.querySelectorAll<HTMLElement>(
-        '[data-role="grid-column-col"][data-column-number]'
-    );
-    if (columnElements.length === 0) {
-        return true;
-    }
-
-    for (const column of columnElements) {
-        const columnNumber = Number(column.dataset.columnNumber);
-        if (!Number.isInteger(columnNumber)) {
-            continue;
-        }
-
-        if (!columnWidthByNumber.has(columnNumber)) {
-            return false;
-        }
-    }
-
-    return true;
-}
-
-function measureVisibleGridColumnWidths(): void {
-    const columnElements = Array.from(
-        document.querySelectorAll<HTMLElement>('[data-role="grid-column-col"][data-column-number]')
-    );
-
-    for (const column of columnElements) {
-        column.style.width = "";
-    }
-
-    for (const element of document.querySelectorAll<HTMLElement>(
-        'th.grid__column[data-column-number], td.grid__cell[data-column-number]'
-    )) {
-        const columnNumber = Number(element.dataset.columnNumber);
-        if (!Number.isInteger(columnNumber)) {
-            continue;
-        }
-
-        const width = clampGridColumnWidth(Math.ceil(element.getBoundingClientRect().width));
-        if (width <= 0) {
-            continue;
-        }
-
-        columnWidthByNumber.set(
-            columnNumber,
-            Math.max(columnWidthByNumber.get(columnNumber) ?? 0, width)
-        );
-    }
-
-    applyCachedGridColumnWidths();
-}
-
-function setGridColumnWidths({
-    measureColumns = true,
-}: {
-    measureColumns?: boolean;
-} = {}): void {
-    const rowHeaderColumns = Array.from(
-        document.querySelectorAll<HTMLElement>('[data-role="grid-row-header-col"]')
-    );
-    const rowHeaderCells = Array.from(
-        document.querySelectorAll<HTMLElement>('th.grid__row-number, td.grid__row-number')
-    );
-    for (const column of rowHeaderColumns) {
-        column.style.width = "";
-    }
-
-    const rowHeaderWidth = Math.ceil(
-        Math.max(56, ...rowHeaderCells.map((cell) => cell.getBoundingClientRect().width), 0)
-    );
-    for (const column of rowHeaderColumns) {
-        column.style.width = `${rowHeaderWidth}px`;
-    }
-
-    if (measureColumns || !hasMeasuredVisibleGridColumnWidths()) {
-        measureVisibleGridColumnWidths();
-        return;
-    }
-
-    applyCachedGridColumnWidths();
-}
-
-function cancelScheduledGridLayoutSync(): void {
-    if (frozenPaneLayoutFrame) {
-        cancelAnimationFrame(frozenPaneLayoutFrame);
-        frozenPaneLayoutFrame = 0;
-    }
-
-    if (deferredGridLayoutTimer) {
-        clearTimeout(deferredGridLayoutTimer);
-        deferredGridLayoutTimer = 0;
-    }
-
-    if (pendingViewportScrollFrame) {
-        cancelAnimationFrame(pendingViewportScrollFrame);
-        pendingViewportScrollFrame = 0;
-    }
-
-    pendingViewportScrollPane = null;
-}
-
-function performGridLayoutSync({
-    revealSelection = false,
-    viewLocked = false,
-    forceColumnMeasurement = false,
-}: {
-    revealSelection?: boolean;
-    viewLocked?: boolean;
-    forceColumnMeasurement?: boolean;
-} = {}): void {
-    const shouldMeasureColumns =
-        forceColumnMeasurement || !isActivelyScrolling() || !hasMeasuredVisibleGridColumnWidths();
-
-    setGridColumnWidths({ measureColumns: shouldMeasureColumns });
-    if (viewLocked) {
-        syncFrozenPaneRowHeights();
-    }
-    cacheRenderedRowHeights();
-    if (revealSelection) {
-        revealSelectedCell();
-    }
-
-    if (shouldMeasureColumns) {
-        return;
-    }
-
-    if (deferredGridLayoutTimer) {
-        clearTimeout(deferredGridLayoutTimer);
-    }
-
-    deferredGridLayoutTimer = window.setTimeout(() => {
-        deferredGridLayoutTimer = 0;
-        scheduleGridLayoutSync({ viewLocked, forceColumnMeasurement: true });
-    }, ACTIVE_SCROLL_LAYOUT_DELAY_MS);
-}
-
-function scheduleGridLayoutSync({
-    revealSelection = false,
-    viewLocked = false,
-    forceColumnMeasurement = false,
-}: {
-    revealSelection?: boolean;
-    viewLocked?: boolean;
-    forceColumnMeasurement?: boolean;
-} = {}): void {
-    if (frozenPaneLayoutFrame) {
-        cancelAnimationFrame(frozenPaneLayoutFrame);
-    }
-
-    frozenPaneLayoutFrame = requestAnimationFrame(() => {
-        frozenPaneLayoutFrame = 0;
-        performGridLayoutSync({
-            revealSelection,
-            viewLocked,
-            forceColumnMeasurement,
-        });
-    });
-}
-
-function resetGridMeasurementState(): void {
-    cancelScheduledGridLayoutSync();
-    lastObservedPaneScrollTop = null;
-    lastMeasuredSheetKey = null;
-    rowHeightByNumber.clear();
-    columnWidthByNumber.clear();
-}
-
-function scheduleGridMetricRefresh({
-    revealSelection = false,
-    viewLocked = false,
-    forceColumnMeasurement = false,
-}: {
-    revealSelection?: boolean;
-    viewLocked?: boolean;
-    forceColumnMeasurement?: boolean;
-} = {}): void {
-    clearFrozenPaneLayout();
-    scheduleGridLayoutSync({
-        revealSelection,
-        viewLocked,
-        forceColumnMeasurement,
-    });
-}
-
-function syncGridColumnWidths(): void {
-    setGridColumnWidths({ measureColumns: true });
-}
-
-function scheduleFrozenPaneLayoutSync({
-    revealSelection = false,
-    forceColumnMeasurement = false,
-}: {
-    revealSelection?: boolean;
-    forceColumnMeasurement?: boolean;
-} = {}): void {
-    scheduleGridMetricRefresh({
-        revealSelection,
-        viewLocked: hasLockedView(model?.activeSheet.freezePane),
-        forceColumnMeasurement,
-    });
-}
-
-function cacheRenderedRowHeights(): void {
-    const nextHeights = new Map<number, number>();
-
-    for (const row of document.querySelectorAll<HTMLTableRowElement>('[data-role="grid-row"]')) {
-        const rowNumber = Number(row.dataset.rowNumber);
-        if (!Number.isInteger(rowNumber)) {
-            continue;
-        }
-
-        const rowHeight = Math.ceil(row.getBoundingClientRect().height);
-        if (rowHeight <= 0) {
-            continue;
-        }
-
-        nextHeights.set(rowNumber, Math.max(nextHeights.get(rowNumber) ?? 0, rowHeight));
-    }
-
-    for (const [rowNumber, rowHeight] of nextHeights) {
-        rowHeightByNumber.set(rowNumber, rowHeight);
-    }
-}
-
-function clearFrozenPaneLayout(): void {
-    for (const element of document.querySelectorAll<HTMLElement>(
-        ".grid__column--frozen, .grid__row-number--frozen, .grid__cell--frozen-row, .grid__cell--frozen-column, .grid__cell--frozen-intersection"
-    )) {
-        element.classList.remove(
-            "grid__column--frozen",
-            "grid__row-number--frozen",
-            "grid__cell--frozen-row",
-            "grid__cell--frozen-column",
-            "grid__cell--frozen-intersection"
-        );
-        element.style.removeProperty("--grid-freeze-top");
-        element.style.removeProperty("--grid-freeze-left");
-        element.style.removeProperty("--grid-freeze-background");
-    }
-}
-
-function getFrozenPaneBackgroundColor(element: HTMLElement, fallbackColor: string): string {
-    const backgroundColor = globalThis.getComputedStyle(element).backgroundColor;
-    if (backgroundColor === "rgba(0, 0, 0, 0)" || backgroundColor === "transparent") {
-        return fallbackColor;
-    }
-
-    return backgroundColor;
-}
-
-function applyFrozenPaneLayout(freezePane: EditorRenderModel["activeSheet"]["freezePane"]): void {
-    clearFrozenPaneLayout();
-
-    if (!freezePane || (freezePane.columnCount <= 0 && freezePane.rowCount <= 0)) {
-        return;
-    }
-
-    const pane = document.querySelector<HTMLElement>(".pane__table");
-    const table = pane?.querySelector<HTMLTableElement>(".grid");
-    if (!pane || !table) {
-        return;
-    }
-
-    const fallbackColor = globalThis.getComputedStyle(pane).backgroundColor;
-    const headerRow = table.querySelector<HTMLTableRowElement>("thead tr");
-    const cornerHeader = table.querySelector<HTMLElement>("thead th.grid__row-number");
-    const headerHeight = headerRow?.getBoundingClientRect().height ?? 0;
-    const rowHeaderWidth = cornerHeader?.getBoundingClientRect().width ?? 0;
-
-    const frozenColumnOffsets = new Map<number, number>();
-    let currentLeft = rowHeaderWidth;
-    for (const header of table.querySelectorAll<HTMLElement>(
-        "thead th.grid__column[data-column-number]"
-    )) {
-        const columnNumber = Number(header.dataset.columnNumber);
-        if (!Number.isInteger(columnNumber) || columnNumber > freezePane.columnCount) {
-            continue;
-        }
-
-        frozenColumnOffsets.set(columnNumber, currentLeft);
-        header.classList.add("grid__column--frozen");
-        header.style.setProperty("--grid-freeze-left", `${currentLeft}px`);
-        header.style.setProperty(
-            "--grid-freeze-background",
-            getFrozenPaneBackgroundColor(header, fallbackColor)
-        );
-        currentLeft += header.getBoundingClientRect().width;
-    }
-
-    const frozenRowOffsets = new Map<number, number>();
-    let currentTop = headerHeight;
-    for (const row of table.querySelectorAll<HTMLTableRowElement>(
-        'tbody tr[data-role="grid-row"]'
-    )) {
-        const rowNumber = Number(row.dataset.rowNumber);
-        if (!Number.isInteger(rowNumber) || rowNumber > freezePane.rowCount) {
-            continue;
-        }
-
-        frozenRowOffsets.set(rowNumber, currentTop);
-        const rowHeader = row.querySelector<HTMLElement>('th[data-role="grid-row-header"]');
-        if (rowHeader) {
-            rowHeader.classList.add("grid__row-number--frozen");
-            rowHeader.style.setProperty("--grid-freeze-top", `${currentTop}px`);
-            rowHeader.style.setProperty(
-                "--grid-freeze-background",
-                getFrozenPaneBackgroundColor(rowHeader, fallbackColor)
-            );
-        }
-
-        currentTop += row.getBoundingClientRect().height;
-    }
-
-    for (const cell of table.querySelectorAll<HTMLElement>('td[data-role="grid-cell"]')) {
-        const rowNumber = Number(cell.dataset.rowNumber);
-        const columnNumber = Number(cell.dataset.columnNumber);
-        const topOffset = frozenRowOffsets.get(rowNumber);
-        const leftOffset = frozenColumnOffsets.get(columnNumber);
-
-        if (topOffset === undefined && leftOffset === undefined) {
-            continue;
-        }
-
-        if (topOffset !== undefined) {
-            cell.classList.add("grid__cell--frozen-row");
-            cell.style.setProperty("--grid-freeze-top", `${topOffset}px`);
-        }
-
-        if (leftOffset !== undefined) {
-            cell.classList.add("grid__cell--frozen-column");
-            cell.style.setProperty("--grid-freeze-left", `${leftOffset}px`);
-        }
-
-        if (topOffset !== undefined && leftOffset !== undefined) {
-            cell.classList.add("grid__cell--frozen-intersection");
-        }
-
-        cell.style.setProperty(
-            "--grid-freeze-background",
-            getFrozenPaneBackgroundColor(cell, fallbackColor)
-        );
-    }
-}
-
-function getFrozenPaneElement(name: FrozenPaneName): HTMLElement | null {
-    return document.querySelector<HTMLElement>(`[data-pane="${name}"]`);
-}
-
-function syncFrozenPaneScroll(
-    sourcePaneName: FrozenPaneName,
-    sourcePane: HTMLElement,
-    { force = false }: { force?: boolean } = {}
-): void {
-    if (isSyncingFrozenPaneScroll && !force) {
-        return;
-    }
-
-    const topRightPane = getFrozenPaneElement("top-right");
-    const bottomLeftPane = getFrozenPaneElement("bottom-left");
-    const bottomRightPane = getFrozenPaneElement("bottom-right");
-    if (!bottomRightPane) {
-        return;
-    }
-
-    isSyncingFrozenPaneScroll = true;
-
-    if (sourcePaneName === "top-right") {
-        bottomRightPane.scrollLeft = clampScrollPosition(
-            sourcePane.scrollLeft,
-            bottomRightPane.scrollWidth - bottomRightPane.clientWidth
-        );
-    } else if (sourcePaneName === "bottom-left") {
-        bottomRightPane.scrollTop = clampScrollPosition(
-            sourcePane.scrollTop,
-            bottomRightPane.scrollHeight - bottomRightPane.clientHeight
-        );
-    } else if (sourcePaneName === "bottom-right") {
-        if (topRightPane) {
-            topRightPane.scrollLeft = clampScrollPosition(
-                sourcePane.scrollLeft,
-                topRightPane.scrollWidth - topRightPane.clientWidth
-            );
-        }
-
-        if (bottomLeftPane) {
-            bottomLeftPane.scrollTop = clampScrollPosition(
-                sourcePane.scrollTop,
-                bottomLeftPane.scrollHeight - bottomLeftPane.clientHeight
-            );
-        }
-    }
-
-    requestAnimationFrame(() => {
-        isSyncingFrozenPaneScroll = false;
-    });
-}
-
 function normalizeWheelDelta(delta: number, deltaMode: number, viewportSize: number): number {
     if (deltaMode === WHEEL_DELTA_LINE_MODE) {
         return delta * WHEEL_LINE_SCROLL_PIXELS;
@@ -1548,149 +726,6 @@ function forwardVirtualGridWheel(event: React.WheelEvent<HTMLElement>): void {
         viewport.scrollTop + deltaY,
         viewport.scrollHeight - viewport.clientHeight
     );
-}
-
-function forwardFrozenPaneWheel(event: React.WheelEvent<HTMLElement>): void {
-    const bottomRightPane = getFrozenPaneElement("bottom-right");
-    if (!bottomRightPane) {
-        return;
-    }
-
-    let deltaX = normalizeWheelDelta(
-        event.deltaX,
-        event.deltaMode,
-        bottomRightPane.clientWidth
-    );
-    let deltaY = normalizeWheelDelta(
-        event.deltaY,
-        event.deltaMode,
-        bottomRightPane.clientHeight
-    );
-
-    if (event.shiftKey && deltaX === 0 && deltaY !== 0) {
-        deltaX = deltaY;
-        deltaY = 0;
-    }
-
-    if (deltaX === 0 && deltaY === 0) {
-        return;
-    }
-
-    event.preventDefault();
-
-    const nextLeft = clampScrollPosition(
-        bottomRightPane.scrollLeft + deltaX,
-        bottomRightPane.scrollWidth - bottomRightPane.clientWidth
-    );
-    const nextTop = clampScrollPosition(
-        bottomRightPane.scrollTop + deltaY,
-        bottomRightPane.scrollHeight - bottomRightPane.clientHeight
-    );
-
-    bottomRightPane.scrollLeft = nextLeft;
-    bottomRightPane.scrollTop = nextTop;
-    syncFrozenPaneScroll("bottom-right", bottomRightPane, { force: true });
-    scheduleViewportRequestForScroll(bottomRightPane);
-}
-
-function syncFrozenPaneRowHeights(): void {
-    const rowFragments = Array.from(
-        document.querySelectorAll<HTMLTableRowElement>('[data-role="grid-row"]')
-    );
-    if (rowFragments.length === 0) {
-        return;
-    }
-
-    const headerRows = Array.from(
-        document.querySelectorAll<HTMLTableRowElement>('[data-role="grid-header-row"]')
-    );
-    for (const row of [...headerRows, ...rowFragments]) {
-        row.style.height = "";
-    }
-
-    if (headerRows.length > 1) {
-        const headerHeight = Math.ceil(
-            Math.max(...headerRows.map((row) => row.getBoundingClientRect().height))
-        );
-        if (headerHeight > 0) {
-            for (const row of headerRows) {
-                row.style.height = `${headerHeight}px`;
-            }
-        }
-    }
-
-    const rowGroups = new Map<number, HTMLTableRowElement[]>();
-    for (const row of rowFragments) {
-        const rowNumber = Number(row.dataset.rowNumber);
-        if (!Number.isInteger(rowNumber)) {
-            continue;
-        }
-
-        const entries = rowGroups.get(rowNumber) ?? [];
-        entries.push(row);
-        rowGroups.set(rowNumber, entries);
-    }
-
-    for (const [rowNumber, rows] of rowGroups) {
-        const rowHeight = Math.ceil(Math.max(...rows.map((row) => row.getBoundingClientRect().height)));
-        if (rowHeight <= 0) {
-            continue;
-        }
-
-        for (const row of rows) {
-            row.style.height = `${rowHeight}px`;
-        }
-    }
-}
-
-function getSelectedCellPaneName(
-    currentModel: EditorRenderModel | null,
-    cell: CellPosition
-): FrozenPaneName | null {
-    if (!currentModel || !hasLockedView(currentModel.activeSheet.freezePane)) {
-        return null;
-    }
-
-    const { rowCount, columnCount } = getVisibleFreezeCounts(currentModel);
-    const isFrozenRow = cell.rowNumber <= rowCount;
-    const isFrozenColumn = cell.columnNumber <= columnCount;
-
-    if (isFrozenRow && isFrozenColumn) {
-        return "top-left";
-    }
-
-    if (isFrozenRow) {
-        return "top-right";
-    }
-
-    if (isFrozenColumn) {
-        return "bottom-left";
-    }
-
-    return "bottom-right";
-}
-
-function getStickyPaneInsets(pane: HTMLElement): { top: number; left: number } {
-    const paneRect = pane.getBoundingClientRect();
-    const headerRow = pane.querySelector("thead tr");
-    const firstColumn = pane.querySelector("thead th:first-child");
-    let top = headerRow?.getBoundingClientRect().height ?? 0;
-    let left = firstColumn?.getBoundingClientRect().width ?? 0;
-
-    for (const rowHeader of pane.querySelectorAll<HTMLElement>("th.grid__row-number--frozen")) {
-        top = Math.max(top, rowHeader.getBoundingClientRect().bottom - paneRect.top);
-    }
-
-    for (const columnHeader of pane.querySelectorAll<HTMLElement>(
-        "thead th.grid__column--frozen"
-    )) {
-        left = Math.max(left, columnHeader.getBoundingClientRect().right - paneRect.left);
-    }
-
-    return {
-        top,
-        left,
-    };
 }
 
 function revealSelectedCell(): void {
@@ -1964,7 +999,6 @@ function setSelectedCellLocal(
     renderApp({
         commitEditing: false,
         revealSelection: reveal,
-        syncLayout: false,
     });
 }
 
@@ -2036,10 +1070,6 @@ function prepareSelectionForRender({
 
 function getCellModelValue(rowNumber: number, columnNumber: number): string {
     return getCellView(rowNumber, columnNumber)?.value ?? "";
-}
-
-function getCellFormula(rowNumber: number, columnNumber: number): string | null {
-    return getCellView(rowNumber, columnNumber)?.formula ?? null;
 }
 
 function notifyPendingEditState(): void {
@@ -2374,7 +1404,6 @@ function startEditCell(rowNumber: number, columnNumber: number, currentValue: st
     renderApp({
         commitEditing: false,
         revealSelection: true,
-        syncLayout: false,
     });
 }
 
@@ -2562,14 +1591,10 @@ function updateView(view: ViewState): void {
 }
 
 function renderLoading(message: string): void {
-    queuedViewportStartRow = null;
-    resetGridMeasurementState();
     updateView({ kind: "loading", message });
 }
 
 function renderError(message: string): void {
-    queuedViewportStartRow = null;
-    resetGridMeasurementState();
     updateView({ kind: "error", message });
 }
 
@@ -2577,12 +1602,10 @@ function renderApp({
     commitEditing = true,
     revealSelection = false,
     useModelSelection = false,
-    syncLayout = true,
 }: {
     commitEditing?: boolean;
     revealSelection?: boolean;
     useModelSelection?: boolean;
-    syncLayout?: boolean;
 } = {}): void {
     if (!model) {
         renderLoading(STRINGS.loading);
@@ -2606,7 +1629,6 @@ function renderApp({
         revealSelection: shouldRevealSelection,
         revision: viewRevision,
         scrollState,
-        syncLayout,
     });
 }
 
@@ -2965,24 +1987,6 @@ function arePendingEditsEqual(
     );
 }
 
-function areColumnNumbersEqual(left: number[], right: number[]): boolean {
-    if (left === right) {
-        return true;
-    }
-
-    if (left.length !== right.length) {
-        return false;
-    }
-
-    for (let index = 0; index < left.length; index += 1) {
-        if (left[index] !== right[index]) {
-            return false;
-        }
-    }
-
-    return true;
-}
-
 function isRowWithinSelectionRange(selectionRange: CellRange | null, rowNumber: number): boolean {
     return Boolean(
         selectionRange &&
@@ -3027,6 +2031,41 @@ interface EditorVirtualGridMetrics extends VirtualViewportState {
 
 function createSequentialNumbers(count: number): number[] {
     return Array.from({ length: count }, (_, index) => index + 1);
+}
+
+function areNumberArraysEqual(left: number[], right: number[]): boolean {
+    if (left.length !== right.length) {
+        return false;
+    }
+
+    for (let index = 0; index < left.length; index += 1) {
+        if (left[index] !== right[index]) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+function hasEditorVirtualGridLayoutChanged(
+    previous: EditorVirtualGridMetrics,
+    next: EditorVirtualGridMetrics
+): boolean {
+    return (
+        previous.viewportHeight !== next.viewportHeight ||
+        previous.viewportWidth !== next.viewportWidth ||
+        previous.rowHeaderWidth !== next.rowHeaderWidth ||
+        previous.frozenRowCount !== next.frozenRowCount ||
+        previous.frozenColumnCount !== next.frozenColumnCount ||
+        previous.contentWidth !== next.contentWidth ||
+        previous.contentHeight !== next.contentHeight ||
+        previous.stickyTopHeight !== next.stickyTopHeight ||
+        previous.stickyLeftWidth !== next.stickyLeftWidth ||
+        !areNumberArraysEqual(previous.rowNumbers, next.rowNumbers) ||
+        !areNumberArraysEqual(previous.columnNumbers, next.columnNumbers) ||
+        !areNumberArraysEqual(previous.frozenRowNumbers, next.frozenRowNumbers) ||
+        !areNumberArraysEqual(previous.frozenColumnNumbers, next.frozenColumnNumbers)
+    );
 }
 
 function getEditorGridItemStyle({
@@ -3125,11 +2164,29 @@ function useEditorVirtualGrid(
     const [metrics, setMetrics] = React.useState<EditorVirtualGridMetrics>(() =>
         createEditorVirtualGridMetrics(currentModel, null, initialScrollState)
     );
+    const syncMetrics = React.useEffectEvent(
+        (
+            element: HTMLDivElement | null,
+            fallbackScrollState?: ScrollState | null,
+            { force = false }: { force?: boolean } = {}
+        ) => {
+            const nextMetrics = createEditorVirtualGridMetrics(
+                currentModel,
+                element,
+                fallbackScrollState
+            );
+            setMetrics((previous) =>
+                force || hasEditorVirtualGridLayoutChanged(previous, nextMetrics)
+                    ? nextMetrics
+                    : previous
+            );
+        }
+    );
 
     React.useLayoutEffect(() => {
         const element = viewportRef.current;
         if (!element) {
-            setMetrics(createEditorVirtualGridMetrics(currentModel, null, initialScrollState));
+            syncMetrics(null, initialScrollState, { force: true });
             return;
         }
 
@@ -3156,20 +2213,16 @@ function useEditorVirtualGrid(
             element.scrollLeft = nextLeft;
         }
 
-        const syncMetrics = () => {
-            setMetrics(createEditorVirtualGridMetrics(currentModel, element));
-        };
-
-        syncMetrics();
+        syncMetrics(element, undefined, { force: true });
 
         let resizeObserver: ResizeObserver | null = null;
         const handleResize = () => {
-            syncMetrics();
+            syncMetrics(element);
         };
 
         if (typeof ResizeObserver !== "undefined") {
             resizeObserver = new ResizeObserver(() => {
-                syncMetrics();
+                syncMetrics(element);
             });
             resizeObserver.observe(element);
         } else {
@@ -3197,7 +2250,8 @@ function useEditorVirtualGrid(
     ]);
 
     const handleScroll = (event: React.UIEvent<HTMLDivElement>) => {
-        latestScrollElementRef.current = event.currentTarget;
+        const element = event.currentTarget;
+        latestScrollElementRef.current = element;
         if (scrollFrameRef.current) {
             return;
         }
@@ -3209,7 +2263,7 @@ function useEditorVirtualGrid(
                 return;
             }
 
-            setMetrics(createEditorVirtualGridMetrics(currentModel, element));
+            syncMetrics(element);
         });
     };
 
@@ -3220,7 +2274,7 @@ function useEditorVirtualGrid(
     };
 }
 
-function EditorCornerHeader({
+const EditorCornerHeader = React.memo(function EditorCornerHeader({
     rowHeaderWidth,
 }: {
     rowHeaderWidth: number;
@@ -3241,9 +2295,9 @@ function EditorCornerHeader({
             </span>
         </div>
     );
-}
+});
 
-function EditorColumnHeaderCell({
+const EditorColumnHeaderCell = React.memo(function EditorColumnHeaderCell({
     label,
     columnNumber,
     hasPending,
@@ -3285,9 +2339,17 @@ function EditorColumnHeaderCell({
             </span>
         </div>
     );
-}
+},
+(previous, next) =>
+    previous.label === next.label &&
+    previous.columnNumber === next.columnNumber &&
+    previous.hasPending === next.hasPending &&
+    previous.top === next.top &&
+    previous.left === next.left &&
+    areSelectionRangesEqual(previous.selectionRange, next.selectionRange)
+);
 
-function EditorRowHeaderCell({
+const EditorRowHeaderCell = React.memo(function EditorRowHeaderCell({
     rowNumber,
     hasPending,
     selectionRange,
@@ -3326,9 +2388,16 @@ function EditorRowHeaderCell({
             </span>
         </div>
     );
-}
+},
+(previous, next) =>
+    previous.rowNumber === next.rowNumber &&
+    previous.hasPending === next.hasPending &&
+    previous.top === next.top &&
+    previous.rowHeaderWidth === next.rowHeaderWidth &&
+    areSelectionRangesEqual(previous.selectionRange, next.selectionRange)
+);
 
-function EditorVirtualCell({
+const EditorVirtualCell = React.memo(function EditorVirtualCell({
     currentModel,
     rowNumber,
     columnNumber,
@@ -3338,6 +2407,7 @@ function EditorVirtualCell({
     hasExpandedRange,
     currentSelection,
     activeEditingCell,
+    pendingEdit,
 }: {
     currentModel: EditorRenderModel;
     rowNumber: number;
@@ -3348,6 +2418,7 @@ function EditorVirtualCell({
     hasExpandedRange: boolean;
     currentSelection: CellPosition | null;
     activeEditingCell: EditingCell | null;
+    pendingEdit: PendingEdit | undefined;
 }): React.ReactElement {
     const cell =
         getCellView(rowNumber, columnNumber) ?? {
@@ -3358,9 +2429,6 @@ function EditorVirtualCell({
             isPresent: false,
             isSelected: false,
         };
-    const pendingEdit = pendingEdits.get(
-        getPendingEditKey(currentModel.activeSheet.key, rowNumber, columnNumber)
-    );
     const value = pendingEdit?.value ?? cell.value;
     const formula = pendingEdit ? null : cell.formula;
     const editable = Boolean(currentModel.canEdit && !cell.formula);
@@ -3456,7 +2524,19 @@ function EditorVirtualCell({
             </div>
         </div>
     );
-}
+},
+(previous, next) =>
+    previous.currentModel === next.currentModel &&
+    previous.rowNumber === next.rowNumber &&
+    previous.columnNumber === next.columnNumber &&
+    previous.top === next.top &&
+    previous.left === next.left &&
+    previous.hasExpandedRange === next.hasExpandedRange &&
+    areSelectionRangesEqual(previous.selectionRange, next.selectionRange) &&
+    areCellPositionsEqual(previous.currentSelection, next.currentSelection) &&
+    areEditingCellsEqual(previous.activeEditingCell, next.activeEditingCell) &&
+    arePendingEditsEqual(previous.pendingEdit, next.pendingEdit)
+);
 
 function EditorVirtualGrid({
     currentModel,
@@ -3533,6 +2613,9 @@ function EditorVirtualGrid({
         );
 
         for (const columnNumber of metrics.columnNumbers) {
+            const pendingEdit = pendingEdits.get(
+                getPendingEditKey(currentModel.activeSheet.key, rowNumber, columnNumber)
+            );
             bodyItems.push(
                 <EditorVirtualCell
                     key={`body:${rowNumber}:${columnNumber}`}
@@ -3545,11 +2628,15 @@ function EditorVirtualGrid({
                     hasExpandedRange={hasExpandedRange}
                     currentSelection={currentSelection}
                     activeEditingCell={activeEditingCell}
+                    pendingEdit={pendingEdit}
                 />
             );
         }
 
         for (const columnNumber of metrics.frozenColumnNumbers) {
+            const pendingEdit = pendingEdits.get(
+                getPendingEditKey(currentModel.activeSheet.key, rowNumber, columnNumber)
+            );
             leftItems.push(
                 <EditorVirtualCell
                     key={`left:${rowNumber}:${columnNumber}`}
@@ -3562,6 +2649,7 @@ function EditorVirtualGrid({
                     hasExpandedRange={hasExpandedRange}
                     currentSelection={currentSelection}
                     activeEditingCell={activeEditingCell}
+                    pendingEdit={pendingEdit}
                 />
             );
         }
@@ -3580,6 +2668,9 @@ function EditorVirtualGrid({
         );
 
         for (const columnNumber of metrics.columnNumbers) {
+            const pendingEdit = pendingEdits.get(
+                getPendingEditKey(currentModel.activeSheet.key, rowNumber, columnNumber)
+            );
             topItems.push(
                 <EditorVirtualCell
                     key={`top:${rowNumber}:${columnNumber}`}
@@ -3592,11 +2683,15 @@ function EditorVirtualGrid({
                     hasExpandedRange={hasExpandedRange}
                     currentSelection={currentSelection}
                     activeEditingCell={activeEditingCell}
+                    pendingEdit={pendingEdit}
                 />
             );
         }
 
         for (const columnNumber of metrics.frozenColumnNumbers) {
+            const pendingEdit = pendingEdits.get(
+                getPendingEditKey(currentModel.activeSheet.key, rowNumber, columnNumber)
+            );
             cornerItems.push(
                 <EditorVirtualCell
                     key={`corner:${rowNumber}:${columnNumber}`}
@@ -3609,6 +2704,7 @@ function EditorVirtualGrid({
                     hasExpandedRange={hasExpandedRange}
                     currentSelection={currentSelection}
                     activeEditingCell={activeEditingCell}
+                    pendingEdit={pendingEdit}
                 />
             );
         }
@@ -3637,63 +2733,61 @@ function EditorVirtualGrid({
                         height: `${metrics.contentHeight}px`,
                     }}
                 >
-                    {bodyItems}
-                </div>
-            </div>
-            <div
-                className="editor-grid__overlay editor-grid__overlay--top"
-                style={{
-                    width: `${metrics.viewportWidth}px`,
-                    height: `${metrics.stickyTopHeight}px`,
-                }}
-                onWheel={forwardVirtualGridWheel}
-            >
-                <div
-                    className="editor-grid__track editor-grid__track--x"
-                    style={{
-                        width: `${metrics.contentWidth}px`,
-                        height: `${metrics.stickyTopHeight}px`,
-                        transform: `translateX(-${metrics.scrollLeft}px)`,
-                    }}
-                >
-                    {topItems}
-                </div>
-            </div>
-            <div
-                className="editor-grid__overlay editor-grid__overlay--left"
-                style={{
-                    width: `${metrics.stickyLeftWidth}px`,
-                    height: `${metrics.viewportHeight}px`,
-                }}
-                onWheel={forwardVirtualGridWheel}
-            >
-                <div
-                    className="editor-grid__track editor-grid__track--y"
-                    style={{
-                        width: `${metrics.stickyLeftWidth}px`,
-                        height: `${metrics.contentHeight}px`,
-                        transform: `translateY(-${metrics.scrollTop}px)`,
-                    }}
-                >
-                    {leftItems}
-                </div>
-            </div>
-            <div
-                className="editor-grid__overlay editor-grid__overlay--corner"
-                style={{
-                    width: `${metrics.stickyLeftWidth}px`,
-                    height: `${metrics.stickyTopHeight}px`,
-                }}
-                onWheel={forwardVirtualGridWheel}
-            >
-                <div
-                    className="editor-grid__track"
-                    style={{
-                        width: `${metrics.stickyLeftWidth}px`,
-                        height: `${metrics.stickyTopHeight}px`,
-                    }}
-                >
-                    {cornerItems}
+                    <div className="editor-grid__layer editor-grid__layer--body">{bodyItems}</div>
+                    <div
+                        className="editor-grid__overlay editor-grid__overlay--top"
+                        style={{
+                            width: `${metrics.contentWidth}px`,
+                            height: `${metrics.stickyTopHeight}px`,
+                        }}
+                        onWheel={forwardVirtualGridWheel}
+                    >
+                        <div
+                            className="editor-grid__track editor-grid__track--x"
+                            style={{
+                                width: `${metrics.contentWidth}px`,
+                                height: `${metrics.stickyTopHeight}px`,
+                            }}
+                        >
+                            {topItems}
+                        </div>
+                    </div>
+                    <div
+                        className="editor-grid__overlay editor-grid__overlay--left"
+                        style={{
+                            width: `${metrics.stickyLeftWidth}px`,
+                            height: `${metrics.contentHeight}px`,
+                        }}
+                        onWheel={forwardVirtualGridWheel}
+                    >
+                        <div
+                            className="editor-grid__track editor-grid__track--y"
+                            style={{
+                                width: `${metrics.stickyLeftWidth}px`,
+                                height: `${metrics.contentHeight}px`,
+                            }}
+                        >
+                            {leftItems}
+                        </div>
+                    </div>
+                    <div
+                        className="editor-grid__overlay editor-grid__overlay--corner"
+                        style={{
+                            width: `${metrics.stickyLeftWidth}px`,
+                            height: `${metrics.stickyTopHeight}px`,
+                        }}
+                        onWheel={forwardVirtualGridWheel}
+                    >
+                        <div
+                            className="editor-grid__track"
+                            style={{
+                                width: `${metrics.stickyLeftWidth}px`,
+                                height: `${metrics.stickyTopHeight}px`,
+                            }}
+                        >
+                            {cornerItems}
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -3890,10 +2984,7 @@ window.addEventListener("resize", () => {
         return;
     }
 
-    renderApp({
-        commitEditing: false,
-        syncLayout: false,
-    });
+    renderApp({ commitEditing: false });
 });
 
 window.addEventListener("message", (event: MessageEvent<IncomingMessage>) => {
@@ -3911,15 +3002,7 @@ window.addEventListener("message", (event: MessageEvent<IncomingMessage>) => {
     }
 
     if (message.type === "render") {
-        if (message.payload.activeSheet.key !== lastMeasuredSheetKey) {
-            rowHeightByNumber.clear();
-            columnWidthByNumber.clear();
-            lastMeasuredSheetKey = message.payload.activeSheet.key;
-            lastObservedPaneScrollTop = null;
-        }
-
         model = message.payload;
-        lastRequestedViewportStartRow = message.payload.page.startRow;
         isSaving = false;
 
         if (message.clearPendingEdits) {
@@ -3949,12 +3032,6 @@ window.addEventListener("message", (event: MessageEvent<IncomingMessage>) => {
             lastPendingNotification = null;
             lastPendingEditsSyncKey = serializePendingEdits(Array.from(pendingEdits.values()));
             notifyPendingEditState();
-        }
-
-        if (queuedViewportStartRow !== null && queuedViewportStartRow !== message.payload.page.startRow) {
-            const nextViewportStartRow = queuedViewportStartRow;
-            queuedViewportStartRow = null;
-            requestViewportStartRow(nextViewportStartRow);
         }
 
         renderApp({

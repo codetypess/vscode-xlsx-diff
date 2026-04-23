@@ -460,29 +460,44 @@ body {
 
 .editor-grid__canvas {
     position: relative;
+    display: grid;
     min-width: 100%;
     min-height: 100%;
     background: var(--vscode-editor-background);
 }
 
+.editor-grid__layer {
+    grid-area: 1 / 1;
+}
+
+.editor-grid__layer--body {
+    position: relative;
+    width: 100%;
+    height: 100%;
+}
+
 .editor-grid__overlay {
-    position: absolute;
-    top: 0;
-    left: 0;
+    position: sticky;
+    grid-area: 1 / 1;
     overflow: hidden;
 }
 
 .editor-grid__overlay--top {
+    top: 0;
+    left: 0;
     z-index: 6;
     background: var(--vscode-editor-background);
 }
 
 .editor-grid__overlay--left {
+    left: 0;
     z-index: 5;
     background: var(--vscode-editor-background);
 }
 
 .editor-grid__overlay--corner {
+    top: 0;
+    left: 0;
     z-index: 7;
     background: var(--vscode-editor-background);
 }
@@ -524,41 +539,6 @@ body {
 .editor-grid__item .grid__row-label,
 .editor-grid__item .grid__column-label {
     width: 100%;
-}
-
-.pane__table--split {
-    overflow: hidden;
-}
-
-.freeze-grid {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-    grid-template-rows: auto minmax(0, 1fr);
-    width: 100%;
-    height: 100%;
-    min-height: 0;
-    background: var(--vscode-editor-background);
-}
-
-.freeze-grid__pane {
-    min-width: 0;
-    min-height: 0;
-    max-height: 100%;
-    overflow: hidden;
-}
-
-.freeze-grid__pane--top-right {
-    overflow-x: auto;
-    overflow-y: hidden;
-}
-
-.freeze-grid__pane--bottom-left {
-    overflow-x: hidden;
-    overflow-y: auto;
-}
-
-.freeze-grid__pane--bottom-right {
-    overflow: auto;
 }
 
 .grid {
@@ -614,71 +594,6 @@ body {
     );
 }
 
-.grid--split {
-    min-width: auto;
-}
-
-.grid--split thead th,
-.grid--split th:first-child {
-    position: static;
-    top: auto;
-    left: auto;
-    z-index: auto;
-}
-
-.grid--split td:first-child {
-    position: relative;
-    top: auto;
-    left: auto;
-    z-index: auto;
-}
-
-.grid--split .grid__row-number {
-    background: color-mix(in srgb, var(--vscode-editor-background) 94%, black 6%);
-}
-
-.pane__table--diff .grid--split .grid__row-number {
-    background: var(
-        --vscode-sideBarSectionHeader-background,
-        color-mix(in srgb, var(--vscode-editor-background) 88%, white 12%)
-    );
-}
-
-.grid__column--frozen,
-.grid__row-number--frozen,
-.grid__cell--frozen-row,
-.grid__cell--frozen-column {
-    position: sticky;
-    background: var(--grid-freeze-background, var(--vscode-editor-background));
-}
-
-.grid__column--frozen,
-.grid__cell--frozen-column {
-    left: var(--grid-freeze-left);
-}
-
-.grid__row-number--frozen,
-.grid__cell--frozen-row {
-    top: var(--grid-freeze-top);
-}
-
-.grid__column--frozen {
-    z-index: 5;
-}
-
-.grid__row-number--frozen,
-.grid__cell--frozen-column {
-    z-index: 4;
-}
-
-.grid__cell--frozen-row {
-    z-index: 3;
-}
-
-.grid__cell--frozen-intersection {
-    z-index: 5;
-}
-
 .grid__row-number {
     width: 56px;
     padding: 4px 7px;
@@ -728,16 +643,6 @@ body {
 
 .editor-grid__item.grid__cell {
     position: absolute;
-}
-
-.grid__spacer-row {
-    pointer-events: none;
-}
-
-.grid__spacer-cell {
-    padding: 0;
-    border: 0;
-    background: transparent;
 }
 
 .grid__cell--locked {

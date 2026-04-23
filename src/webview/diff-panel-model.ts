@@ -118,12 +118,8 @@ function createSheetTabView(
     return {
         key: sheet.key,
         label: getSheetLabel(sheet),
-        kind: sheet.kind,
-        rowCount: sheet.rowCount,
-        columnCount: sheet.columnCount,
         diffRowCount: sheet.diffRows.length,
         diffCellCount: sheet.diffCellCount,
-        mergedRangesChanged: sheet.mergedRangesChanged,
         hasDiff: getSheetHasDiff(sheet),
         diffTone: getSheetDiffTone(sheet),
         isActive: sheet.key === activeSheetKey,
@@ -267,7 +263,6 @@ function createSheetView(sheet: SheetDiffModel): DiffPanelSheetView {
     return {
         key: sheet.key,
         label: getSheetLabel(sheet),
-        kind: sheet.kind,
         leftName: sheet.leftSheetName,
         rightName: sheet.rightSheetName,
         rowCount: sheet.rowCount,
@@ -284,7 +279,6 @@ function createSheetView(sheet: SheetDiffModel): DiffPanelSheetView {
         })),
         diffRowCount: sheet.diffRows.length,
         diffCellCount: sheet.diffCellCount,
-        mergedRangesChanged: sheet.mergedRangesChanged,
     };
 }
 
@@ -298,12 +292,6 @@ export function createDiffPanelRenderModel(
         title: `${getWorkbookTitle(diff.left)} ↔ ${getWorkbookTitle(diff.right)}`,
         leftFile: createFileView(diff.left),
         rightFile: createFileView(diff.right),
-        summary: {
-            totalSheets: diff.sheets.length,
-            diffSheets: diff.totalDiffSheets,
-            diffRows: diff.totalDiffRows,
-            diffCells: diff.totalDiffCells,
-        },
         sheets: diff.sheets.map((sheet) => createSheetTabView(sheet, activeSheet?.key ?? null)),
         activeSheet: activeSheet ? createSheetView(activeSheet) : null,
     };

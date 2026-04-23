@@ -94,7 +94,6 @@ type DiffMarkerTone = CellDiffStatus | "pending" | null;
 
 const ROW_HEIGHT = 27;
 const ROW_OVERSCAN = 8;
-const ROW_HEADER_WIDTH = 56;
 const COLUMN_WIDTH = 120;
 const COLUMN_OVERSCAN = 2;
 
@@ -105,16 +104,13 @@ const DEFAULT_STRINGS = {
     all: "All",
     diffs: "Diffs",
     same: "Same",
-    allRows: "All Rows",
     diffRows: "Diff Rows",
     sameRows: "Same Rows",
     prevDiff: "Prev Diff",
     nextDiff: "Next Diff",
     sheets: "Sheets",
     diffCells: "Diff Cells",
-    diffRowsShort: "Diff Rows",
     rows: "Rows",
-    columns: "Columns",
     filter: "Filter",
     visibleRows: "Visible Rows",
     currentDiff: "Current Diff",
@@ -124,7 +120,6 @@ const DEFAULT_STRINGS = {
     modified: "Modified",
     size: "Size",
     readOnly: "Read-only",
-    mergedRangesChanged: "Merged ranges changed",
     noSheet: "No sheet is available.",
     noRows: "No rows are available in this sheet.",
 };

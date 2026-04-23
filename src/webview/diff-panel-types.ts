@@ -1,4 +1,4 @@
-import type { CellDiffStatus, SheetComparisonKind } from "../core/model/types";
+import type { CellDiffStatus } from "../core/model/types";
 
 export interface DiffPanelFileView {
     title: string;
@@ -10,22 +10,11 @@ export interface DiffPanelFileView {
     isReadonly: boolean;
 }
 
-export interface DiffPanelSummaryView {
-    totalSheets: number;
-    diffSheets: number;
-    diffRows: number;
-    diffCells: number;
-}
-
 export interface DiffPanelSheetTabView {
     key: string;
     label: string;
-    kind: SheetComparisonKind;
-    rowCount: number;
-    columnCount: number;
     diffRowCount: number;
     diffCellCount: number;
-    mergedRangesChanged: boolean;
     hasDiff: boolean;
     diffTone: CellDiffStatus;
     isActive: boolean;
@@ -65,7 +54,6 @@ export interface DiffPanelRowView {
 export interface DiffPanelSheetView {
     key: string;
     label: string;
-    kind: SheetComparisonKind;
     leftName: string | null;
     rightName: string | null;
     rowCount: number;
@@ -76,14 +64,12 @@ export interface DiffPanelSheetView {
     diffCells: DiffPanelDiffCellView[];
     diffRowCount: number;
     diffCellCount: number;
-    mergedRangesChanged: boolean;
 }
 
 export interface DiffPanelRenderModel {
     title: string;
     leftFile: DiffPanelFileView;
     rightFile: DiffPanelFileView;
-    summary: DiffPanelSummaryView;
     sheets: DiffPanelSheetTabView[];
     activeSheet: DiffPanelSheetView | null;
 }
