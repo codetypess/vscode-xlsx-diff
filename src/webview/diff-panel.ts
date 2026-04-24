@@ -7,6 +7,7 @@ import { writeCellValues, type CellEdit } from "../core/fastxlsx/write-cell-valu
 import type { WorkbookDiffModel } from "../core/model/types";
 import { getHtmlLanguageTag, isChineseDisplayLanguage } from "../display-language";
 import { getWorkbookResourceName } from "../workbook/resource-uri";
+import { withWorkbookSaveProgress } from "../workbook/save-progress";
 import { createDiffPanelRenderModel } from "./diff-panel-model";
 import type { DiffPanelRenderModel } from "./diff-panel-types";
 
@@ -444,18 +445,20 @@ export class XlsxDiffPanel {
                                       },
                                   ]
                                 : [];
-                        });
+                    });
 
                     this.suppressAutoRefreshUntil = Date.now() + 2000;
 
-                    await Promise.all([
-                        leftCellEdits.length > 0
-                            ? writeCellValues(this.leftFileUri, leftCellEdits)
-                            : Promise.resolve(),
-                        rightCellEdits.length > 0
-                            ? writeCellValues(this.rightFileUri, rightCellEdits)
-                            : Promise.resolve(),
-                    ]);
+                    await withWorkbookSaveProgress(async () => {
+                        await Promise.all([
+                            leftCellEdits.length > 0
+                                ? writeCellValues(this.leftFileUri, leftCellEdits)
+                                : Promise.resolve(),
+                            rightCellEdits.length > 0
+                                ? writeCellValues(this.rightFileUri, rightCellEdits)
+                                : Promise.resolve(),
+                        ]);
+                    });
 
                     await this.enqueueReload({ silent: true, clearPendingEdits: true });
                     return;

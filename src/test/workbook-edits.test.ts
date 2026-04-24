@@ -15,6 +15,113 @@ import {
 import { XlsxEditorDocument } from "../webview/xlsx-editor-document";
 
 suite("Workbook edit writer", () => {
+    test("batches workbook mutations before saving", async () => {
+        const originalOpen = Workbook.open;
+        const saveCalls: string[] = [];
+        const mutationContexts: boolean[] = [];
+        let inBatch = false;
+        let batchCalls = 0;
+
+        interface FakeSheet {
+            cell(): {
+                setValue(): void;
+            };
+            freezePane(): void;
+            unfreezePane(): void;
+        }
+
+        interface FakeWorkbook {
+            batch<Result>(applyChanges: (workbook: FakeWorkbook) => Result): Result;
+            addSheet(): void;
+            moveSheet(): void;
+            renameSheet(): void;
+            deleteSheet(): void;
+            getSheet(): FakeSheet;
+            save(filePath: string): Promise<void>;
+        }
+
+        const fakeWorkbook: FakeWorkbook = {
+            batch<Result>(applyChanges: (workbook: FakeWorkbook) => Result): Result {
+                batchCalls += 1;
+                inBatch = true;
+
+                try {
+                    return applyChanges(fakeWorkbook);
+                } finally {
+                    inBatch = false;
+                }
+            },
+            addSheet(): void {},
+            moveSheet(): void {},
+            renameSheet(): void {},
+            deleteSheet(): void {},
+            getSheet() {
+                return {
+                    cell() {
+                        return {
+                            setValue() {
+                                mutationContexts.push(inBatch);
+                            },
+                        };
+                    },
+                    freezePane() {
+                        mutationContexts.push(inBatch);
+                    },
+                    unfreezePane() {
+                        mutationContexts.push(inBatch);
+                    },
+                };
+            },
+            async save(filePath: string): Promise<void> {
+                saveCalls.push(filePath);
+            },
+        };
+
+        (
+            Workbook as unknown as {
+                open: typeof Workbook.open;
+            }
+        ).open = async () => fakeWorkbook as unknown as Workbook;
+
+        try {
+            await writeWorkbookEditsToDestination(
+                vscode.Uri.file(path.join(os.tmpdir(), "writer-batch.xlsx")),
+                vscode.Uri.file(path.join(os.tmpdir(), "writer-batch.xlsx")),
+                {
+                    cellEdits: [
+                        {
+                            sheetName: "Sheet1",
+                            rowNumber: 1,
+                            columnNumber: 1,
+                            value: "updated",
+                        },
+                    ],
+                    sheetEdits: [],
+                    viewEdits: [
+                        {
+                            sheetKey: "sheet-1",
+                            sheetName: "Sheet1",
+                            freezePane: {
+                                columnCount: 1,
+                                rowCount: 1,
+                            },
+                        },
+                    ],
+                }
+            );
+
+            assert.strictEqual(batchCalls, 1);
+            assert.deepStrictEqual(mutationContexts, [true, true]);
+            assert.strictEqual(saveCalls.length, 1);
+        } finally {
+            (
+                Workbook as unknown as {
+                    open: typeof Workbook.open;
+                }
+            ).open = originalOpen;
+        }
+    });
+
     test("applies sheet edits before cell edits", async () => {
         const tempDirectory = await mkdtemp(path.join(os.tmpdir(), "xlsx-diff-"));
 

@@ -15,6 +15,7 @@ import {
     getFrozenEditorCounts,
     getVisibleFrozenEditorCounts,
 } from "./editor-virtual-grid";
+import { shouldUseLocalSimpleSelectionUpdate } from "./editor-selection-render";
 import { getFreezePaneCountsForCell, hasLockedView } from "./view-lock";
 
 interface VsCodeApi {
@@ -988,18 +989,21 @@ function canUseLocalSimpleSelectionUpdate(
     nextCell: CellPosition | null,
     {
         anchorCell,
+        forceRender = false,
     }: {
         anchorCell: CellPosition | null;
+        forceRender?: boolean;
     }
 ): boolean {
-    return Boolean(
-        nextCell &&
-            model &&
-            !editingCell &&
-            isCellVisible(nextCell) &&
-            !hasExpandedSelection() &&
-            isSimpleSelection(nextCell, anchorCell)
-    );
+    return shouldUseLocalSimpleSelectionUpdate({
+        hasNextCell: Boolean(nextCell),
+        hasModel: Boolean(model),
+        hasEditingCell: Boolean(editingCell),
+        isNextCellVisible: isCellVisible(nextCell),
+        hasExpandedSelection: hasExpandedSelection(),
+        isSimpleSelection: isSimpleSelection(nextCell, anchorCell),
+        forceRender,
+    });
 }
 
 function setSelectedCellLocal(
@@ -1008,16 +1012,19 @@ function setSelectedCellLocal(
         reveal = false,
         syncHost = true,
         anchorCell,
+        forceRender = false,
     }: {
         reveal?: boolean;
         syncHost?: boolean;
         anchorCell?: CellPosition | null;
+        forceRender?: boolean;
     } = {}
 ): void {
     const previousCell = selectedCell;
     const nextAnchorCell = nextCell ? (anchorCell ?? nextCell) : null;
     const canUseLocalUpdate = canUseLocalSimpleSelectionUpdate(nextCell, {
         anchorCell: nextAnchorCell,
+        forceRender,
     });
 
     selectedCell = nextCell;
@@ -2548,7 +2555,8 @@ const EditorVirtualCell = React.memo(function EditorVirtualCell({
                     return;
                 }
 
-                if (editingCell) {
+                const forceRender = Boolean(editingCell);
+                if (forceRender) {
                     finishEdit({ mode: "commit", refresh: false });
                 }
 
@@ -2560,6 +2568,7 @@ const EditorVirtualCell = React.memo(function EditorVirtualCell({
                             event.shiftKey && selectedCell
                                 ? (selectionAnchorCell ?? selectedCell)
                                 : undefined,
+                        forceRender,
                     }
                 );
             }}

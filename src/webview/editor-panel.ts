@@ -248,11 +248,27 @@ export class XlsxEditorPanel {
         );
     }
 
+    public static async beginDocumentSave(document: XlsxEditorDocument): Promise<void> {
+        await Promise.all(
+            [...XlsxEditorPanel.panels.values()]
+                .filter((panel) => panel.document === document)
+                .map((panel) => panel.startDocumentSave())
+        );
+    }
+
     public static async commitDocumentSave(document: XlsxEditorDocument): Promise<void> {
         await Promise.all(
             [...XlsxEditorPanel.panels.values()]
                 .filter((panel) => panel.document === document)
                 .map((panel) => panel.handleDocumentSave())
+        );
+    }
+
+    public static async failDocumentSave(document: XlsxEditorDocument): Promise<void> {
+        await Promise.all(
+            [...XlsxEditorPanel.panels.values()]
+                .filter((panel) => panel.document === document)
+                .map((panel) => panel.cancelDocumentSave())
         );
     }
 
@@ -570,15 +586,7 @@ export class XlsxEditorPanel {
                     return;
                 }
                 case "requestSave":
-                    this.isSavingDocument = true;
-                    this.clearAutoRefreshTimer();
-                    this.suppressAutoRefreshUntil = Number.POSITIVE_INFINITY;
-                    try {
-                        await this.controller.onRequestSave();
-                    } finally {
-                        this.isSavingDocument = false;
-                        this.suppressAutoRefreshUntil = Date.now() + 1500;
-                    }
+                    await this.controller.onRequestSave();
                     return;
                 case "undoSheetEdit":
                     await this.undoStructuralEdit();
@@ -672,8 +680,21 @@ export class XlsxEditorPanel {
     }
 
     private async handleDocumentSave(): Promise<void> {
+        this.isSavingDocument = false;
         this.noteLocalSaveCompletion();
         await this.commitSavedState();
+    }
+
+    private startDocumentSave(): void {
+        this.isSavingDocument = true;
+        this.clearAutoRefreshTimer();
+        this.suppressAutoRefreshUntil = Number.POSITIVE_INFINITY;
+    }
+
+    private cancelDocumentSave(): void {
+        this.isSavingDocument = false;
+        this.clearAutoRefreshTimer();
+        this.suppressAutoRefreshUntil = Date.now() + 1500;
     }
 
     private getSheetEntries(): WorkingSheetEntry[] {

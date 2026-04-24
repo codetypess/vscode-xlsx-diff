@@ -313,9 +313,11 @@ select {
     min-height: 0;
     display: flex;
     flex-direction: column;
+    position: relative;
 }
 
 .diff-gridHeaderRow,
+.diff-selectionPreviewRow,
 .diff-gridScrollbarRow,
 .diff-pairRow {
     display: grid;
@@ -565,6 +567,14 @@ select {
     background: transparent;
 }
 
+.diff-gridScrollbarRow {
+    position: absolute;
+    inset-inline: 0;
+    bottom: 0;
+    z-index: 4;
+    pointer-events: none;
+}
+
 .diff-scrollbarRow--inactive {
     visibility: hidden;
 }
@@ -579,6 +589,7 @@ select {
     height: 12px;
     border: 0;
     background: transparent;
+    pointer-events: auto;
 }
 
 .diff-scrollbar--inactive {
@@ -621,6 +632,58 @@ select {
     min-height: var(--diff-row-height);
 }
 
+.diff-selectionPreviewRow {
+    border-top: 1px solid var(--vscode-panel-border);
+    background: color-mix(
+        in srgb,
+        var(--vscode-editorGroupHeader-tabsBackground, var(--vscode-editor-background)) 42%,
+        var(--vscode-editor-background) 58%
+    );
+}
+
+.diff-selectionPreviewPane {
+    display: grid;
+    grid-template-columns: 72px minmax(0, 1fr);
+    align-items: center;
+    gap: 10px;
+    min-height: calc(1.35em * 2 + 12px);
+    padding: 6px 12px;
+    background: color-mix(
+        in srgb,
+        var(--vscode-editorGroupHeader-tabsBackground, var(--vscode-editor-background)) 42%,
+        var(--vscode-editor-background) 58%
+    );
+}
+
+.diff-selectionPreviewPane--active {
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--vscode-focusBorder) 45%, transparent 55%);
+}
+
+.diff-selectionPreviewPane__address {
+    align-self: center;
+    color: var(--diff-subtle-text);
+    font-size: 14px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.2;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.diff-selectionPreviewPane__value {
+    min-width: 0;
+    display: -webkit-box;
+    overflow: hidden;
+    white-space: pre-wrap;
+    word-break: break-word;
+    line-height: 1.35;
+    align-self: center;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+}
+
 .diff-statusBar {
     min-height: 26px;
     gap: 6px 10px;
@@ -645,6 +708,7 @@ select {
     }
 
     .diff-paneMetaRow,
+    .diff-selectionPreviewRow,
     .diff-gridHeaderRow,
     .diff-pairRow {
         grid-template-columns: 1fr;
@@ -652,5 +716,9 @@ select {
 
     .diff-divider {
         display: none;
+    }
+
+    .diff-selectionPreviewPane {
+        grid-template-columns: 64px minmax(0, 1fr);
     }
 }

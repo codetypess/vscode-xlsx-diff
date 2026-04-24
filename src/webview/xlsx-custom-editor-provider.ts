@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { WEBVIEW_TYPE_EDITOR_PANEL } from "../constants";
 import { type WorkbookEditState } from "../core/fastxlsx/write-cell-value";
 import { rememberRecentWorkbookResourceUri } from "../scm/recent-workbook-resource-context";
+import { withWorkbookSaveProgress } from "../workbook/save-progress";
 import { readEditorBackupState, writeEditorBackupState } from "./editor-backup-state";
 import { XlsxEditorPanel } from "./editor-panel";
 import { XlsxEditorDocument } from "./xlsx-editor-document";
@@ -128,10 +129,20 @@ export class XlsxCustomEditorProvider
     }
 
     private async saveDocument(document: XlsxEditorDocument): Promise<void> {
-        await document.saveTo(document.uri);
-        document.markSaved();
-        // Saving already clears VS Code's dirty state for the custom editor.
-        // Emitting another content-change event here marks the tab dirty again.
-        await XlsxEditorPanel.commitDocumentSave(document);
+        await XlsxEditorPanel.beginDocumentSave(document);
+
+        try {
+            await withWorkbookSaveProgress(
+                () => document.saveTo(document.uri),
+                { workbookUri: document.uri }
+            );
+            document.markSaved();
+            // Saving already clears VS Code's dirty state for the custom editor.
+            // Emitting another content-change event here marks the tab dirty again.
+            await XlsxEditorPanel.commitDocumentSave(document);
+        } catch (error) {
+            await XlsxEditorPanel.failDocumentSave(document);
+            throw error;
+        }
     }
 }

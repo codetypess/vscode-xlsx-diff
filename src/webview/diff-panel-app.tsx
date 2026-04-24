@@ -63,6 +63,12 @@ interface PendingSummary {
     columnsBySide: Record<Side, Set<number>>;
 }
 
+interface SelectionPreview {
+    address: string;
+    value: string;
+    title: string;
+}
+
 interface SheetRuntime {
     rowByNumber: Map<number, DiffPanelRowView>;
     diffRowIndexByNumber: Map<number, number>;
@@ -497,6 +503,47 @@ function getSelectionAddress(
     return `${columnLabel}${sourceRowNumber ?? selection.rowNumber}`;
 }
 
+function getSelectionPreview(
+    sheet: DiffPanelSheetView | null,
+    runtime: SheetRuntime | null,
+    selection: CellSelection | null,
+    side: Side,
+    pendingEdits: ReadonlyMap<string, PendingEdit>,
+    editingCell: EditingCell | null
+): SelectionPreview {
+    if (!sheet || !selection) {
+        return {
+            address: STRINGS.none,
+            value: "",
+            title: STRINGS.none,
+        };
+    }
+
+    const columnLabel = sheet.columns[selection.columnNumber - 1] ?? String(selection.columnNumber);
+    const row = runtime?.rowByNumber.get(selection.rowNumber) ?? null;
+    const sourceRowNumber = getSourceRowNumber(row, side);
+    const cell = row?.cells.find((item) => item.columnNumber === selection.columnNumber) ?? null;
+    const pendingEdit = pendingEdits.get(
+        getPendingEditKey(sheet.key, side, selection.rowNumber, selection.columnNumber)
+    );
+    const modelDisplay = getCellDisplay(cell, side);
+    const value =
+        editingCell?.sheetKey === sheet.key &&
+        editingCell.side === side &&
+        editingCell.rowNumber === selection.rowNumber &&
+        editingCell.columnNumber === selection.columnNumber
+            ? editingCell.value
+            : (pendingEdit?.value ?? modelDisplay.value);
+    const address =
+        sourceRowNumber === null ? STRINGS.none : `${columnLabel}${sourceRowNumber}`;
+
+    return {
+        address,
+        value,
+        title: getCellTitle(columnLabel, sourceRowNumber ?? selection.rowNumber, value, null),
+    };
+}
+
 function isTextInputTarget(target: EventTarget | null): boolean {
     if (!(target instanceof HTMLElement)) {
         return false;
@@ -764,6 +811,27 @@ function PaneScrollbar({
                     />
                 ) : null}
             </div>
+        </div>
+    );
+}
+
+function SelectionPreviewPane({
+    preview,
+    isActive,
+}: {
+    preview: SelectionPreview;
+    isActive: boolean;
+}): React.JSX.Element {
+    return (
+        <div
+            className={classNames([
+                "diff-selectionPreviewPane",
+                isActive && "diff-selectionPreviewPane--active",
+            ])}
+            title={preview.title}
+        >
+            <span className="diff-selectionPreviewPane__address">{preview.address}</span>
+            <span className="diff-selectionPreviewPane__value">{preview.value}</span>
         </div>
     );
 }
@@ -1676,6 +1744,22 @@ function App(): React.JSX.Element {
     const hasUnsavedChanges = effectivePendingEdits.size > 0;
     const selectedColumnNumber = selectedCell?.columnNumber ?? null;
     const selectedAddress = getSelectionAddress(activeSheet, runtime, selectedCell);
+    const leftSelectionPreview = getSelectionPreview(
+        activeSheet,
+        runtime,
+        selectedCell,
+        "left",
+        effectivePendingEdits,
+        editingCell
+    );
+    const rightSelectionPreview = getSelectionPreview(
+        activeSheet,
+        runtime,
+        selectedCell,
+        "right",
+        effectivePendingEdits,
+        editingCell
+    );
     const currentDiffLabel =
         activeSheet && activeSheet.diffCells.length > 0
             ? `${activeDiffIndex + 1}/${activeSheet.diffCells.length}`
@@ -1963,6 +2047,22 @@ function App(): React.JSX.Element {
                                 ) : null}
                             </div>
                         )}
+
+                        <div className="diff-selectionPreviewRow">
+                            <div className="diff-pane">
+                                <SelectionPreviewPane
+                                    preview={leftSelectionPreview}
+                                    isActive={selectedCell?.side === "left"}
+                                />
+                            </div>
+                            <div className="diff-divider" />
+                            <div className="diff-pane">
+                                <SelectionPreviewPane
+                                    preview={rightSelectionPreview}
+                                    isActive={selectedCell?.side === "right"}
+                                />
+                            </div>
+                        </div>
                     </>
                 )}
             </section>

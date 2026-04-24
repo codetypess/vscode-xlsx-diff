@@ -31,7 +31,10 @@ suite("Xlsx custom editor provider", () => {
         });
 
         const originalSaveTo = document.saveTo.bind(document);
+        const originalWithProgress = vscode.window.withProgress;
+        const originalBeginDocumentSave = XlsxEditorPanel.beginDocumentSave;
         const originalCommitDocumentSave = XlsxEditorPanel.commitDocumentSave;
+        const originalFailDocumentSave = XlsxEditorPanel.failDocumentSave;
         const subscription = provider.onDidChangeCustomDocument(() => {
             emittedChangeEvents += 1;
         });
@@ -39,7 +42,15 @@ suite("Xlsx custom editor provider", () => {
         document.saveTo = async (destination: vscode.Uri): Promise<void> => {
             savedTo = destination.toString();
         };
+        (
+            vscode.window as {
+                withProgress: typeof vscode.window.withProgress;
+            }
+        ).withProgress = async (_options, task) =>
+            task({ report: () => undefined }, {} as vscode.CancellationToken);
+        XlsxEditorPanel.beginDocumentSave = async (): Promise<void> => {};
         XlsxEditorPanel.commitDocumentSave = async (): Promise<void> => {};
+        XlsxEditorPanel.failDocumentSave = async (): Promise<void> => {};
 
         try {
             await provider.saveCustomDocument(document, {} as vscode.CancellationToken);
@@ -49,7 +60,14 @@ suite("Xlsx custom editor provider", () => {
             assert.strictEqual(emittedChangeEvents, 0);
         } finally {
             document.saveTo = originalSaveTo;
+            (
+                vscode.window as {
+                    withProgress: typeof vscode.window.withProgress;
+                }
+            ).withProgress = originalWithProgress;
+            XlsxEditorPanel.beginDocumentSave = originalBeginDocumentSave;
             XlsxEditorPanel.commitDocumentSave = originalCommitDocumentSave;
+            XlsxEditorPanel.failDocumentSave = originalFailDocumentSave;
             subscription.dispose();
             provider.dispose();
         }

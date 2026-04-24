@@ -108,36 +108,53 @@ export async function writeWorkbookEditsToDestination(
 
     const workbook = await Workbook.open(destinationUri.fsPath);
 
-    for (const edit of edits.sheetEdits) {
-        if (edit.type === "addSheet") {
-            workbook.addSheet(edit.sheetName);
-            workbook.moveSheet(edit.sheetName, edit.targetIndex);
-            continue;
+    workbook.batch((currentWorkbook) => {
+        for (const edit of edits.sheetEdits) {
+            if (edit.type === "addSheet") {
+                currentWorkbook.addSheet(edit.sheetName);
+                currentWorkbook.moveSheet(edit.sheetName, edit.targetIndex);
+                continue;
+            }
+
+            if (edit.type === "renameSheet") {
+                currentWorkbook.renameSheet(edit.sheetName, edit.nextSheetName);
+                continue;
+            }
+
+            currentWorkbook.deleteSheet(edit.sheetName);
         }
 
-        if (edit.type === "renameSheet") {
-            workbook.renameSheet(edit.sheetName, edit.nextSheetName);
-            continue;
+        const sheets = new Map<string, ReturnType<typeof currentWorkbook.getSheet>>();
+        const getSheet = (sheetName: string) => {
+            const cachedSheet = sheets.get(sheetName);
+            if (cachedSheet) {
+                return cachedSheet;
+            }
+
+            const sheet = currentWorkbook.getSheet(sheetName);
+            sheets.set(sheetName, sheet);
+            return sheet;
+        };
+
+        for (const edit of edits.cellEdits) {
+            const sheet = getSheet(edit.sheetName);
+            const address = getCellAddress(edit.rowNumber, edit.columnNumber);
+            sheet.cell(address).setValue(edit.value);
         }
 
-        workbook.deleteSheet(edit.sheetName);
-    }
+        for (const edit of edits.viewEdits ?? []) {
+            const sheet = getSheet(edit.sheetName);
+            if (
+                !edit.freezePane ||
+                (edit.freezePane.columnCount === 0 && edit.freezePane.rowCount === 0)
+            ) {
+                sheet.unfreezePane();
+                continue;
+            }
 
-    for (const edit of edits.cellEdits) {
-        const sheet = workbook.getSheet(edit.sheetName);
-        const address = getCellAddress(edit.rowNumber, edit.columnNumber);
-        sheet.cell(address).setValue(edit.value);
-    }
-
-    for (const edit of edits.viewEdits ?? []) {
-        const sheet = workbook.getSheet(edit.sheetName);
-        if (!edit.freezePane || (edit.freezePane.columnCount === 0 && edit.freezePane.rowCount === 0)) {
-            sheet.unfreezePane();
-            continue;
+            sheet.freezePane(edit.freezePane.columnCount, edit.freezePane.rowCount);
         }
-
-        sheet.freezePane(edit.freezePane.columnCount, edit.freezePane.rowCount);
-    }
+    });
 
     await workbook.save(destinationUri.fsPath);
 }
