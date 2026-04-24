@@ -1,6 +1,7 @@
 import * as React from "react";
 import { createRoot } from "react-dom/client";
 import type { CellDiffStatus } from "../core/model/types";
+import { getSelectionPreviewInlineDiff } from "./selection-preview-diff";
 import type {
     DiffPanelRenderModel,
     DiffPanelRowView,
@@ -817,11 +818,15 @@ function PaneScrollbar({
 
 function SelectionPreviewPane({
     preview,
+    peerPreview,
     isActive,
 }: {
     preview: SelectionPreview;
+    peerPreview: SelectionPreview;
     isActive: boolean;
 }): React.JSX.Element {
+    const inlineDiff = getSelectionPreviewInlineDiff(preview.value, peerPreview.value);
+
     return (
         <div
             className={classNames([
@@ -831,7 +836,15 @@ function SelectionPreviewPane({
             title={preview.title}
         >
             <span className="diff-selectionPreviewPane__address">{preview.address}</span>
-            <span className="diff-selectionPreviewPane__value">{preview.value}</span>
+            <span className="diff-selectionPreviewPane__value">
+                {inlineDiff.before}
+                {inlineDiff.changed ? (
+                    <span className="diff-selectionPreviewPane__valueDiff">
+                        {inlineDiff.changed}
+                    </span>
+                ) : null}
+                {inlineDiff.after}
+            </span>
         </div>
     );
 }
@@ -2052,6 +2065,7 @@ function App(): React.JSX.Element {
                             <div className="diff-pane">
                                 <SelectionPreviewPane
                                     preview={leftSelectionPreview}
+                                    peerPreview={rightSelectionPreview}
                                     isActive={selectedCell?.side === "left"}
                                 />
                             </div>
@@ -2059,6 +2073,7 @@ function App(): React.JSX.Element {
                             <div className="diff-pane">
                                 <SelectionPreviewPane
                                     preview={rightSelectionPreview}
+                                    peerPreview={leftSelectionPreview}
                                     isActive={selectedCell?.side === "right"}
                                 />
                             </div>

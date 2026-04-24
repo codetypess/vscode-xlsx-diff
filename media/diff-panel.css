@@ -684,6 +684,11 @@ select {
     line-clamp: 2;
 }
 
+.diff-selectionPreviewPane__valueDiff {
+    color: var(--vscode-editorError-foreground, #f14c4c);
+    font-weight: 700;
+}
+
 .diff-statusBar {
     min-height: 26px;
     gap: 6px 10px;

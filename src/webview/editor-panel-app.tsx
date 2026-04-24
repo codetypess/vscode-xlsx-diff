@@ -15,7 +15,20 @@ import {
     getFrozenEditorCounts,
     getVisibleFrozenEditorCounts,
 } from "./editor-virtual-grid";
-import { shouldUseLocalSimpleSelectionUpdate } from "./editor-selection-render";
+import {
+    shouldSyncLocalSelectionDomFromModelSelection,
+    shouldUseLocalSimpleSelectionUpdate,
+} from "./editor-selection-render";
+import {
+    getEditorToolbarSyncSnapshot,
+    notifyEditorToolbarSync,
+    subscribeEditorToolbarSync,
+} from "./editor-toolbar-sync";
+import {
+    getToolbarCellEditTargetKey,
+    shouldResetToolbarCellValueDraft,
+    type ToolbarCellEditTarget,
+} from "./editor-toolbar-input";
 import { getFreezePaneCountsForCell, hasLockedView } from "./view-lock";
 
 interface VsCodeApi {
@@ -167,6 +180,8 @@ const DEFAULT_STRINGS = {
     findNext: "Next Match",
     gotoPlaceholder: "A1 or Sheet1!B2",
     goto: "Go",
+    cancelInput: "Cancel input",
+    confirmInput: "Apply input",
     searchRegex: "Use Regular Expression",
     searchMatchCase: "Match Case",
     searchWholeWord: "Match Whole Word",
@@ -200,19 +215,12 @@ let isSaving = false;
 let lastPendingNotification: boolean | null = null;
 let pendingSelectionAfterRender: PendingSelection | null = null;
 let suppressAutoSelection = false;
-let searchQuery = "";
-let gotoReference = "";
 let lastPendingEditsSyncKey: string | null = null;
 let viewRevision = 0;
 let setViewState: React.Dispatch<React.SetStateAction<ViewState>> | null = null;
 let tabContextMenu: TabContextMenuState | null = null;
 let selectionDragState: SelectionDragState | null = null;
 let suppressNextCellClick = false;
-let searchOptions: SearchOptions = {
-    isRegexp: false,
-    matchCase: false,
-    wholeWord: false,
-};
 
 const WHEEL_DELTA_LINE_MODE = 1;
 const WHEEL_DELTA_PAGE_MODE = 2;
@@ -570,6 +578,40 @@ function getSelectedCellAddress(): string {
 
     const cell = getCellView(selectedCell.rowNumber, selectedCell.columnNumber);
     return cell?.address ?? getCellAddressLabel(selectedCell.rowNumber, selectedCell.columnNumber);
+}
+
+function getActiveCellAddress(): string {
+    if (!selectedCell) {
+        return STRINGS.noCellSelected;
+    }
+
+    const cell = getCellView(selectedCell.rowNumber, selectedCell.columnNumber);
+    return cell?.address ?? getCellAddressLabel(selectedCell.rowNumber, selectedCell.columnNumber);
+}
+
+function getSelectedCellToolbarValue(): string {
+    if (!model || !selectedCell) {
+        return "";
+    }
+
+    if (
+        editingCell &&
+        editingCell.sheetKey === model.activeSheet.key &&
+        editingCell.rowNumber === selectedCell.rowNumber &&
+        editingCell.columnNumber === selectedCell.columnNumber
+    ) {
+        return editingCell.value;
+    }
+
+    return getEffectiveCellValue(selectedCell.rowNumber, selectedCell.columnNumber);
+}
+
+function canEditSelectedCellValue(): boolean {
+    if (!model || !selectedCell) {
+        return false;
+    }
+
+    return canEditCellAt(selectedCell.rowNumber, selectedCell.columnNumber);
 }
 
 function getViewLockTarget(): { rowCount: number; columnCount: number } | null {
@@ -1038,6 +1080,7 @@ function setSelectedCellLocal(
 
     if (canUseLocalUpdate) {
         syncLocalSimpleSelectionDom(previousCell, nextCell);
+        notifyEditorToolbarSync();
         if (reveal) {
             revealSelectedCell();
         }
@@ -1058,6 +1101,8 @@ function prepareSelectionForRender({
     useModelSelection: boolean;
 }): boolean {
     let shouldReveal = revealSelection;
+    const previousCell = selectedCell;
+    const previousAnchorCell = selectionAnchorCell;
 
     if (useModelSelection && model?.selection) {
         selectedCell = {
@@ -1067,6 +1112,15 @@ function prepareSelectionForRender({
         selectionAnchorCell = selectedCell;
         suppressAutoSelection = false;
         pendingSelectionAfterRender = null;
+        if (
+            shouldSyncLocalSelectionDomFromModelSelection(
+                previousCell,
+                previousAnchorCell,
+                selectedCell
+            )
+        ) {
+            syncLocalSimpleSelectionDom(previousCell, selectedCell);
+        }
         syncSelectedCellToHost();
         return shouldReveal;
     }
@@ -1570,26 +1624,54 @@ function moveSelectionByViewportWindow(direction: -1 | 1): void {
     );
 }
 
-function submitSearch(direction: "next" | "prev"): void {
-    const query = searchQuery.trim();
-    if (!query) {
+function submitGoto(reference: string): void {
+    const normalizedReference = reference.trim();
+    if (!normalizedReference) {
         return;
     }
 
-    vscode.postMessage({ type: "search", query, direction, options: searchOptions });
+    vscode.postMessage({ type: "gotoCell", reference: normalizedReference });
 }
 
-function submitGoto(): void {
-    const reference = gotoReference.trim();
-    if (!reference) {
+function commitSelectedCellValue(value: string): void {
+    if (!model || !selectedCell || !canEditSelectedCellValue()) {
         return;
     }
 
-    vscode.postMessage({ type: "gotoCell", reference });
+    if (editingCell) {
+        finishEdit({ mode: "commit", refresh: false });
+    }
+
+    commitEdit(model.activeSheet.key, selectedCell.rowNumber, selectedCell.columnNumber, value, {
+        refresh: true,
+        revealSelection: true,
+    });
 }
 
-function focusToolbarInput(role: "search" | "goto"): void {
-    const selector = role === "search" ? '[data-role="search-input"]' : '[data-role="goto-input"]';
+function commitToolbarCellValue(target: ToolbarCellEditTarget, value: string): void {
+    if (!model || target.sheetKey !== model.activeSheet.key || !model.canEdit) {
+        return;
+    }
+
+    if (!canEditCellAt(target.rowNumber, target.columnNumber)) {
+        return;
+    }
+
+    if (editingCell) {
+        finishEdit({ mode: "commit", refresh: false });
+    }
+
+    commitEdit(target.sheetKey, target.rowNumber, target.columnNumber, value, {
+        refresh: true,
+        revealSelection: true,
+    });
+}
+
+function focusToolbarInput(role: "position" | "value"): void {
+    const selector =
+        role === "position"
+            ? '[data-role="position-input"]'
+            : '[data-role="cell-value-input"]';
     const input = document.querySelector<HTMLInputElement>(selector);
     if (!input) {
         return;
@@ -1597,6 +1679,26 @@ function focusToolbarInput(role: "search" | "goto"): void {
 
     input.focus();
     input.select();
+}
+
+function getPositionInputValue(): string {
+    return selectedCell ? getActiveCellAddress() : "";
+}
+
+function getCellValueInputValue(): string {
+    return selectedCell ? getSelectedCellToolbarValue() : "";
+}
+
+function getCellValueInputPlaceholder(): string {
+    return selectedCell ? "" : STRINGS.noCellSelected;
+}
+
+function submitGotoSelection(reference: string): void {
+    if (!reference) {
+        return;
+    }
+
+    submitGoto(reference);
 }
 
 function getPendingSummary(activeSheetKey: string): PendingSummary {
@@ -1761,135 +1863,213 @@ function ToolbarButton({
     );
 }
 
-function SearchToggle({
-    isActive,
-    label,
-    icon,
-    onClick,
-}: {
-    isActive: boolean;
-    label: string;
-    icon: string;
-    onClick(): void;
-}): React.ReactElement {
-    return (
-        <button
-            aria-label={label}
-            className={classNames(["codicon", icon, "toolbar__toggle", isActive && "is-active"])}
-            title={label}
-            type="button"
-            onClick={onClick}
-        />
-    );
-}
-
 function EditorToolbar({ currentModel }: { currentModel: EditorRenderModel }): React.ReactElement {
+    React.useSyncExternalStore(
+        subscribeEditorToolbarSync,
+        getEditorToolbarSyncSnapshot,
+        getEditorToolbarSyncSnapshot
+    );
+
     const hasPendingEdits = pendingEdits.size > 0 || currentModel.hasPendingEdits;
     const canUndo = undoStack.length > 0 || currentModel.canUndoStructuralEdits;
     const canRedo = redoStack.length > 0 || currentModel.canRedoStructuralEdits;
     const viewLocked = hasLockedView(currentModel.activeSheet.freezePane);
     const viewLockActionLabel = viewLocked ? STRINGS.unlockView : STRINGS.lockView;
+    const activeCellAddress = getPositionInputValue();
+    const selectedCellValue = getCellValueInputValue();
+    const cellValuePlaceholder = getCellValueInputPlaceholder();
+    const selectedCellEditable = currentModel.canEdit && canEditSelectedCellValue();
+    const activeCellEditTarget: ToolbarCellEditTarget | null = selectedCell
+        ? {
+              sheetKey: currentModel.activeSheet.key,
+              rowNumber: selectedCell.rowNumber,
+              columnNumber: selectedCell.columnNumber,
+          }
+        : null;
+    const activeCellEditTargetKey = getToolbarCellEditTargetKey(activeCellEditTarget);
+    const [positionInputValue, setPositionInputValue] = React.useState(activeCellAddress);
+    const [cellValueInputValue, setCellValueInputValue] = React.useState(selectedCellValue);
+    const [isEditingPosition, setIsEditingPosition] = React.useState(false);
+    const [isEditingCellValue, setIsEditingCellValue] = React.useState(false);
+    const [cellValueEditTarget, setCellValueEditTarget] =
+        React.useState<ToolbarCellEditTarget | null>(null);
+    const cellValueEditTargetKey = getToolbarCellEditTargetKey(cellValueEditTarget);
+    const showCellValueActions =
+        isEditingCellValue &&
+        !shouldResetToolbarCellValueDraft(
+            cellValueEditTarget,
+            activeCellEditTarget,
+            selectedCellEditable
+        );
+
+    React.useEffect(() => {
+        if (!isEditingPosition) {
+            setPositionInputValue(activeCellAddress);
+        }
+    }, [activeCellAddress, isEditingPosition]);
+
+    React.useEffect(() => {
+        if (
+            isEditingCellValue &&
+            shouldResetToolbarCellValueDraft(
+                cellValueEditTarget,
+                activeCellEditTarget,
+                selectedCellEditable
+            )
+        ) {
+            setIsEditingCellValue(false);
+            setCellValueEditTarget(null);
+            setCellValueInputValue(selectedCellValue);
+            return;
+        }
+
+        if (!isEditingCellValue) {
+            setCellValueInputValue(selectedCellValue);
+        }
+    }, [
+        activeCellEditTargetKey,
+        cellValueEditTarget,
+        cellValueEditTargetKey,
+        isEditingCellValue,
+        selectedCellEditable,
+        selectedCellValue,
+    ]);
+
+    const resetPositionInput = () => {
+        setIsEditingPosition(false);
+        setPositionInputValue(activeCellAddress);
+    };
+
+    const commitPositionInput = () => {
+        const nextReference = positionInputValue.trim();
+        setIsEditingPosition(false);
+        if (!nextReference) {
+            setPositionInputValue(activeCellAddress);
+            return;
+        }
+
+        submitGotoSelection(nextReference);
+    };
+
+    const resetCellValueInput = () => {
+        setIsEditingCellValue(false);
+        setCellValueEditTarget(null);
+        setCellValueInputValue(selectedCellValue);
+    };
+
+    const commitCellValueInput = () => {
+        const target = cellValueEditTarget;
+        setIsEditingCellValue(false);
+        setCellValueEditTarget(null);
+        if (
+            !target ||
+            shouldResetToolbarCellValueDraft(target, activeCellEditTarget, selectedCellEditable)
+        ) {
+            setCellValueInputValue(selectedCellValue);
+            return;
+        }
+
+        commitToolbarCellValue(target, cellValueInputValue);
+    };
 
     return (
         <header className="toolbar toolbar--editor">
             <div className="toolbar__group toolbar__group--grow">
-                <label className="toolbar__field">
-                    <span className="codicon codicon-search toolbar__field-icon" aria-hidden />
+                <label className="toolbar__field toolbar__field--address">
+                    <span className="toolbar__field-label">#</span>
                     <input
                         className="toolbar__input"
-                        data-role="search-input"
-                        defaultValue={searchQuery}
-                        placeholder={STRINGS.searchPlaceholder}
-                        type="text"
-                        onChange={(event) => {
-                            searchQuery = event.currentTarget.value;
-                        }}
-                        onKeyDown={(event) => {
-                            if (event.key !== "Enter") {
-                                return;
-                            }
-
-                            event.preventDefault();
-                            submitSearch(event.shiftKey ? "prev" : "next");
-                        }}
-                    />
-                    <span className="toolbar__field-actions">
-                        <SearchToggle
-                            isActive={searchOptions.isRegexp}
-                            label={STRINGS.searchRegex}
-                            icon="codicon-regex"
-                            onClick={() => {
-                                searchOptions = {
-                                    ...searchOptions,
-                                    isRegexp: !searchOptions.isRegexp,
-                                };
-                                renderApp({ commitEditing: false });
-                            }}
-                        />
-                        <SearchToggle
-                            isActive={searchOptions.matchCase}
-                            label={STRINGS.searchMatchCase}
-                            icon="codicon-case-sensitive"
-                            onClick={() => {
-                                searchOptions = {
-                                    ...searchOptions,
-                                    matchCase: !searchOptions.matchCase,
-                                };
-                                renderApp({ commitEditing: false });
-                            }}
-                        />
-                        <SearchToggle
-                            isActive={searchOptions.wholeWord}
-                            label={STRINGS.searchWholeWord}
-                            icon="codicon-whole-word"
-                            onClick={() => {
-                                searchOptions = {
-                                    ...searchOptions,
-                                    wholeWord: !searchOptions.wholeWord,
-                                };
-                                renderApp({ commitEditing: false });
-                            }}
-                        />
-                    </span>
-                </label>
-                <ToolbarButton
-                    actionLabel={STRINGS.findPrev}
-                    icon="codicon-arrow-up"
-                    iconOnly
-                    onClick={() => submitSearch("prev")}
-                />
-                <ToolbarButton
-                    actionLabel={STRINGS.findNext}
-                    icon="codicon-arrow-down"
-                    iconOnly
-                    onClick={() => submitSearch("next")}
-                />
-                <label className="toolbar__field toolbar__field--goto">
-                    <span className="codicon codicon-target toolbar__field-icon" aria-hidden />
-                    <input
-                        className="toolbar__input"
-                        data-role="goto-input"
-                        defaultValue={gotoReference}
+                        data-role="position-input"
+                        value={positionInputValue}
                         placeholder={STRINGS.gotoPlaceholder}
                         type="text"
+                        onFocus={(event) => {
+                            setIsEditingPosition(true);
+                            event.currentTarget.select();
+                        }}
                         onChange={(event) => {
-                            gotoReference = event.currentTarget.value;
+                            setPositionInputValue(event.currentTarget.value);
+                        }}
+                        onBlur={() => {
+                            resetPositionInput();
                         }}
                         onKeyDown={(event) => {
-                            if (event.key !== "Enter") {
+                            if (event.key === "Enter") {
+                                event.preventDefault();
+                                commitPositionInput();
                                 return;
                             }
 
-                            event.preventDefault();
-                            submitGoto();
+                            if (event.key === "Escape") {
+                                event.preventDefault();
+                                resetPositionInput();
+                            }
                         }}
                     />
                 </label>
-                <ToolbarButton
-                    actionLabel={STRINGS.goto}
-                    icon="codicon-target"
-                    onClick={submitGoto}
-                />
+                <label className="toolbar__field toolbar__field--cell-value">
+                    <span className="toolbar__field-label">T</span>
+                    <input
+                        className="toolbar__input"
+                        data-role="cell-value-input"
+                        value={cellValueInputValue}
+                        placeholder={cellValuePlaceholder}
+                        readOnly={!selectedCellEditable}
+                        type="text"
+                        onFocus={(event) => {
+                            if (editingCell) {
+                                finishEdit({ mode: "commit", refresh: false });
+                            }
+
+                            if (!selectedCellEditable || !activeCellEditTarget) {
+                                return;
+                            }
+
+                            setIsEditingCellValue(true);
+                            setCellValueEditTarget(activeCellEditTarget);
+                            event.currentTarget.select();
+                        }}
+                        onChange={(event) => {
+                            setCellValueInputValue(event.currentTarget.value);
+                        }}
+                        onKeyDown={(event) => {
+                            if (event.key === "Enter") {
+                                event.preventDefault();
+                                commitCellValueInput();
+                                return;
+                            }
+
+                            if (event.key === "Escape") {
+                                event.preventDefault();
+                                resetCellValueInput();
+                            }
+                        }}
+                    />
+                    {showCellValueActions ? (
+                        <span className="toolbar__field-actions" aria-label="Cell value actions">
+                            <button
+                                type="button"
+                                className="toolbar__toggle"
+                                aria-label={STRINGS.cancelInput}
+                                title={STRINGS.cancelInput}
+                                onMouseDown={(event) => event.preventDefault()}
+                                onClick={resetCellValueInput}
+                            >
+                                <span className="codicon codicon-close toolbar__toggle-icon" aria-hidden />
+                            </button>
+                            <button
+                                type="button"
+                                className="toolbar__toggle is-active"
+                                aria-label={STRINGS.confirmInput}
+                                title={STRINGS.confirmInput}
+                                onMouseDown={(event) => event.preventDefault()}
+                                onClick={commitCellValueInput}
+                            >
+                                <span className="codicon codicon-check toolbar__toggle-icon" aria-hidden />
+                            </button>
+                        </span>
+                    ) : null}
+                </label>
             </div>
             <div className="toolbar__group">
                 <ToolbarButton
@@ -1955,6 +2135,7 @@ function CellEditor({ edit }: { edit: EditingCell }): React.ReactElement {
             onChange={(event) => {
                 if (editingCell === edit) {
                     editingCell.value = event.currentTarget.value;
+                    notifyEditorToolbarSync();
                 }
             }}
             onClick={(event) => event.stopPropagation()}
@@ -3102,15 +3283,9 @@ document.addEventListener("keydown", (event: KeyboardEvent) => {
     }
 
     if (!editingCell && (event.ctrlKey || event.metaKey) && !event.altKey) {
-        if (event.key.toLowerCase() === "f") {
-            event.preventDefault();
-            focusToolbarInput("search");
-            return;
-        }
-
         if (event.key.toLowerCase() === "g") {
             event.preventDefault();
-            focusToolbarInput("goto");
+            focusToolbarInput("position");
             return;
         }
 

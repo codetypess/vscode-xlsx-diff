@@ -65,6 +65,8 @@ export interface EditorPanelStrings {
     findNext: string;
     gotoPlaceholder: string;
     goto: string;
+    cancelInput: string;
+    confirmInput: string;
     selectedCell: string;
     noCellSelected: string;
     noRowsAvailable: string;

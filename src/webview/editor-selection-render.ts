@@ -8,6 +8,11 @@ export interface LocalSelectionUpdateOptions {
     forceRender?: boolean;
 }
 
+export interface SelectionPositionLike {
+    rowNumber: number;
+    columnNumber: number;
+}
+
 export function shouldUseLocalSimpleSelectionUpdate({
     hasNextCell,
     hasModel,
@@ -25,5 +30,21 @@ export function shouldUseLocalSimpleSelectionUpdate({
             isNextCellVisible &&
             !hasExpandedSelection &&
             isSimpleSelection
+    );
+}
+
+export function shouldSyncLocalSelectionDomFromModelSelection(
+    previousCell: SelectionPositionLike | null,
+    previousAnchorCell: SelectionPositionLike | null,
+    nextCell: SelectionPositionLike | null
+): boolean {
+    if (!previousCell || !nextCell) {
+        return false;
+    }
+
+    const anchor = previousAnchorCell ?? previousCell;
+    return (
+        anchor.rowNumber === previousCell.rowNumber &&
+        anchor.columnNumber === previousCell.columnNumber
     );
 }
