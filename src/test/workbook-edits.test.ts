@@ -7,6 +7,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { loadWorkbookSnapshot } from "../core/fastxlsx/load-workbook-snapshot";
+import { Workbook } from "../core/fastxlsx/runtime";
 import {
     writeWorkbookEditsToDestination,
     type WorkbookEditState,
@@ -15,7 +16,6 @@ import { XlsxEditorDocument } from "../webview/xlsx-editor-document";
 
 suite("Workbook edit writer", () => {
     test("applies sheet edits before cell edits", async () => {
-        const { Workbook } = await import("fastxlsx");
         const tempDirectory = await mkdtemp(path.join(os.tmpdir(), "xlsx-diff-"));
 
         try {

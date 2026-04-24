@@ -142,6 +142,8 @@ function getWebviewStrings(): EditorPanelStrings {
 export class XlsxEditorPanel {
     private static readonly panels = new Map<number, XlsxEditorPanel>();
     private static nextPanelId = 1;
+    private static readonly LOCAL_SAVE_AUTO_REFRESH_DELAY_MS = 3000;
+    private static readonly LOCAL_SAVE_IGNORED_REFRESH_EVENTS = 4;
 
     private readonly panel: vscode.WebviewPanel;
     private readonly extensionUri: vscode.Uri;
@@ -163,6 +165,8 @@ export class XlsxEditorPanel {
     private hasQueuedReload = false;
     private autoRefreshTimer: ReturnType<typeof setTimeout> | undefined;
     private suppressAutoRefreshUntil = 0;
+    private ignoredAutoRefreshTriggerCount = 0;
+    private ignoredAutoRefreshUntil = 0;
     private isSavingDocument = false;
     private hasWarnedPendingExternalChange = false;
     private pendingCellEdits: CellEdit[] = [];
@@ -248,7 +252,7 @@ export class XlsxEditorPanel {
         await Promise.all(
             [...XlsxEditorPanel.panels.values()]
                 .filter((panel) => panel.document === document)
-                .map((panel) => panel.commitSavedState())
+                .map((panel) => panel.handleDocumentSave())
         );
     }
 
@@ -303,6 +307,11 @@ export class XlsxEditorPanel {
 
     private scheduleAutoRefresh(trigger: "change" | "create" | "delete"): void {
         if (this.isSavingDocument) {
+            this.clearAutoRefreshTimer();
+            return;
+        }
+
+        if (this.shouldIgnoreAutoRefreshTrigger()) {
             this.clearAutoRefreshTimer();
             return;
         }
@@ -662,6 +671,11 @@ export class XlsxEditorPanel {
         });
     }
 
+    private async handleDocumentSave(): Promise<void> {
+        this.noteLocalSaveCompletion();
+        await this.commitSavedState();
+    }
+
     private getSheetEntries(): WorkingSheetEntry[] {
         return this.workingSheetEntries;
     }
@@ -681,6 +695,41 @@ export class XlsxEditorPanel {
 
         clearTimeout(this.autoRefreshTimer);
         this.autoRefreshTimer = undefined;
+    }
+
+    private noteLocalSaveCompletion(): void {
+        this.suppressAutoRefreshUntil = Math.max(
+            this.suppressAutoRefreshUntil,
+            Date.now() + XlsxEditorPanel.LOCAL_SAVE_AUTO_REFRESH_DELAY_MS
+        );
+        this.ignoredAutoRefreshTriggerCount = Math.max(
+            this.ignoredAutoRefreshTriggerCount,
+            XlsxEditorPanel.LOCAL_SAVE_IGNORED_REFRESH_EVENTS
+        );
+        this.ignoredAutoRefreshUntil = Math.max(
+            this.ignoredAutoRefreshUntil,
+            Date.now() + XlsxEditorPanel.LOCAL_SAVE_AUTO_REFRESH_DELAY_MS
+        );
+        this.clearAutoRefreshTimer();
+    }
+
+    private shouldIgnoreAutoRefreshTrigger(): boolean {
+        if (this.ignoredAutoRefreshTriggerCount <= 0) {
+            return false;
+        }
+
+        if (Date.now() > this.ignoredAutoRefreshUntil) {
+            this.ignoredAutoRefreshTriggerCount = 0;
+            this.ignoredAutoRefreshUntil = 0;
+            return false;
+        }
+
+        this.ignoredAutoRefreshTriggerCount -= 1;
+        if (this.ignoredAutoRefreshTriggerCount === 0) {
+            this.ignoredAutoRefreshUntil = 0;
+        }
+
+        return true;
     }
 
     private captureStructuralSnapshot() {

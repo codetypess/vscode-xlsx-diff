@@ -2,6 +2,7 @@ import { copyFile, mkdir } from "node:fs/promises";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { getCellAddress } from "../model/cells";
+import { Workbook } from "./runtime";
 
 export interface CellEdit {
     sheetName: string;
@@ -105,7 +106,6 @@ export async function writeWorkbookEditsToDestination(
         return;
     }
 
-    const { Workbook } = await import("fastxlsx");
     const workbook = await Workbook.open(destinationUri.fsPath);
 
     for (const edit of edits.sheetEdits) {

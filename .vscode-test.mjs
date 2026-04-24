@@ -51,7 +51,7 @@ function resolveVSCodeExecutablePath() {
 const vscodeExecutablePath = resolveVSCodeExecutablePath();
 
 export default defineConfig({
-	files: 'out/test/**/*.test.js',
+	files: 'out/test/**/*.test.cjs',
 	...(vscodeExecutablePath
 		? {
 				useInstallation: {

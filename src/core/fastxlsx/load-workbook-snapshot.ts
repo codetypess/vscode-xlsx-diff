@@ -3,6 +3,7 @@ import { stat } from "node:fs/promises";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { createCellKey, getCellAddress } from "../model/cells";
+import { Workbook } from "./runtime";
 import {
     type CellSnapshot,
     type SheetFreezePaneSnapshot,
@@ -122,8 +123,6 @@ function createWorkbookSnapshot(
 export async function loadWorkbookSnapshot(
     filePathOrUri: string | vscode.Uri
 ): Promise<WorkbookSnapshot> {
-    const { Workbook } = await import("fastxlsx");
-
     if (typeof filePathOrUri === "string") {
         const [workbook, fileStats] = await Promise.all([
             Workbook.open(filePathOrUri),
