@@ -54,4 +54,57 @@ suite("Xlsx custom editor provider", () => {
             provider.dispose();
         }
     });
+
+    test("toolbar save routes through VS Code's save command", async () => {
+        const ProviderConstructor = XlsxCustomEditorProvider as unknown as {
+            new (extensionUri: vscode.Uri): XlsxCustomEditorProvider;
+        };
+        const provider = new ProviderConstructor(vscode.Uri.file("/tmp"));
+        const document = new XlsxEditorDocument(vscode.Uri.file("/tmp/editor.xlsx"));
+        const originalResolveCustomEditor = XlsxEditorPanel.resolveCustomEditor;
+        const originalExecuteCommand = vscode.commands.executeCommand;
+        let capturedController:
+            | {
+                  onRequestSave(): void | Promise<void>;
+              }
+            | undefined;
+        const executedCommands: string[] = [];
+
+        XlsxEditorPanel.resolveCustomEditor = async (
+            _extensionUri,
+            _document,
+            _panel,
+            controller
+        ): Promise<void> => {
+            capturedController = controller;
+        };
+        (
+            vscode.commands as {
+                executeCommand: typeof vscode.commands.executeCommand;
+            }
+        ).executeCommand = <T = unknown>(command: string): Thenable<T> => {
+            executedCommands.push(command);
+            return Promise.resolve(undefined as T);
+        };
+
+        try {
+            await provider.resolveCustomEditor(
+                document,
+                {} as vscode.WebviewPanel,
+                {} as vscode.CancellationToken
+            );
+
+            assert.ok(capturedController);
+            await capturedController.onRequestSave();
+            assert.deepStrictEqual(executedCommands, ["workbench.action.files.save"]);
+        } finally {
+            XlsxEditorPanel.resolveCustomEditor = originalResolveCustomEditor;
+            (
+                vscode.commands as {
+                    executeCommand: typeof vscode.commands.executeCommand;
+                }
+            ).executeCommand = originalExecuteCommand;
+            provider.dispose();
+        }
+    });
 });

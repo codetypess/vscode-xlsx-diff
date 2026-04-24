@@ -68,7 +68,7 @@ export class XlsxCustomEditorProvider
                 this.onDidChangeCustomDocumentEmitter.fire({ document });
             },
             onRequestSave: async () => {
-                await this.saveDocument(document);
+                await vscode.commands.executeCommand("workbench.action.files.save");
             },
             onRequestRevert: async () => {
                 await vscode.commands.executeCommand("workbench.action.files.revert");
