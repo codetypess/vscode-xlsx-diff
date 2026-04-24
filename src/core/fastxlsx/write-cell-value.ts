@@ -131,10 +131,7 @@ export async function writeWorkbookEditsToDestination(
 
     for (const edit of edits.viewEdits ?? []) {
         const sheet = workbook.getSheet(edit.sheetName);
-        if (
-            !edit.freezePane ||
-            (edit.freezePane.columnCount === 0 && edit.freezePane.rowCount === 0)
-        ) {
+        if (!edit.freezePane || (edit.freezePane.columnCount === 0 && edit.freezePane.rowCount === 0)) {
             sheet.unfreezePane();
             continue;
         }

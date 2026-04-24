@@ -13,6 +13,7 @@ import {
     getEditorContentSize,
     getEditorRowHeaderWidth,
     getFrozenEditorCounts,
+    getVisibleFrozenEditorCounts,
 } from "./editor-virtual-grid";
 import { getFreezePaneCountsForCell, hasLockedView } from "./view-lock";
 
@@ -218,6 +219,43 @@ const WHEEL_LINE_SCROLL_PIXELS = 40;
 const DEFAULT_EDITOR_VIEWPORT_HEIGHT = 480;
 const DEFAULT_EDITOR_VIEWPORT_WIDTH = 960;
 
+function stabilizeIncomingRenderModel(
+    previousModel: EditorRenderModel | null,
+    nextModel: EditorRenderModel,
+    {
+        canReuseActiveSheetData,
+    }: {
+        canReuseActiveSheetData: boolean;
+    }
+): EditorRenderModel {
+    if (
+        !canReuseActiveSheetData ||
+        !previousModel ||
+        previousModel.activeSheet.key !== nextModel.activeSheet.key ||
+        previousModel.activeSheet.rowCount !== nextModel.activeSheet.rowCount ||
+        previousModel.activeSheet.columnCount !== nextModel.activeSheet.columnCount
+    ) {
+        return nextModel;
+    }
+
+    const reusedActiveSheetColumns =
+        previousModel.activeSheet.columns.length === nextModel.activeSheet.columns.length &&
+        previousModel.activeSheet.columns.every(
+            (label, index) => label === nextModel.activeSheet.columns[index]
+        );
+
+    return {
+        ...nextModel,
+        activeSheet: {
+            ...nextModel.activeSheet,
+            cells: previousModel.activeSheet.cells,
+            columns: reusedActiveSheetColumns
+                ? previousModel.activeSheet.columns
+                : nextModel.activeSheet.columns,
+        },
+    };
+}
+
 interface VirtualViewportState {
     scrollTop: number;
     scrollLeft: number;
@@ -226,6 +264,8 @@ interface VirtualViewportState {
     rowHeaderWidth: number;
     frozenRowCount: number;
     frozenColumnCount: number;
+    frozenRowNumbers: number[];
+    frozenColumnNumbers: number[];
     rowNumbers: number[];
     columnNumbers: number[];
 }
@@ -250,6 +290,14 @@ function getVirtualViewportState(currentModel: EditorRenderModel | null): Virtua
         columnCount: currentModel.activeSheet.columnCount,
         freezePane: currentModel.activeSheet.freezePane,
     });
+    const { rowCount: visibleFrozenRowCount, columnCount: visibleFrozenColumnCount } =
+        getVisibleFrozenEditorCounts({
+            frozenRowCount,
+            frozenColumnCount,
+            viewportHeight,
+            viewportWidth,
+            rowHeaderWidth,
+        });
     const rowWindow = createEditorRowWindow({
         totalRows: currentModel.activeSheet.rowCount,
         frozenRowCount,
@@ -272,6 +320,8 @@ function getVirtualViewportState(currentModel: EditorRenderModel | null): Virtua
         rowHeaderWidth,
         frozenRowCount,
         frozenColumnCount,
+        frozenRowNumbers: createSequentialNumbers(visibleFrozenRowCount),
+        frozenColumnNumbers: createSequentialNumbers(visibleFrozenColumnCount),
         rowNumbers: rowWindow.rowNumbers,
         columnNumbers: columnWindow.columnNumbers,
     };
@@ -355,12 +405,16 @@ function getCellSnapshot(
     return currentModel.activeSheet.cells[createCellKey(rowNumber, columnNumber)] ?? null;
 }
 
-function getCellView(rowNumber: number, columnNumber: number): EditorGridCellView | null {
-    if (!model) {
+function getCellView(
+    rowNumber: number,
+    columnNumber: number,
+    currentModel: EditorRenderModel | null = model
+): EditorGridCellView | null {
+    if (!currentModel) {
         return null;
     }
 
-    const cell = getCellSnapshot(rowNumber, columnNumber, model);
+    const cell = getCellSnapshot(rowNumber, columnNumber, currentModel);
     return {
         key: createCellKey(rowNumber, columnNumber),
         address: cell?.address ?? `${getColumnLabel(columnNumber)}${rowNumber}`,
@@ -546,19 +600,6 @@ function getViewLockTarget(): { rowCount: number; columnCount: number } | null {
 
 function isViewLocked(): boolean {
     return hasLockedView(model?.activeSheet.freezePane);
-}
-
-function canToggleViewLock(): boolean {
-    if (!model?.canEdit) {
-        return false;
-    }
-
-    if (isViewLocked()) {
-        return true;
-    }
-
-    const target = getViewLockTarget();
-    return Boolean(target && (target.rowCount > 0 || target.columnCount > 0));
 }
 
 function toggleViewLock(): void {
@@ -801,10 +842,10 @@ function isCellVisible(cell: CellPosition | null): boolean {
     }
 
     const rowVisible =
-        cell.rowNumber <= viewportState.frozenRowCount ||
+        viewportState.frozenRowNumbers.includes(cell.rowNumber) ||
         viewportState.rowNumbers.includes(cell.rowNumber);
     const columnVisible =
-        cell.columnNumber <= viewportState.frozenColumnCount ||
+        viewportState.frozenColumnNumbers.includes(cell.columnNumber) ||
         viewportState.columnNumbers.includes(cell.columnNumber);
 
     return rowVisible && columnVisible;
@@ -1572,40 +1613,40 @@ function getPendingSummary(activeSheetKey: string): PendingSummary {
     return summary;
 }
 
-function updateView(view: ViewState): void {
+function updateView(view: ViewState, { sync = false }: { sync?: boolean } = {}): void {
     const setView = setViewState;
     if (!setView) {
         return;
     }
 
-    if (view.kind === "app") {
-        React.startTransition(() => {
+    if (sync || view.kind !== "app") {
+        flushSync(() => {
             setView(view);
         });
         return;
     }
 
-    flushSync(() => {
-        setView(view);
-    });
+    setView(view);
 }
 
 function renderLoading(message: string): void {
-    updateView({ kind: "loading", message });
+    updateView({ kind: "loading", message }, { sync: true });
 }
 
 function renderError(message: string): void {
-    updateView({ kind: "error", message });
+    updateView({ kind: "error", message }, { sync: true });
 }
 
 function renderApp({
     commitEditing = true,
     revealSelection = false,
     useModelSelection = false,
+    sync = false,
 }: {
     commitEditing?: boolean;
     revealSelection?: boolean;
     useModelSelection?: boolean;
+    sync?: boolean;
 } = {}): void {
     if (!model) {
         renderLoading(STRINGS.loading);
@@ -1622,14 +1663,13 @@ function renderApp({
         useModelSelection,
     });
     viewRevision += 1;
-
     updateView({
         kind: "app",
         model,
         revealSelection: shouldRevealSelection,
         revision: viewRevision,
         scrollState,
-    });
+    }, { sync });
 }
 
 function PendingMarker({ extraClass }: { extraClass?: string }): React.ReactElement {
@@ -1669,6 +1709,7 @@ function ToolbarButton({
     icon,
     disabled = false,
     isActive = false,
+    isLoading = false,
     iconOnly = false,
     iconMirrored = false,
     onClick,
@@ -1677,16 +1718,20 @@ function ToolbarButton({
     icon: string;
     disabled?: boolean;
     isActive?: boolean;
+    isLoading?: boolean;
     iconOnly?: boolean;
     iconMirrored?: boolean;
     onClick(): void;
 }): React.ReactElement {
+    const displayedIcon = isLoading ? "codicon-loading" : icon;
+
     return (
         <button
             aria-label={actionLabel}
             className={classNames([
                 "toolbar__button",
                 isActive && "is-active",
+                isLoading && "is-loading",
                 iconOnly && "toolbar__button--icon",
             ])}
             disabled={disabled}
@@ -1697,9 +1742,10 @@ function ToolbarButton({
             <span
                 className={classNames([
                     "codicon",
-                    icon,
+                    displayedIcon,
                     "toolbar__button-icon",
                     iconMirrored && "toolbar__button-icon--flip",
+                    isLoading && "toolbar__button-icon--spin",
                 ])}
                 aria-hidden
             />
@@ -1862,7 +1908,7 @@ function EditorToolbar({ currentModel }: { currentModel: EditorRenderModel }): R
                 />
                 <ToolbarButton
                     actionLabel={viewLockActionLabel}
-                    disabled={!canToggleViewLock() || isSaving}
+                    disabled={!currentModel.canEdit || isSaving}
                     icon={viewLocked ? "codicon-lock" : "codicon-unlock"}
                     iconOnly={true}
                     isActive={viewLocked}
@@ -1874,6 +1920,7 @@ function EditorToolbar({ currentModel }: { currentModel: EditorRenderModel }): R
                     icon="codicon-save"
                     iconOnly={true}
                     isActive={hasPendingEdits}
+                    isLoading={isSaving}
                     onClick={triggerSave}
                 />
             </div>
@@ -2109,6 +2156,16 @@ function createEditorVirtualGridMetrics(
         columnCount: currentModel.activeSheet.columnCount,
         freezePane: currentModel.activeSheet.freezePane,
     });
+    const {
+        rowCount: visibleFrozenRowCount,
+        columnCount: visibleFrozenColumnCount,
+    } = getVisibleFrozenEditorCounts({
+        frozenRowCount,
+        frozenColumnCount,
+        viewportHeight,
+        viewportWidth,
+        rowHeaderWidth,
+    });
     const rowWindow = createEditorRowWindow({
         totalRows: currentModel.activeSheet.rowCount,
         frozenRowCount,
@@ -2140,8 +2197,8 @@ function createEditorVirtualGridMetrics(
         columnNumbers: columnWindow.columnNumbers,
         contentWidth: contentSize.width,
         contentHeight: contentSize.height,
-        frozenRowNumbers: createSequentialNumbers(frozenRowCount),
-        frozenColumnNumbers: createSequentialNumbers(frozenColumnCount),
+        frozenRowNumbers: createSequentialNumbers(visibleFrozenRowCount),
+        frozenColumnNumbers: createSequentialNumbers(visibleFrozenColumnCount),
         stickyTopHeight:
             EDITOR_VIRTUAL_HEADER_HEIGHT + frozenRowCount * EDITOR_VIRTUAL_ROW_HEIGHT,
         stickyLeftWidth:
@@ -2421,7 +2478,7 @@ const EditorVirtualCell = React.memo(function EditorVirtualCell({
     pendingEdit: PendingEdit | undefined;
 }): React.ReactElement {
     const cell =
-        getCellView(rowNumber, columnNumber) ?? {
+        getCellView(rowNumber, columnNumber, currentModel) ?? {
             key: createCellKey(rowNumber, columnNumber),
             address: getCellAddressLabel(rowNumber, columnNumber),
             value: "",
@@ -2526,7 +2583,9 @@ const EditorVirtualCell = React.memo(function EditorVirtualCell({
     );
 },
 (previous, next) =>
-    previous.currentModel === next.currentModel &&
+    previous.currentModel.activeSheet.key === next.currentModel.activeSheet.key &&
+    previous.currentModel.activeSheet.cells === next.currentModel.activeSheet.cells &&
+    previous.currentModel.canEdit === next.currentModel.canEdit &&
     previous.rowNumber === next.rowNumber &&
     previous.columnNumber === next.columnNumber &&
     previous.top === next.top &&
@@ -2565,6 +2624,34 @@ function EditorVirtualGrid({
             rowHeaderWidth={metrics.rowHeaderWidth}
         />,
     ];
+    const createGridCellItem = (
+        keyPrefix: "body" | "left" | "top" | "corner",
+        rowNumber: number,
+        columnNumber: number
+    ): React.ReactElement => {
+        const top = getEditorGridTop(rowNumber);
+        const left = getEditorGridLeft(metrics.rowHeaderWidth, columnNumber);
+        const key = `${keyPrefix}:${rowNumber}:${columnNumber}`;
+
+        const pendingEdit = pendingEdits.get(
+            getPendingEditKey(currentModel.activeSheet.key, rowNumber, columnNumber)
+        );
+        return (
+            <EditorVirtualCell
+                key={key}
+                currentModel={currentModel}
+                rowNumber={rowNumber}
+                columnNumber={columnNumber}
+                top={top}
+                left={left}
+                selectionRange={selectionRange}
+                hasExpandedRange={hasExpandedRange}
+                currentSelection={currentSelection}
+                activeEditingCell={activeEditingCell}
+                pendingEdit={pendingEdit}
+            />
+        );
+    };
 
     for (const columnNumber of metrics.columnNumbers) {
         topItems.push(
@@ -2613,45 +2700,11 @@ function EditorVirtualGrid({
         );
 
         for (const columnNumber of metrics.columnNumbers) {
-            const pendingEdit = pendingEdits.get(
-                getPendingEditKey(currentModel.activeSheet.key, rowNumber, columnNumber)
-            );
-            bodyItems.push(
-                <EditorVirtualCell
-                    key={`body:${rowNumber}:${columnNumber}`}
-                    currentModel={currentModel}
-                    rowNumber={rowNumber}
-                    columnNumber={columnNumber}
-                    top={getEditorGridTop(rowNumber)}
-                    left={getEditorGridLeft(metrics.rowHeaderWidth, columnNumber)}
-                    selectionRange={selectionRange}
-                    hasExpandedRange={hasExpandedRange}
-                    currentSelection={currentSelection}
-                    activeEditingCell={activeEditingCell}
-                    pendingEdit={pendingEdit}
-                />
-            );
+            bodyItems.push(createGridCellItem("body", rowNumber, columnNumber));
         }
 
         for (const columnNumber of metrics.frozenColumnNumbers) {
-            const pendingEdit = pendingEdits.get(
-                getPendingEditKey(currentModel.activeSheet.key, rowNumber, columnNumber)
-            );
-            leftItems.push(
-                <EditorVirtualCell
-                    key={`left:${rowNumber}:${columnNumber}`}
-                    currentModel={currentModel}
-                    rowNumber={rowNumber}
-                    columnNumber={columnNumber}
-                    top={getEditorGridTop(rowNumber)}
-                    left={getEditorGridLeft(metrics.rowHeaderWidth, columnNumber)}
-                    selectionRange={selectionRange}
-                    hasExpandedRange={hasExpandedRange}
-                    currentSelection={currentSelection}
-                    activeEditingCell={activeEditingCell}
-                    pendingEdit={pendingEdit}
-                />
-            );
+            leftItems.push(createGridCellItem("left", rowNumber, columnNumber));
         }
     }
 
@@ -2668,45 +2721,11 @@ function EditorVirtualGrid({
         );
 
         for (const columnNumber of metrics.columnNumbers) {
-            const pendingEdit = pendingEdits.get(
-                getPendingEditKey(currentModel.activeSheet.key, rowNumber, columnNumber)
-            );
-            topItems.push(
-                <EditorVirtualCell
-                    key={`top:${rowNumber}:${columnNumber}`}
-                    currentModel={currentModel}
-                    rowNumber={rowNumber}
-                    columnNumber={columnNumber}
-                    top={getEditorGridTop(rowNumber)}
-                    left={getEditorGridLeft(metrics.rowHeaderWidth, columnNumber)}
-                    selectionRange={selectionRange}
-                    hasExpandedRange={hasExpandedRange}
-                    currentSelection={currentSelection}
-                    activeEditingCell={activeEditingCell}
-                    pendingEdit={pendingEdit}
-                />
-            );
+            topItems.push(createGridCellItem("top", rowNumber, columnNumber));
         }
 
         for (const columnNumber of metrics.frozenColumnNumbers) {
-            const pendingEdit = pendingEdits.get(
-                getPendingEditKey(currentModel.activeSheet.key, rowNumber, columnNumber)
-            );
-            cornerItems.push(
-                <EditorVirtualCell
-                    key={`corner:${rowNumber}:${columnNumber}`}
-                    currentModel={currentModel}
-                    rowNumber={rowNumber}
-                    columnNumber={columnNumber}
-                    top={getEditorGridTop(rowNumber)}
-                    left={getEditorGridLeft(metrics.rowHeaderWidth, columnNumber)}
-                    selectionRange={selectionRange}
-                    hasExpandedRange={hasExpandedRange}
-                    currentSelection={currentSelection}
-                    activeEditingCell={activeEditingCell}
-                    pendingEdit={pendingEdit}
-                />
-            );
+            cornerItems.push(createGridCellItem("corner", rowNumber, columnNumber));
         }
     }
 
@@ -2805,6 +2824,13 @@ function EditorPane({
 }): React.ReactElement {
     const hasVisibleCells =
         currentModel.activeSheet.rowCount > 0 && currentModel.activeSheet.columnCount > 0;
+    const gridInstanceKey = [
+        currentModel.activeSheet.key,
+        currentModel.activeSheet.rowCount,
+        currentModel.activeSheet.columnCount,
+        currentModel.activeSheet.freezePane?.rowCount ?? 0,
+        currentModel.activeSheet.freezePane?.columnCount ?? 0,
+    ].join(":");
 
     return (
         <section className="pane pane--single pane--editor">
@@ -2814,7 +2840,7 @@ function EditorPane({
                 </div>
             ) : (
                 <EditorVirtualGrid
-                    key={currentModel.activeSheet.key}
+                    key={gridInstanceKey}
                     currentModel={currentModel}
                     pendingSummary={pendingSummary}
                     view={view}
@@ -3002,7 +3028,12 @@ window.addEventListener("message", (event: MessageEvent<IncomingMessage>) => {
     }
 
     if (message.type === "render") {
-        model = message.payload;
+        const previousModel = model;
+        const canReuseActiveSheetData =
+            Boolean(message.clearPendingEdits) && pendingEdits.size === 0;
+        model = stabilizeIncomingRenderModel(previousModel, message.payload, {
+            canReuseActiveSheetData,
+        });
         isSaving = false;
 
         if (message.clearPendingEdits) {
@@ -3037,6 +3068,7 @@ window.addEventListener("message", (event: MessageEvent<IncomingMessage>) => {
         renderApp({
             revealSelection: !message.silent,
             useModelSelection: message.useModelSelection,
+            sync: true,
         });
     }
 });

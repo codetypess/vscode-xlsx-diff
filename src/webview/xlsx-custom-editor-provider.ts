@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { WEBVIEW_TYPE_EDITOR_PANEL } from "../constants";
 import { type WorkbookEditState } from "../core/fastxlsx/write-cell-value";
 import { rememberRecentWorkbookResourceUri } from "../scm/recent-workbook-resource-context";
+import { readEditorBackupState, writeEditorBackupState } from "./editor-backup-state";
 import { XlsxEditorPanel } from "./editor-panel";
 import { XlsxEditorDocument } from "./xlsx-editor-document";
 
@@ -31,14 +32,26 @@ export class XlsxCustomEditorProvider
         this.onDidChangeCustomDocumentEmitter.dispose();
     }
 
-    public openCustomDocument(
+    public async openCustomDocument(
         uri: vscode.Uri,
         openContext: vscode.CustomDocumentOpenContext
-    ): XlsxEditorDocument {
+    ): Promise<XlsxEditorDocument> {
         rememberRecentWorkbookResourceUri(uri, "customEditorDocument");
         const backupUri = openContext.backupId ? vscode.Uri.parse(openContext.backupId) : undefined;
+        if (!backupUri) {
+            return new XlsxEditorDocument(uri);
+        }
 
-        return new XlsxEditorDocument(uri, backupUri);
+        const backupState = await readEditorBackupState(backupUri).catch(() => null);
+        if (backupState) {
+            return new XlsxEditorDocument(uri, {
+                backupState,
+            });
+        }
+
+        return new XlsxEditorDocument(uri, {
+            backupUri,
+        });
     }
 
     public async resolveCustomEditor(
@@ -55,7 +68,7 @@ export class XlsxCustomEditorProvider
                 this.onDidChangeCustomDocumentEmitter.fire({ document });
             },
             onRequestSave: async () => {
-                await vscode.commands.executeCommand("workbench.action.files.save");
+                await this.saveDocument(document);
             },
             onRequestRevert: async () => {
                 await vscode.commands.executeCommand("workbench.action.files.revert");
@@ -71,12 +84,7 @@ export class XlsxCustomEditorProvider
         document: XlsxEditorDocument,
         _cancellation: vscode.CancellationToken
     ): Promise<void> {
-        await document.saveTo(document.uri);
-        document.markSaved();
-        await XlsxEditorPanel.refreshDocument(document, {
-            silent: true,
-            clearPendingEdits: true,
-        });
+        await this.saveDocument(document);
     }
 
     public async saveCustomDocumentAs(
@@ -99,7 +107,7 @@ export class XlsxCustomEditorProvider
         context: vscode.CustomDocumentBackupContext,
         _cancellation: vscode.CancellationToken
     ): Promise<vscode.CustomDocumentBackup> {
-        await document.saveTo(context.destination);
+        await writeEditorBackupState(context.destination, document.getPendingState());
 
         return {
             id: context.destination.toString(),
@@ -117,5 +125,13 @@ export class XlsxCustomEditorProvider
         await XlsxEditorPanel.refreshDocument(document, {
             clearPendingEdits: true,
         });
+    }
+
+    private async saveDocument(document: XlsxEditorDocument): Promise<void> {
+        await document.saveTo(document.uri);
+        document.markSaved();
+        // Saving already clears VS Code's dirty state for the custom editor.
+        // Emitting another content-change event here marks the tab dirty again.
+        await XlsxEditorPanel.commitDocumentSave(document);
     }
 }

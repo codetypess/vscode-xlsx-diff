@@ -197,6 +197,10 @@ body {
     transform: scaleX(-1);
 }
 
+.toolbar__button-icon--spin {
+    animation: toolbar-button-icon-spin 1s linear infinite;
+}
+
 .toolbar__button:hover:enabled {
     background: var(--vscode-button-secondaryHoverBackground);
 }
@@ -206,6 +210,11 @@ body {
     color: var(--vscode-button-foreground);
 }
 
+.toolbar__button.is-loading:disabled {
+    opacity: 0.8;
+    cursor: progress;
+}
+
 .toolbar__button.is-dirty {
     color: var(--vscode-editorWarning-foreground, #cca700);
 }
@@ -213,6 +222,12 @@ body {
 .toolbar__button:disabled {
     opacity: 0.45;
     cursor: default;
+}
+
+@keyframes toolbar-button-icon-spin {
+    to {
+        transform: rotate(360deg);
+    }
 }
 
 .summary {

@@ -13,7 +13,9 @@ import {
 } from "../webview/editor-panel-logic";
 import {
     captureStructuralSnapshot,
+    createCommittedWorkbookState,
     createPendingWorkbookEditState,
+    restorePendingWorkbookState,
     createWorkingSheetEntries,
     mapPendingCellEditsToWebview,
     restoreStructuralSnapshot,
@@ -23,7 +25,8 @@ function createCell(
     rowNumber: number,
     columnNumber: number,
     value: string,
-    formula: string | null = null
+    formula: string | null = null,
+    styleId: number | null = null
 ): CellSnapshot {
     return {
         key: createCellKey(rowNumber, columnNumber),
@@ -32,7 +35,7 @@ function createCell(
         address: getCellAddress(rowNumber, columnNumber),
         displayValue: value,
         formula,
-        styleId: null,
+        styleId,
     };
 }
 
@@ -227,5 +230,119 @@ suite("Editor panel state helpers", () => {
                 freezePane: { rowCount: 1, columnCount: 1 },
             },
         ]);
+    });
+
+    test("commits working sheets and pending cell edits into a saved workbook snapshot", () => {
+        const workbook = createWorkbook("editor.xlsx", [
+            createSheet("Sheet1", [createCell(2, 2, "before", null, 7)], {
+                rowCount: 5,
+                columnCount: 4,
+            }),
+            createSheet("Sheet2", [], { rowCount: 4, columnCount: 3 }),
+        ]);
+        const sheetEntries = createWorkingSheetEntries(workbook);
+        sheetEntries[0]!.sheet = {
+            ...sheetEntries[0]!.sheet,
+            name: "Renamed",
+            freezePane: {
+                columnCount: 1,
+                rowCount: 1,
+                topLeftCell: "B2",
+                activePane: "bottomRight",
+            },
+        };
+
+        const committedState = createCommittedWorkbookState(workbook, sheetEntries, [
+            {
+                sheetName: "Renamed",
+                rowNumber: 2,
+                columnNumber: 2,
+                value: "after",
+            },
+            {
+                sheetName: "Sheet2",
+                rowNumber: 4,
+                columnNumber: 3,
+                value: "tail",
+            },
+        ]);
+        const committedWorkbook = committedState.workbook;
+
+        assert.deepStrictEqual(
+            workbook.sheets.map((sheet) => sheet.name),
+            ["Sheet1", "Sheet2"]
+        );
+        assert.deepStrictEqual(
+            committedWorkbook.sheets.map((sheet) => sheet.name),
+            ["Renamed", "Sheet2"]
+        );
+        assert.deepStrictEqual(committedWorkbook.sheets[0]!.freezePane, {
+            columnCount: 1,
+            rowCount: 1,
+            topLeftCell: "B2",
+            activePane: "bottomRight",
+        });
+        assert.strictEqual(committedWorkbook.sheets[0]!.cells["2:2"]!.displayValue, "after");
+        assert.strictEqual(committedWorkbook.sheets[0]!.cells["2:2"]!.styleId, 7);
+        assert.strictEqual(committedWorkbook.sheets[1]!.cells["4:3"]!.displayValue, "tail");
+        assert.strictEqual(committedWorkbook.sheets[1]!.cells["4:3"]!.address, "C4");
+        assert.strictEqual(committedState.sheetEntries[0]!.sheet.cells["2:2"]!.displayValue, "after");
+        assert.strictEqual(sheetEntries[0]!.sheet.cells["2:2"]!.displayValue, "before");
+    });
+
+    test("restores working state from pending workbook edits", () => {
+        const workbook = createWorkbook("editor.xlsx", [
+            createSheet("Sheet1", [createCell(1, 1, "base")], { rowCount: 5, columnCount: 3 }),
+        ]);
+
+        const restored = restorePendingWorkbookState(workbook, {
+            cellEdits: [
+                {
+                    sheetName: "Renamed",
+                    rowNumber: 2,
+                    columnNumber: 2,
+                    value: "changed",
+                },
+            ],
+            sheetEdits: [
+                {
+                    type: "renameSheet",
+                    sheetKey: "sheet:0",
+                    sheetName: "Sheet1",
+                    nextSheetName: "Renamed",
+                },
+                {
+                    type: "addSheet",
+                    sheetKey: "sheet:new:3",
+                    sheetName: "Added",
+                    targetIndex: 1,
+                },
+            ],
+            viewEdits: [
+                {
+                    sheetKey: "sheet:0",
+                    sheetName: "Renamed",
+                    freezePane: {
+                        rowCount: 1,
+                        columnCount: 1,
+                    },
+                },
+            ],
+        });
+
+        assert.deepStrictEqual(
+            restored.sheetEntries.map((entry) => entry.sheet.name),
+            ["Renamed", "Added"]
+        );
+        assert.deepStrictEqual(restored.sheetEntries[0]!.sheet.freezePane, {
+            rowCount: 1,
+            columnCount: 1,
+            topLeftCell: "B2",
+            activePane: "bottomRight",
+        });
+        assert.strictEqual(restored.pendingCellEdits[0]!.sheetName, "Renamed");
+        assert.strictEqual(restored.pendingSheetEdits.length, 2);
+        assert.strictEqual(restored.pendingViewEdits.length, 1);
+        assert.strictEqual(restored.nextNewSheetId, 4);
     });
 });

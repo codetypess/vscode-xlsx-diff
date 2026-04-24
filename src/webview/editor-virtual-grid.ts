@@ -38,6 +38,38 @@ export function getFrozenEditorCounts({
     };
 }
 
+export function getVisibleFrozenEditorCounts({
+    frozenRowCount,
+    frozenColumnCount,
+    viewportHeight,
+    viewportWidth,
+    rowHeaderWidth,
+}: {
+    frozenRowCount: number;
+    frozenColumnCount: number;
+    viewportHeight: number;
+    viewportWidth: number;
+    rowHeaderWidth: number;
+}): { rowCount: number; columnCount: number } {
+    const visibleFrozenRowCount = Math.max(
+        0,
+        Math.floor(
+            Math.max(0, viewportHeight - EDITOR_VIRTUAL_HEADER_HEIGHT) / EDITOR_VIRTUAL_ROW_HEIGHT
+        )
+    );
+    const visibleFrozenColumnCount = Math.max(
+        0,
+        Math.floor(
+            Math.max(0, viewportWidth - rowHeaderWidth) / EDITOR_VIRTUAL_COLUMN_WIDTH
+        )
+    );
+
+    return {
+        rowCount: Math.min(frozenRowCount, visibleFrozenRowCount),
+        columnCount: Math.min(frozenColumnCount, visibleFrozenColumnCount),
+    };
+}
+
 export function createEditorRowWindow({
     totalRows,
     frozenRowCount,

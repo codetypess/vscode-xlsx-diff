@@ -1,4 +1,5 @@
-import { getCellAddress } from "../core/model/cells";
+import { createCellKey, getCellAddress } from "../core/model/cells";
+import { DEFAULT_PAGE_SIZE } from "../constants";
 import type {
     CellEdit,
     SheetEdit,
@@ -109,6 +110,169 @@ export function createWorkingWorkbook(
     return {
         ...workbook,
         sheets: sheetEntries.map((entry) => entry.sheet),
+    };
+}
+
+export function createCommittedWorkbookState(
+    workbook: WorkbookSnapshot,
+    sheetEntries: WorkingSheetEntry[],
+    pendingCellEdits: CellEdit[]
+): {
+    workbook: WorkbookSnapshot;
+    sheetEntries: WorkingSheetEntry[];
+} {
+    const sheetEntryIndexes = new Map(
+        sheetEntries.map((entry, index) => [entry.sheet.name, index] as const)
+    );
+    const clonedSheetIndexes = new Set<number>();
+    let committedEntries = sheetEntries;
+
+    for (const edit of pendingCellEdits) {
+        const entryIndex = sheetEntryIndexes.get(edit.sheetName);
+        if (entryIndex === undefined) {
+            continue;
+        }
+
+        if (committedEntries === sheetEntries) {
+            committedEntries = [...sheetEntries];
+        }
+
+        if (!clonedSheetIndexes.has(entryIndex)) {
+            const sourceEntry = committedEntries[entryIndex]!;
+            committedEntries[entryIndex] = {
+                ...sourceEntry,
+                sheet: {
+                    ...sourceEntry.sheet,
+                    cells: { ...sourceEntry.sheet.cells },
+                },
+            };
+            clonedSheetIndexes.add(entryIndex);
+        }
+
+        const entry = committedEntries[entryIndex]!;
+        const key = createCellKey(edit.rowNumber, edit.columnNumber);
+        const currentCell = entry.sheet.cells[key];
+        entry.sheet = {
+            ...entry.sheet,
+            cells: {
+                ...entry.sheet.cells,
+                [key]: {
+                    key,
+                    rowNumber: edit.rowNumber,
+                    columnNumber: edit.columnNumber,
+                    address: currentCell?.address ?? getCellAddress(edit.rowNumber, edit.columnNumber),
+                    displayValue: edit.value,
+                    formula: null,
+                    styleId: currentCell?.styleId ?? null,
+                },
+            },
+        };
+    }
+
+    const committedWorkbook: WorkbookSnapshot = {
+        ...workbook,
+        sheets: committedEntries.map((entry) => ({ ...entry.sheet })),
+    };
+
+    return {
+        workbook: committedWorkbook,
+        sheetEntries: committedEntries,
+    };
+}
+
+export function restorePendingWorkbookState(
+    workbook: WorkbookSnapshot,
+    pendingState: Readonly<WorkbookEditState>
+): {
+    sheetEntries: WorkingSheetEntry[];
+    pendingCellEdits: CellEdit[];
+    pendingSheetEdits: SheetEdit[];
+    pendingViewEdits: SheetViewEdit[];
+    nextNewSheetId: number;
+} {
+    let sheetEntries = createWorkingSheetEntries(workbook);
+    const pendingCellEdits = pendingState.cellEdits.map(cloneCellEdit);
+    const pendingSheetEdits = pendingState.sheetEdits.map(cloneSheetEdit);
+    const pendingViewEdits = (pendingState.viewEdits ?? []).map(cloneViewEdit);
+
+    for (const edit of pendingSheetEdits) {
+        if (edit.type === "addSheet") {
+            const newEntry: WorkingSheetEntry = {
+                key: edit.sheetKey,
+                index: edit.targetIndex,
+                sheet: {
+                    name: edit.sheetName,
+                    rowCount: DEFAULT_PAGE_SIZE,
+                    columnCount: 26,
+                    mergedRanges: [],
+                    cells: {},
+                    freezePane: null,
+                    signature: `pending:${edit.sheetKey}:${edit.sheetName}`,
+                },
+            };
+            sheetEntries = reindexWorkingSheetEntries([
+                ...sheetEntries.slice(0, edit.targetIndex),
+                newEntry,
+                ...sheetEntries.slice(edit.targetIndex),
+            ]);
+            continue;
+        }
+
+        if (edit.type === "deleteSheet") {
+            sheetEntries = reindexWorkingSheetEntries(
+                sheetEntries.filter(
+                    (entry) =>
+                        entry.key !== edit.sheetKey && entry.sheet.name !== edit.sheetName
+                )
+            );
+            continue;
+        }
+
+        sheetEntries = sheetEntries.map((entry) =>
+            entry.key === edit.sheetKey
+                ? {
+                      ...entry,
+                      sheet: {
+                          ...entry.sheet,
+                          name: edit.nextSheetName,
+                          signature: `pending:${edit.sheetKey}:${edit.nextSheetName}`,
+                      },
+                  }
+                : entry
+        );
+    }
+
+    for (const edit of pendingViewEdits) {
+        sheetEntries = sheetEntries.map((entry) =>
+            entry.key === edit.sheetKey
+                ? {
+                      ...entry,
+                      sheet: {
+                          ...entry.sheet,
+                          freezePane: edit.freezePane
+                              ? createFreezePaneSnapshot(
+                                    edit.freezePane.columnCount,
+                                    edit.freezePane.rowCount
+                                )
+                              : null,
+                      },
+                  }
+                : entry
+        );
+    }
+
+    const nextNewSheetId =
+        sheetEntries.reduce((maxId, entry) => {
+            const match = /^sheet:new:(\d+)$/.exec(entry.key);
+            return match ? Math.max(maxId, Number(match[1])) : maxId;
+        }, 0) + 1;
+
+    return {
+        sheetEntries,
+        pendingCellEdits,
+        pendingSheetEdits,
+        pendingViewEdits,
+        nextNewSheetId,
     };
 }
 

@@ -13,6 +13,7 @@ import {
     getEditorRowHeaderWidth,
     getEditorScrollPositionForCell,
     getFrozenEditorCounts,
+    getVisibleFrozenEditorCounts,
 } from "../webview/editor-virtual-grid";
 
 suite("Editor virtual grid helpers", () => {
@@ -84,5 +85,21 @@ suite("Editor virtual grid helpers", () => {
         );
         assert.strictEqual(clampEditorScrollPosition(-10, 200), 0);
         assert.strictEqual(clampEditorScrollPosition(250, 200), 200);
+    });
+
+    test("clips rendered frozen panes to the current viewport", () => {
+        assert.deepStrictEqual(
+            getVisibleFrozenEditorCounts({
+                frozenRowCount: 200,
+                frozenColumnCount: 20,
+                viewportHeight: 600,
+                viewportWidth: 900,
+                rowHeaderWidth: 56,
+            }),
+            {
+                rowCount: 20,
+                columnCount: 7,
+            }
+        );
     });
 });

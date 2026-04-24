@@ -118,10 +118,16 @@ export class XlsxEditorDocument implements vscode.CustomDocument {
 
     public constructor(
         public readonly uri: vscode.Uri,
-        backupUri?: vscode.Uri
+        options?: {
+            backupUri?: vscode.Uri;
+            backupState?: Readonly<WorkbookEditState>;
+        }
     ) {
-        this.backupUri = backupUri ?? null;
-        this.shouldMarkDirtyFromBackup = Boolean(backupUri);
+        this.backupUri = options?.backupUri ?? null;
+        this.shouldMarkDirtyFromBackup = Boolean(options?.backupUri || options?.backupState);
+        if (options?.backupState) {
+            this.replacePendingState(options.backupState);
+        }
     }
 
     public dispose(): void {}

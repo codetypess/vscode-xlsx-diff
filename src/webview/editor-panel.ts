@@ -21,8 +21,10 @@ import {
 import {
     areFreezePaneCountsEqual,
     captureStructuralSnapshot,
+    createCommittedWorkbookState,
     createFreezePaneSnapshot,
     createPendingWorkbookEditState,
+    restorePendingWorkbookState,
     createWorkingSheetEntries,
     createWorkingWorkbook,
     mapPendingCellEditsToWebview,
@@ -161,6 +163,7 @@ export class XlsxEditorPanel {
     private hasQueuedReload = false;
     private autoRefreshTimer: ReturnType<typeof setTimeout> | undefined;
     private suppressAutoRefreshUntil = 0;
+    private isSavingDocument = false;
     private hasWarnedPendingExternalChange = false;
     private pendingCellEdits: CellEdit[] = [];
     private pendingSheetEdits: SheetEdit[] = [];
@@ -241,6 +244,14 @@ export class XlsxEditorPanel {
         );
     }
 
+    public static async commitDocumentSave(document: XlsxEditorDocument): Promise<void> {
+        await Promise.all(
+            [...XlsxEditorPanel.panels.values()]
+                .filter((panel) => panel.document === document)
+                .map((panel) => panel.commitSavedState())
+        );
+    }
+
     public static async refreshAll(): Promise<void> {
         await Promise.all(
             [...XlsxEditorPanel.panels.values()].map((panel) =>
@@ -250,10 +261,7 @@ export class XlsxEditorPanel {
     }
 
     private dispose(): void {
-        if (this.autoRefreshTimer) {
-            clearTimeout(this.autoRefreshTimer);
-            this.autoRefreshTimer = undefined;
-        }
+        this.clearAutoRefreshTimer();
 
         this.disposeFileWatchers();
 
@@ -283,22 +291,24 @@ export class XlsxEditorPanel {
                 escapeWatcherGlobSegment(path.basename(this.workbookUri.fsPath))
             )
         );
-        const scheduleRefresh = () => {
-            this.scheduleAutoRefresh();
+        const scheduleRefresh = (eventType: "change" | "create" | "delete") => {
+            this.scheduleAutoRefresh(eventType);
         };
 
         this.fileWatchers.push(watcher);
-        this.fileWatchers.push(watcher.onDidChange(scheduleRefresh));
-        this.fileWatchers.push(watcher.onDidCreate(scheduleRefresh));
-        this.fileWatchers.push(watcher.onDidDelete(scheduleRefresh));
+        this.fileWatchers.push(watcher.onDidChange(() => scheduleRefresh("change")));
+        this.fileWatchers.push(watcher.onDidCreate(() => scheduleRefresh("create")));
+        this.fileWatchers.push(watcher.onDidDelete(() => scheduleRefresh("delete")));
     }
 
-    private scheduleAutoRefresh(): void {
+    private scheduleAutoRefresh(trigger: "change" | "create" | "delete"): void {
+        if (this.isSavingDocument) {
+            this.clearAutoRefreshTimer();
+            return;
+        }
+
         if (Date.now() < this.suppressAutoRefreshUntil) {
-            if (this.autoRefreshTimer) {
-                clearTimeout(this.autoRefreshTimer);
-                this.autoRefreshTimer = undefined;
-            }
+            this.clearAutoRefreshTimer();
 
             return;
         }
@@ -314,9 +324,7 @@ export class XlsxEditorPanel {
             return;
         }
 
-        if (this.autoRefreshTimer) {
-            clearTimeout(this.autoRefreshTimer);
-        }
+        this.clearAutoRefreshTimer();
 
         this.autoRefreshTimer = setTimeout(() => {
             this.autoRefreshTimer = undefined;
@@ -553,8 +561,15 @@ export class XlsxEditorPanel {
                     return;
                 }
                 case "requestSave":
-                    this.suppressAutoRefreshUntil = Date.now() + 2000;
-                    await this.controller.onRequestSave();
+                    this.isSavingDocument = true;
+                    this.clearAutoRefreshTimer();
+                    this.suppressAutoRefreshUntil = Number.POSITIVE_INFINITY;
+                    try {
+                        await this.controller.onRequestSave();
+                    } finally {
+                        this.isSavingDocument = false;
+                        this.suppressAutoRefreshUntil = Date.now() + 1500;
+                    }
                     return;
                 case "undoSheetEdit":
                     await this.undoStructuralEdit();
@@ -602,6 +617,51 @@ export class XlsxEditorPanel {
         return createWorkingWorkbook(this.workbook, this.workingSheetEntries);
     }
 
+    private async commitSavedState(): Promise<void> {
+        if (!this.workbook) {
+            await this.enqueueReload({ silent: true, clearPendingEdits: true });
+            return;
+        }
+
+        const activeSheetName = this.getActiveSheetEntry()?.sheet.name ?? null;
+        const selectedCell = this.state.selectedCell ? { ...this.state.selectedCell } : null;
+        const committedState = createCommittedWorkbookState(
+            this.workbook,
+            this.workingSheetEntries,
+            this.pendingCellEdits
+        );
+
+        this.workbook = committedState.workbook;
+        this.workingSheetEntries = committedState.sheetEntries;
+        this.nextNewSheetId = 1;
+        this.pendingCellEdits = [];
+        this.pendingSheetEdits = [];
+        this.pendingViewEdits = [];
+        this.sheetUndoStack.length = 0;
+        this.sheetRedoStack.length = 0;
+        this.hasWarnedPendingExternalChange = false;
+
+        const nextActiveEntry =
+            (activeSheetName
+                ? this.workingSheetEntries.find((entry) => entry.sheet.name === activeSheetName)
+                : null) ?? this.workingSheetEntries[0] ?? null;
+
+        this.state = normalizeEditorPanelState(
+            this.getWorkingWorkbook()!,
+            {
+                activeSheetKey: nextActiveEntry?.key ?? null,
+                selectedCell,
+            },
+            this.getSheetEntries()
+        );
+
+        await this.render(undefined, {
+            silent: true,
+            clearPendingEdits: true,
+            useModelSelection: true,
+        });
+    }
+
     private getSheetEntries(): WorkingSheetEntry[] {
         return this.workingSheetEntries;
     }
@@ -612,6 +672,15 @@ export class XlsxEditorPanel {
             this.pendingSheetEdits,
             this.pendingViewEdits
         );
+    }
+
+    private clearAutoRefreshTimer(): void {
+        if (!this.autoRefreshTimer) {
+            return;
+        }
+
+        clearTimeout(this.autoRefreshTimer);
+        this.autoRefreshTimer = undefined;
     }
 
     private captureStructuralSnapshot() {
@@ -776,24 +845,20 @@ export class XlsxEditorPanel {
             return;
         }
 
-        await this.commitStructuralMutation(
-            () => {
-                const entry = this.getActiveSheetEntry();
-                if (!entry) {
-                    return;
-                }
+        const nextFreezePane = isLocked
+            ? null
+            : createFreezePaneSnapshot(nextColumnCount, nextRowCount);
+        activeEntry.sheet = {
+            ...activeEntry.sheet,
+            freezePane: nextFreezePane,
+        };
+        this.updatePendingViewLock(activeEntry.key, activeEntry.sheet.name, nextFreezePane);
 
-                const nextFreezePane = isLocked
-                    ? null
-                    : createFreezePaneSnapshot(nextColumnCount, nextRowCount);
-                entry.sheet = {
-                    ...entry.sheet,
-                    freezePane: nextFreezePane,
-                };
-                this.updatePendingViewLock(entry.key, entry.sheet.name, nextFreezePane);
-            },
-            { resetPendingHistory: false }
-        );
+        await this.syncPendingState();
+        await this.render(undefined, {
+            useModelSelection: true,
+            replacePendingEdits: this.pendingCellEdits,
+        });
     }
 
     private async undoStructuralEdit(): Promise<void> {
@@ -1033,6 +1098,24 @@ export class XlsxEditorPanel {
             this.sheetUndoStack.length = 0;
             this.sheetRedoStack.length = 0;
         }
+        const documentPendingState = this.document.getPendingState();
+        const shouldRestoreDocumentPendingState =
+            !clearPendingEdits &&
+            this.pendingCellEdits.length === 0 &&
+            this.pendingSheetEdits.length === 0 &&
+            this.pendingViewEdits.length === 0 &&
+            documentPendingState.cellEdits.length +
+                documentPendingState.sheetEdits.length +
+                (documentPendingState.viewEdits?.length ?? 0) >
+                0;
+        if (shouldRestoreDocumentPendingState) {
+            const restored = restorePendingWorkbookState(this.workbook, documentPendingState);
+            this.workingSheetEntries = restored.sheetEntries;
+            this.pendingCellEdits = restored.pendingCellEdits;
+            this.pendingSheetEdits = restored.pendingSheetEdits;
+            this.pendingViewEdits = restored.pendingViewEdits;
+            this.nextNewSheetId = restored.nextNewSheetId;
+        }
         this.state = this.workingSheetEntries.length
             ? normalizeEditorPanelState(
                   this.getWorkingWorkbook()!,
@@ -1061,6 +1144,10 @@ export class XlsxEditorPanel {
             silent,
             clearPendingEdits,
             useModelSelection: true,
+            replacePendingEdits:
+                clearPendingEdits || this.pendingCellEdits.length === 0
+                    ? undefined
+                    : this.pendingCellEdits,
         });
     }
 
