@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import * as path from "node:path";
 import * as vscode from "vscode";
-import { isChineseDisplayLanguage } from "../display-language";
+import { formatI18nMessage, getRuntimeMessages } from "../i18n";
 import type {
     WorkbookDiffUris,
     ScmWorkbookResourceInfo,
@@ -67,15 +67,15 @@ function parseSvnGraphUriDescriptor(uri: vscode.Uri): SvnGraphUriDescriptor | un
 }
 
 function createSourceLabel(): string {
-    return isChineseDisplayLanguage() ? "来源" : "Source";
+    return getRuntimeMessages().scm.sourceLabel;
 }
 
 function createSvnRefLabel(ref: string): string {
-    return isChineseDisplayLanguage() ? `SVN 引用: ${ref}` : `SVN ref: ${ref}`;
+    return formatI18nMessage(getRuntimeMessages().scm.svnRefLabel, { ref });
 }
 
 function createEmptyWorkbookLabel(): string {
-    return isChineseDisplayLanguage() ? "空工作簿" : "Empty workbook";
+    return getRuntimeMessages().scm.emptyWorkbookLabel;
 }
 
 function createSvnGraphRef(revision: string): string {
@@ -239,7 +239,7 @@ export function getSvnWorkbookResourceDetail(
     }
 
     return {
-        label: isChineseDisplayLanguage() ? "来源" : "Source",
+        label: createSourceLabel(),
         value: createSvnRefLabel(info.ref),
         titleValue: info.ref,
     };

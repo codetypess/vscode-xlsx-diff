@@ -8,7 +8,8 @@ import {
     type SheetViewEdit,
 } from "../core/fastxlsx/write-cell-value";
 import type { EditorPanelState, EditorRenderModel, WorkbookSnapshot } from "../core/model/types";
-import { getHtmlLanguageTag, isChineseDisplayLanguage } from "../display-language";
+import { getHtmlLanguageTag } from "../display-language";
+import { getRuntimeMessages } from "../i18n";
 import { rememberRecentWorkbookResourceUri } from "../scm/recent-workbook-resource-context";
 import { getWorkbookResourceName } from "../workbook/resource-uri";
 import {
@@ -19,17 +20,20 @@ import {
     validateEditorSheetName,
 } from "./editor-panel-logic";
 import {
+    applyGridSheetEditToSheet,
     areFreezePaneCountsEqual,
     captureStructuralSnapshot,
     createCommittedWorkbookState,
     createFreezePaneSnapshot,
     createPendingWorkbookEditState,
+    isGridSheetEdit,
     restorePendingWorkbookState,
     createWorkingSheetEntries,
     createWorkingWorkbook,
     mapPendingCellEditsToWebview,
     reindexWorkingSheetEntries,
     restoreStructuralSnapshot,
+    shiftPendingCellEditsForGridSheetEdit,
 } from "./editor-panel-state";
 import type {
     EditorPanelStrings,
@@ -61,86 +65,7 @@ function escapeWatcherGlobSegment(value: string): string {
 }
 
 function getWebviewStrings(): EditorPanelStrings {
-    if (isChineseDisplayLanguage()) {
-        return {
-            loading: "正在加载 XLSX 编辑器...",
-            reload: "刷新",
-            undo: "撤销",
-            redo: "重做",
-            searchPlaceholder: "搜索值或公式",
-            findPrev: "上一个",
-            findNext: "下一个",
-            gotoPlaceholder: "A1 或 Sheet1!B2",
-            goto: "定位",
-            cancelInput: "取消输入",
-            confirmInput: "确认输入",
-            save: "保存",
-            lockView: "锁定视图",
-            unlockView: "取消锁定视图",
-            addSheet: "添加工作表",
-            deleteSheet: "删除工作表",
-            renameSheet: "重命名工作表",
-            renameSheetPrompt: "输入新的工作表名称",
-            renameSheetTitle: "重命名工作表",
-            sheetNameEmpty: "工作表名称不能为空。",
-            sheetNameDuplicate: "工作表名称已存在。",
-            sheetNameTooLong: "工作表名称不能超过 31 个字符。",
-            sheetNameInvalidChars: "工作表名称不能包含 \\ / ? * [ ] : 等字符。",
-            selectedCell: "当前单元格",
-            noCellSelected: "未选择",
-            noRowsAvailable: "当前视图没有可显示的行。",
-            localChangesBlockedReload:
-                "工作簿文件已在磁盘上变化。请先保存或放弃当前未保存修改，再刷新。",
-            displayLanguageRefreshBlocked: "当前有未保存修改，语言变更将在保存或手动刷新后生效。",
-            noSearchMatches: "没有找到匹配的单元格。",
-            invalidCellReference:
-                "无法定位该单元格，请使用 A1 或 Sheet1!B2 格式，并确保目标在当前工作簿范围内。",
-            invalidSearchPattern: "搜索表达式无效。",
-            searchRegex: "使用正则表达式",
-            searchMatchCase: "区分大小写",
-            searchWholeWord: "匹配整个单词",
-        };
-    }
-
-    return {
-        loading: "Loading XLSX editor...",
-        reload: "Reload",
-        undo: "Undo",
-        redo: "Redo",
-        searchPlaceholder: "Search values or formulas",
-        findPrev: "Prev Match",
-        findNext: "Next Match",
-        gotoPlaceholder: "A1 or Sheet1!B2",
-        goto: "Go",
-        cancelInput: "Cancel input",
-        confirmInput: "Apply input",
-        save: "Save",
-        lockView: "Lock View",
-        unlockView: "Unlock View",
-        addSheet: "Add Sheet",
-        deleteSheet: "Delete Sheet",
-        renameSheet: "Rename Sheet",
-        renameSheetPrompt: "Enter a new sheet name",
-        renameSheetTitle: "Rename Sheet",
-        sheetNameEmpty: "Sheet name cannot be empty.",
-        sheetNameDuplicate: "A sheet with this name already exists.",
-        sheetNameTooLong: "Sheet names must be 31 characters or fewer.",
-        sheetNameInvalidChars: "Sheet names cannot contain \\ / ? * [ ] or :.",
-        selectedCell: "Selected cell",
-        noCellSelected: "None",
-        noRowsAvailable: "No rows available in this view.",
-        localChangesBlockedReload:
-            "The workbook changed on disk. Save or discard your pending edits before reloading.",
-        displayLanguageRefreshBlocked:
-            "Pending edits are open. Display language changes will apply after you save or reload the editor.",
-        noSearchMatches: "No matching cells were found.",
-        invalidCellReference:
-            "Unable to locate that cell. Use A1 or Sheet1!B2 and stay within the workbook range.",
-        invalidSearchPattern: "The search pattern is invalid.",
-        searchRegex: "Use Regular Expression",
-        searchMatchCase: "Match Case",
-        searchWholeWord: "Match Whole Word",
-    };
+    return getRuntimeMessages().editorPanel;
 }
 
 export class XlsxEditorPanel {
@@ -484,6 +409,18 @@ export class XlsxEditorPanel {
                 case "renameSheet":
                     await this.renamePendingSheet(message.sheetKey);
                     return;
+                case "insertRow":
+                    await this.insertPendingRow(message.rowNumber);
+                    return;
+                case "deleteRow":
+                    await this.deletePendingRow(message.rowNumber);
+                    return;
+                case "insertColumn":
+                    await this.insertPendingColumn(message.columnNumber);
+                    return;
+                case "deleteColumn":
+                    await this.deletePendingColumn(message.columnNumber);
+                    return;
                 case "search": {
                     if (!this.getWorkingWorkbook()) {
                         return;
@@ -580,10 +517,7 @@ export class XlsxEditorPanel {
                     });
 
                     this.pendingCellEdits = cellEdits;
-                    await this.controller.onPendingStateChanged({
-                        cellEdits: this.pendingCellEdits,
-                        sheetEdits: this.pendingSheetEdits,
-                    });
+                    await this.controller.onPendingStateChanged(this.createPendingState());
                     if (cellEdits.length === 0 && !this.document.hasPendingEdits()) {
                         this.hasWarnedPendingExternalChange = false;
                     }
@@ -897,6 +831,36 @@ export class XlsxEditorPanel {
         );
     }
 
+    private updatePendingGridEditRename(sheetKey: string, nextName: string): void {
+        this.pendingSheetEdits = this.pendingSheetEdits.map((edit) =>
+            isGridSheetEdit(edit) && edit.sheetKey === sheetKey
+                ? {
+                      ...edit,
+                      sheetName: nextName,
+                  }
+                : edit
+        );
+    }
+
+    private setActiveSheetSelection(rowNumber: number, columnNumber: number): void {
+        const workbook = this.getWorkingWorkbook();
+        const activeSheetKey = this.state.activeSheetKey;
+        if (!workbook || !activeSheetKey) {
+            return;
+        }
+
+        this.state = setSelectedEditorCell(
+            workbook,
+            {
+                ...this.state,
+                activeSheetKey,
+            },
+            rowNumber,
+            columnNumber,
+            this.getSheetEntries()
+        );
+    }
+
     private async toggleViewLock(columnCount: number, rowCount: number): Promise<void> {
         const workbook = this.getWorkingWorkbook();
         const activeEntry = this.getActiveSheetEntry();
@@ -980,9 +944,10 @@ export class XlsxEditorPanel {
     }
 
     private getNewSheetName(): string {
-        return getNewEditorSheetName(this.workingSheetEntries, {
-            isChinese: isChineseDisplayLanguage(),
-        });
+        return getNewEditorSheetName(
+            this.workingSheetEntries,
+            getRuntimeMessages().workbook.newSheetBaseName
+        );
     }
 
     private getInsertSheetIndex(): number {
@@ -1069,6 +1034,9 @@ export class XlsxEditorPanel {
                     (edit) => edit.sheetKey !== sheetKey
                 );
             } else {
+                this.pendingSheetEdits = this.pendingSheetEdits.filter(
+                    (edit) => !(isGridSheetEdit(edit) && edit.sheetKey === sheetKey)
+                );
                 this.pendingSheetEdits = [
                     ...this.pendingSheetEdits,
                     {
@@ -1130,6 +1098,7 @@ export class XlsxEditorPanel {
                 edit.sheetName === previousName ? { ...edit, sheetName: trimmedName } : edit
             );
             this.updatePendingRename(sheetKey, previousName, trimmedName);
+            this.updatePendingGridEditRename(sheetKey, trimmedName);
             this.updatePendingViewRename(sheetKey, trimmedName);
             this.state = setActiveEditorSheet(
                 this.getWorkingWorkbook()!,
@@ -1139,6 +1108,180 @@ export class XlsxEditorPanel {
                 },
                 sheetKey,
                 this.getSheetEntries()
+            );
+        });
+    }
+
+    private async insertPendingRow(rowNumber: number): Promise<void> {
+        const workbook = this.getWorkingWorkbook();
+        const activeEntry = this.getActiveSheetEntry();
+        if (
+            !workbook ||
+            workbook.isReadonly ||
+            !activeEntry ||
+            !Number.isInteger(rowNumber) ||
+            rowNumber < 1 ||
+            rowNumber > activeEntry.sheet.rowCount
+        ) {
+            return;
+        }
+
+        await this.commitStructuralMutation(() => {
+            const entry = this.getActiveSheetEntry();
+            if (!entry) {
+                return;
+            }
+
+            const edit: SheetEdit = {
+                type: "insertRow",
+                sheetKey: entry.key,
+                sheetName: entry.sheet.name,
+                rowNumber,
+                count: 1,
+            };
+            entry.sheet = applyGridSheetEditToSheet(entry.sheet, edit);
+            this.pendingCellEdits = shiftPendingCellEditsForGridSheetEdit(
+                this.pendingCellEdits,
+                edit
+            );
+            this.pendingSheetEdits = [...this.pendingSheetEdits, edit];
+            this.setActiveSheetSelection(
+                rowNumber,
+                Math.min(
+                    Math.max(this.state.selectedCell?.columnNumber ?? 1, 1),
+                    Math.max(entry.sheet.columnCount, 1)
+                )
+            );
+        });
+    }
+
+    private async deletePendingRow(rowNumber: number): Promise<void> {
+        const workbook = this.getWorkingWorkbook();
+        const activeEntry = this.getActiveSheetEntry();
+        if (
+            !workbook ||
+            workbook.isReadonly ||
+            !activeEntry ||
+            activeEntry.sheet.rowCount <= 1 ||
+            !Number.isInteger(rowNumber) ||
+            rowNumber < 1 ||
+            rowNumber > activeEntry.sheet.rowCount
+        ) {
+            return;
+        }
+
+        await this.commitStructuralMutation(() => {
+            const entry = this.getActiveSheetEntry();
+            if (!entry) {
+                return;
+            }
+
+            const edit: SheetEdit = {
+                type: "deleteRow",
+                sheetKey: entry.key,
+                sheetName: entry.sheet.name,
+                rowNumber,
+                count: 1,
+            };
+            entry.sheet = applyGridSheetEditToSheet(entry.sheet, edit);
+            this.pendingCellEdits = shiftPendingCellEditsForGridSheetEdit(
+                this.pendingCellEdits,
+                edit
+            );
+            this.pendingSheetEdits = [...this.pendingSheetEdits, edit];
+            this.setActiveSheetSelection(
+                Math.min(rowNumber, Math.max(entry.sheet.rowCount, 1)),
+                Math.min(
+                    Math.max(this.state.selectedCell?.columnNumber ?? 1, 1),
+                    Math.max(entry.sheet.columnCount, 1)
+                )
+            );
+        });
+    }
+
+    private async insertPendingColumn(columnNumber: number): Promise<void> {
+        const workbook = this.getWorkingWorkbook();
+        const activeEntry = this.getActiveSheetEntry();
+        if (
+            !workbook ||
+            workbook.isReadonly ||
+            !activeEntry ||
+            !Number.isInteger(columnNumber) ||
+            columnNumber < 1 ||
+            columnNumber > activeEntry.sheet.columnCount
+        ) {
+            return;
+        }
+
+        await this.commitStructuralMutation(() => {
+            const entry = this.getActiveSheetEntry();
+            if (!entry) {
+                return;
+            }
+
+            const edit: SheetEdit = {
+                type: "insertColumn",
+                sheetKey: entry.key,
+                sheetName: entry.sheet.name,
+                columnNumber,
+                count: 1,
+            };
+            entry.sheet = applyGridSheetEditToSheet(entry.sheet, edit);
+            this.pendingCellEdits = shiftPendingCellEditsForGridSheetEdit(
+                this.pendingCellEdits,
+                edit
+            );
+            this.pendingSheetEdits = [...this.pendingSheetEdits, edit];
+            this.setActiveSheetSelection(
+                Math.min(
+                    Math.max(this.state.selectedCell?.rowNumber ?? 1, 1),
+                    Math.max(entry.sheet.rowCount, 1)
+                ),
+                columnNumber
+            );
+        });
+    }
+
+    private async deletePendingColumn(columnNumber: number): Promise<void> {
+        const workbook = this.getWorkingWorkbook();
+        const activeEntry = this.getActiveSheetEntry();
+        if (
+            !workbook ||
+            workbook.isReadonly ||
+            !activeEntry ||
+            activeEntry.sheet.columnCount <= 1 ||
+            !Number.isInteger(columnNumber) ||
+            columnNumber < 1 ||
+            columnNumber > activeEntry.sheet.columnCount
+        ) {
+            return;
+        }
+
+        await this.commitStructuralMutation(() => {
+            const entry = this.getActiveSheetEntry();
+            if (!entry) {
+                return;
+            }
+
+            const edit: SheetEdit = {
+                type: "deleteColumn",
+                sheetKey: entry.key,
+                sheetName: entry.sheet.name,
+                columnNumber,
+                count: 1,
+            };
+            entry.sheet = applyGridSheetEditToSheet(entry.sheet, edit);
+            this.pendingCellEdits = shiftPendingCellEditsForGridSheetEdit(
+                this.pendingCellEdits,
+                edit
+            );
+            this.pendingSheetEdits = [...this.pendingSheetEdits, edit];
+            this.setActiveSheetSelection(
+                Math.min(
+                    Math.max(this.state.selectedCell?.rowNumber ?? 1, 1),
+                    Math.max(entry.sheet.rowCount, 1)
+                ),
+                Math.min(columnNumber, Math.max(entry.sheet.columnCount, 1))
             );
         });
     }

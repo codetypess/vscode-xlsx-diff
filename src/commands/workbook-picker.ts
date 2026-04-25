@@ -1,10 +1,11 @@
 import * as path from "node:path";
 import * as vscode from "vscode";
-import { isChineseDisplayLanguage } from "../display-language";
+import { getRuntimeMessages } from "../i18n";
 
 function getWorkbookFilters(): Record<string, string[]> {
+    const { commands } = getRuntimeMessages();
     return {
-        [isChineseDisplayLanguage() ? "Excel 工作簿" : "Excel Workbooks"]: ["xlsx"],
+        [commands.workbookFilterLabel]: ["xlsx"],
     };
 }
 

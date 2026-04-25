@@ -12,6 +12,7 @@ import {
     validateEditorSheetName,
 } from "../webview/editor-panel-logic";
 import {
+    applyGridSheetEditToSheet,
     captureStructuralSnapshot,
     createCommittedWorkbookState,
     createPendingWorkbookEditState,
@@ -19,6 +20,7 @@ import {
     createWorkingSheetEntries,
     mapPendingCellEditsToWebview,
     restoreStructuralSnapshot,
+    shiftPendingCellEditsForGridSheetEdit,
 } from "../webview/editor-panel-state";
 
 function createCell(
@@ -143,10 +145,7 @@ suite("Editor panel logic", () => {
             "duplicate"
         );
         assert.strictEqual(validateEditorSheetName("bad/name", sheetEntries, strings), "invalid");
-        assert.strictEqual(
-            getNewEditorSheetName(sheetEntries, { isChinese: false }),
-            "Sheet3"
-        );
+        assert.strictEqual(getNewEditorSheetName(sheetEntries, "Sheet"), "Sheet3");
         assert.strictEqual(getInsertEditorSheetIndex(sheetEntries, "sheet:0"), 1);
     });
 });
@@ -344,5 +343,105 @@ suite("Editor panel state helpers", () => {
         assert.strictEqual(restored.pendingSheetEdits.length, 2);
         assert.strictEqual(restored.pendingViewEdits.length, 1);
         assert.strictEqual(restored.nextNewSheetId, 4);
+    });
+
+    test("restores pending row and column edits into working sheet snapshots", () => {
+        const workbook = createWorkbook("editor.xlsx", [
+            createSheet(
+                "Sheet1",
+                [
+                    createCell(1, 1, "A1"),
+                    createCell(2, 2, "B2"),
+                    createCell(3, 3, "C3"),
+                ],
+                { rowCount: 3, columnCount: 3 }
+            ),
+        ]);
+
+        const restored = restorePendingWorkbookState(workbook, {
+            cellEdits: [],
+            sheetEdits: [
+                {
+                    type: "insertRow",
+                    sheetKey: "sheet:0",
+                    sheetName: "Sheet1",
+                    rowNumber: 2,
+                    count: 1,
+                },
+                {
+                    type: "deleteColumn",
+                    sheetKey: "sheet:0",
+                    sheetName: "Sheet1",
+                    columnNumber: 1,
+                    count: 1,
+                },
+            ],
+            viewEdits: [],
+        });
+
+        assert.strictEqual(restored.sheetEntries[0]!.sheet.rowCount, 4);
+        assert.strictEqual(restored.sheetEntries[0]!.sheet.columnCount, 2);
+        assert.strictEqual(restored.sheetEntries[0]!.sheet.cells["1:1"], undefined);
+        assert.strictEqual(restored.sheetEntries[0]!.sheet.cells["3:1"]?.displayValue, "B2");
+        assert.strictEqual(restored.sheetEntries[0]!.sheet.cells["4:2"]?.displayValue, "C3");
+    });
+
+    test("shifts pending cell edits when rows and columns move", () => {
+        const movedAfterRowInsert = shiftPendingCellEditsForGridSheetEdit(
+            [
+                {
+                    sheetName: "Sheet1",
+                    rowNumber: 2,
+                    columnNumber: 2,
+                    value: "pending",
+                },
+            ],
+            {
+                type: "insertRow",
+                sheetKey: "sheet:0",
+                sheetName: "Sheet1",
+                rowNumber: 2,
+                count: 1,
+            }
+        );
+        const movedAfterColumnDelete = shiftPendingCellEditsForGridSheetEdit(
+            movedAfterRowInsert,
+            {
+                type: "deleteColumn",
+                sheetKey: "sheet:0",
+                sheetName: "Sheet1",
+                columnNumber: 1,
+                count: 1,
+            }
+        );
+
+        assert.deepStrictEqual(movedAfterColumnDelete, [
+            {
+                sheetName: "Sheet1",
+                rowNumber: 3,
+                columnNumber: 1,
+                value: "pending",
+            },
+        ]);
+    });
+
+    test("applies grid edits directly to sheet snapshots", () => {
+        const sheet = createSheet(
+            "Sheet1",
+            [createCell(2, 2, "B2"), createCell(3, 3, "C3")],
+            { rowCount: 3, columnCount: 3 }
+        );
+
+        const updatedSheet = applyGridSheetEditToSheet(sheet, {
+            type: "insertColumn",
+            sheetKey: "sheet:0",
+            sheetName: "Sheet1",
+            columnNumber: 2,
+            count: 1,
+        });
+
+        assert.strictEqual(updatedSheet.columnCount, 4);
+        assert.strictEqual(updatedSheet.cells["2:3"]?.displayValue, "B2");
+        assert.strictEqual(updatedSheet.cells["3:4"]?.displayValue, "C3");
     });
 });

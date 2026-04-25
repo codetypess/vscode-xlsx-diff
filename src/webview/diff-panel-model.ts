@@ -6,7 +6,7 @@ import type {
     WorkbookDiffModel,
     WorkbookSnapshot,
 } from "../core/model/types";
-import { isChineseDisplayLanguage } from "../display-language";
+import { getRuntimeMessages } from "../i18n";
 import type {
     DiffPanelFileView,
     DiffPanelRenderModel,
@@ -19,7 +19,7 @@ import type {
 interface MutableSparseCellView extends DiffPanelSparseCellView {}
 
 function getUntitledSheetLabel(): string {
-    return isChineseDisplayLanguage() ? "未命名工作表" : "Untitled Sheet";
+    return getRuntimeMessages().workbook.untitledSheet;
 }
 
 function getWorkbookTitle(workbook: WorkbookSnapshot): string {

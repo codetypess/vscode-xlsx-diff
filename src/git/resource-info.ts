@@ -2,7 +2,7 @@ import { execFile as execFileCallback } from "node:child_process";
 import * as path from "node:path";
 import { promisify } from "node:util";
 import * as vscode from "vscode";
-import { isChineseDisplayLanguage } from "../display-language";
+import { formatI18nMessage, getRuntimeMessages } from "../i18n";
 import type {
     ScmWorkbookResourceInfo,
     ScmWorkbookResourceProvider,
@@ -69,37 +69,34 @@ function createGitResourcePresentation(
         hasStagedChanges?: boolean;
     } = {}
 ): WorkbookResourceDetail {
-    const isChinese = isChineseDisplayLanguage();
-    const sourceLabel = isChinese ? "来源" : "Source";
-    const commitLabel = isChinese ? "提交" : "Commit";
-    const indexLabel = isChinese ? "暂存区" : "Index";
+    const { scm } = getRuntimeMessages();
 
     if (ref === "") {
-        return { label: sourceLabel, value: indexLabel };
+        return { label: scm.sourceLabel, value: scm.indexLabel };
     }
 
     if (/^~\d$/.test(ref)) {
         return {
-            label: sourceLabel,
-            value: isChinese ? `阶段 ${ref[1]}` : `Stage ${ref[1]}`,
+            label: scm.sourceLabel,
+            value: formatI18nMessage(scm.stageLabel, { stage: ref[1] }),
         };
     }
 
     if (ref === "~") {
         if (options.hasStagedChanges) {
             return {
-                label: sourceLabel,
+                label: scm.sourceLabel,
                 value: options.resolvedCommit
-                    ? isChinese
-                        ? `暂存区 · 基线 ${options.resolvedCommit}`
-                        : `Index · base ${options.resolvedCommit}`
-                    : indexLabel,
+                    ? formatI18nMessage(scm.indexBaseLabel, {
+                          commit: options.resolvedCommit,
+                      })
+                    : scm.indexLabel,
                 titleValue: options.resolvedCommit,
             };
         }
 
         return {
-            label: commitLabel,
+            label: scm.commitLabel,
             value: options.resolvedCommit ?? "HEAD",
             titleValue: options.resolvedCommit,
         };
@@ -107,15 +104,15 @@ function createGitResourcePresentation(
 
     if (options.resolvedCommit) {
         return {
-            label: commitLabel,
+            label: scm.commitLabel,
             value: options.resolvedCommit,
             titleValue: options.resolvedCommit,
         };
     }
 
     return {
-        label: sourceLabel,
-        value: isChinese ? `Git 引用: ${ref}` : `Git ref: ${ref}`,
+        label: scm.sourceLabel,
+        value: formatI18nMessage(scm.gitRefLabel, { ref }),
     };
 }
 
@@ -153,7 +150,7 @@ export function getGitWorkbookResourceTimeLabel(
         return undefined;
     }
 
-    return isChineseDisplayLanguage() ? `Git 引用: ${info.ref}` : `Git ref: ${info.ref}`;
+    return formatI18nMessage(getRuntimeMessages().scm.gitRefLabel, { ref: info.ref });
 }
 
 export async function getGitWorkbookResourceDetail(

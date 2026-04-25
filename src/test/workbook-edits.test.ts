@@ -26,6 +26,10 @@ suite("Workbook edit writer", () => {
             cell(): {
                 setValue(): void;
             };
+            insertRow(): void;
+            deleteRow(): void;
+            insertColumn(): void;
+            deleteColumn(): void;
             freezePane(): void;
             unfreezePane(): void;
         }
@@ -63,6 +67,18 @@ suite("Workbook edit writer", () => {
                                 mutationContexts.push(inBatch);
                             },
                         };
+                    },
+                    insertRow() {
+                        mutationContexts.push(inBatch);
+                    },
+                    deleteRow() {
+                        mutationContexts.push(inBatch);
+                    },
+                    insertColumn() {
+                        mutationContexts.push(inBatch);
+                    },
+                    deleteColumn() {
+                        mutationContexts.push(inBatch);
                     },
                     freezePane() {
                         mutationContexts.push(inBatch);
@@ -214,6 +230,73 @@ suite("Workbook edit writer", () => {
                 topLeftCell: "C1",
                 activePane: "topRight",
             });
+        } finally {
+            await rm(tempDirectory, { recursive: true, force: true });
+        }
+    });
+
+    test("applies row and column edits before cell edits", async () => {
+        const tempDirectory = await mkdtemp(path.join(os.tmpdir(), "xlsx-diff-"));
+
+        try {
+            const sourcePath = path.join(tempDirectory, "source-structure.xlsx");
+            const destinationPath = path.join(tempDirectory, "destination-structure.xlsx");
+            const workbook = Workbook.create("Sheet1");
+            workbook.getSheet("Sheet1").cell("A1").setValue("remove");
+            workbook.getSheet("Sheet1").cell("B2").setValue("move");
+            await workbook.save(sourcePath);
+
+            await writeWorkbookEditsToDestination(
+                vscode.Uri.file(sourcePath),
+                vscode.Uri.file(destinationPath),
+                {
+                    sheetEdits: [
+                        {
+                            type: "deleteRow",
+                            sheetKey: "sheet-1",
+                            sheetName: "Sheet1",
+                            rowNumber: 1,
+                            count: 1,
+                        },
+                        {
+                            type: "deleteColumn",
+                            sheetKey: "sheet-1",
+                            sheetName: "Sheet1",
+                            columnNumber: 1,
+                            count: 1,
+                        },
+                        {
+                            type: "insertRow",
+                            sheetKey: "sheet-1",
+                            sheetName: "Sheet1",
+                            rowNumber: 1,
+                            count: 1,
+                        },
+                        {
+                            type: "insertColumn",
+                            sheetKey: "sheet-1",
+                            sheetName: "Sheet1",
+                            columnNumber: 1,
+                            count: 1,
+                        },
+                    ],
+                    cellEdits: [
+                        {
+                            sheetName: "Sheet1",
+                            rowNumber: 2,
+                            columnNumber: 2,
+                            value: "shifted",
+                        },
+                    ],
+                    viewEdits: [],
+                }
+            );
+
+            const snapshot = await loadWorkbookSnapshot(destinationPath);
+            assert.strictEqual(snapshot.sheets[0]?.rowCount, 2);
+            assert.strictEqual(snapshot.sheets[0]?.columnCount, 2);
+            assert.strictEqual(snapshot.sheets[0]?.cells["2:2"]?.displayValue, "shifted");
+            assert.strictEqual(snapshot.sheets[0]?.cells["1:1"], undefined);
         } finally {
             await rm(tempDirectory, { recursive: true, force: true });
         }

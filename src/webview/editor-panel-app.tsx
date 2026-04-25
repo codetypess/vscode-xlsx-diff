@@ -3,6 +3,7 @@ import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import type { CellSnapshot, EditorRenderModel, EditorSheetTabView } from "../core/model/types";
 import { createCellKey, getColumnLabel } from "../core/model/cells";
+import { RUNTIME_MESSAGES } from "../i18n/catalog";
 import {
     EDITOR_VIRTUAL_COLUMN_WIDTH,
     EDITOR_VIRTUAL_HEADER_HEIGHT,
@@ -19,6 +20,13 @@ import {
     shouldSyncLocalSelectionDomFromModelSelection,
     shouldUseLocalSimpleSelectionUpdate,
 } from "./editor-selection-render";
+import {
+    createColumnSelectionRange,
+    createRowSelectionRange,
+    createSelectionRange,
+    hasExpandedSelectionRange,
+    type SelectionRange as CellRange,
+} from "./editor-selection-range";
 import {
     getEditorToolbarSyncSnapshot,
     notifyEditorToolbarSync,
@@ -43,6 +51,10 @@ type OutgoingMessage =
     | { type: "addSheet" }
     | { type: "deleteSheet"; sheetKey: string }
     | { type: "renameSheet"; sheetKey: string }
+    | { type: "insertRow"; rowNumber: number }
+    | { type: "deleteRow"; rowNumber: number }
+    | { type: "insertColumn"; columnNumber: number }
+    | { type: "deleteColumn"; columnNumber: number }
     | {
           type: "search";
           query: string;
@@ -96,13 +108,6 @@ interface CellPosition {
     columnNumber: number;
 }
 
-interface CellRange {
-    startRow: number;
-    endRow: number;
-    startColumn: number;
-    endColumn: number;
-}
-
 interface EditorGridCellView {
     key: string;
     address: string;
@@ -148,11 +153,25 @@ interface ScrollState {
     left: number;
 }
 
-interface TabContextMenuState {
-    sheetKey: string;
-    x: number;
-    y: number;
-}
+type ContextMenuState =
+    | {
+          kind: "tab";
+          sheetKey: string;
+          x: number;
+          y: number;
+      }
+    | {
+          kind: "row";
+          rowNumber: number;
+          x: number;
+          y: number;
+      }
+    | {
+          kind: "column";
+          columnNumber: number;
+          x: number;
+          y: number;
+      };
 
 interface SelectionDragState {
     anchorCell: CellPosition;
@@ -170,31 +189,7 @@ type ViewState =
           scrollState: ScrollState | null;
       };
 
-const DEFAULT_STRINGS = {
-    loading: "Loading XLSX editor...",
-    reload: "Reload",
-    undo: "Undo",
-    redo: "Redo",
-    searchPlaceholder: "Search values or formulas",
-    findPrev: "Prev Match",
-    findNext: "Next Match",
-    gotoPlaceholder: "A1 or Sheet1!B2",
-    goto: "Go",
-    cancelInput: "Cancel input",
-    confirmInput: "Apply input",
-    searchRegex: "Use Regular Expression",
-    searchMatchCase: "Match Case",
-    searchWholeWord: "Match Whole Word",
-    save: "Save",
-    lockView: "Lock View",
-    unlockView: "Unlock View",
-    addSheet: "Add Sheet",
-    deleteSheet: "Delete Sheet",
-    renameSheet: "Rename Sheet",
-    selectedCell: "Selected cell",
-    noCellSelected: "None",
-    noRowsAvailable: "No rows available in this view.",
-};
+const DEFAULT_STRINGS = RUNTIME_MESSAGES.en.editorPanel;
 
 type Strings = typeof DEFAULT_STRINGS;
 
@@ -210,6 +205,7 @@ const redoStack: HistoryEntry[] = [];
 let model: EditorRenderModel | null = null;
 let selectedCell: CellPosition | null = null;
 let selectionAnchorCell: CellPosition | null = null;
+let selectionRangeOverride: CellRange | null = null;
 let editingCell: EditingCell | null = null;
 let isSaving = false;
 let lastPendingNotification: boolean | null = null;
@@ -218,7 +214,7 @@ let suppressAutoSelection = false;
 let lastPendingEditsSyncKey: string | null = null;
 let viewRevision = 0;
 let setViewState: React.Dispatch<React.SetStateAction<ViewState>> | null = null;
-let tabContextMenu: TabContextMenuState | null = null;
+let contextMenu: ContextMenuState | null = null;
 let selectionDragState: SelectionDragState | null = null;
 let suppressNextCellClick = false;
 
@@ -448,23 +444,14 @@ function getCellAddressLabel(rowNumber: number, columnNumber: number): string {
 }
 
 function getSelectionRange(): CellRange | null {
-    if (!selectedCell) {
-        return null;
-    }
-
-    const anchor = selectionAnchorCell ?? selectedCell;
-    return {
-        startRow: Math.min(anchor.rowNumber, selectedCell.rowNumber),
-        endRow: Math.max(anchor.rowNumber, selectedCell.rowNumber),
-        startColumn: Math.min(anchor.columnNumber, selectedCell.columnNumber),
-        endColumn: Math.max(anchor.columnNumber, selectedCell.columnNumber),
-    };
+    return (
+        selectionRangeOverride ??
+        createSelectionRange(selectionAnchorCell ?? selectedCell, selectedCell)
+    );
 }
 
 function hasExpandedSelection(range: CellRange | null = getSelectionRange()): boolean {
-    return Boolean(
-        range && (range.startRow !== range.endRow || range.startColumn !== range.endColumn)
-    );
+    return hasExpandedSelectionRange(range);
 }
 
 function getSelectionOutlineClasses(
@@ -590,7 +577,7 @@ function getActiveCellAddress(): string {
 }
 
 function getSelectedCellToolbarValue(): string {
-    if (!model || !selectedCell) {
+    if (!model || !selectedCell || hasExpandedSelection()) {
         return "";
     }
 
@@ -607,7 +594,7 @@ function getSelectedCellToolbarValue(): string {
 }
 
 function canEditSelectedCellValue(): boolean {
-    if (!model || !selectedCell) {
+    if (!model || !selectedCell || hasExpandedSelection()) {
         return false;
     }
 
@@ -667,35 +654,65 @@ function toggleViewLock(): void {
     });
 }
 
-function closeTabContextMenu({ refresh = true }: { refresh?: boolean } = {}): void {
-    if (!tabContextMenu) {
+function closeContextMenu({ refresh = true }: { refresh?: boolean } = {}): void {
+    if (!contextMenu) {
         return;
     }
 
-    tabContextMenu = null;
+    contextMenu = null;
     if (refresh) {
         renderApp({ commitEditing: false });
     }
 }
 
 function openTabContextMenu(sheetKey: string, x: number, y: number): void {
-    tabContextMenu = { sheetKey, x, y };
+    contextMenu = { kind: "tab", sheetKey, x, y };
+    renderApp({ commitEditing: false });
+}
+
+function openRowContextMenu(rowNumber: number, x: number, y: number): void {
+    contextMenu = { kind: "row", rowNumber, x, y };
+    renderApp({ commitEditing: false });
+}
+
+function openColumnContextMenu(columnNumber: number, x: number, y: number): void {
+    contextMenu = { kind: "column", columnNumber, x, y };
     renderApp({ commitEditing: false });
 }
 
 function requestAddSheet(): void {
-    closeTabContextMenu({ refresh: false });
+    closeContextMenu({ refresh: false });
     vscode.postMessage({ type: "addSheet" });
 }
 
 function requestDeleteSheet(sheetKey: string): void {
-    closeTabContextMenu({ refresh: false });
+    closeContextMenu({ refresh: false });
     vscode.postMessage({ type: "deleteSheet", sheetKey });
 }
 
 function requestRenameSheet(sheetKey: string): void {
-    closeTabContextMenu({ refresh: false });
+    closeContextMenu({ refresh: false });
     vscode.postMessage({ type: "renameSheet", sheetKey });
+}
+
+function requestInsertRow(rowNumber: number): void {
+    closeContextMenu({ refresh: false });
+    vscode.postMessage({ type: "insertRow", rowNumber });
+}
+
+function requestDeleteRow(rowNumber: number): void {
+    closeContextMenu({ refresh: false });
+    vscode.postMessage({ type: "deleteRow", rowNumber });
+}
+
+function requestInsertColumn(columnNumber: number): void {
+    closeContextMenu({ refresh: false });
+    vscode.postMessage({ type: "insertColumn", columnNumber });
+}
+
+function requestDeleteColumn(columnNumber: number): void {
+    closeContextMenu({ refresh: false });
+    vscode.postMessage({ type: "deleteColumn", columnNumber });
 }
 
 function getCellPositionFromElement(element: Element | null): CellPosition | null {
@@ -894,6 +911,135 @@ function isCellVisible(cell: CellPosition | null): boolean {
     return rowVisible && columnVisible;
 }
 
+function isRowVisibleInViewport(
+    rowNumber: number | null | undefined,
+    viewportState: VirtualViewportState | null
+): boolean {
+    return Boolean(
+        rowNumber &&
+            viewportState &&
+            (viewportState.frozenRowNumbers.includes(rowNumber) ||
+                viewportState.rowNumbers.includes(rowNumber))
+    );
+}
+
+function isColumnVisibleInViewport(
+    columnNumber: number | null | undefined,
+    viewportState: VirtualViewportState | null
+): boolean {
+    return Boolean(
+        columnNumber &&
+            viewportState &&
+            (viewportState.frozenColumnNumbers.includes(columnNumber) ||
+                viewportState.columnNumbers.includes(columnNumber))
+    );
+}
+
+function getPreferredSelectionRowNumber(): number {
+    if (!model) {
+        return 1;
+    }
+
+    const viewportState = getVirtualViewportState(model);
+    const candidate = selectedCell?.rowNumber;
+    if (
+        candidate &&
+        candidate >= 1 &&
+        candidate <= model.activeSheet.rowCount &&
+        (!viewportState || isRowVisibleInViewport(candidate, viewportState))
+    ) {
+        return candidate;
+    }
+
+    return (
+        viewportState?.frozenRowNumbers[0] ??
+        viewportState?.rowNumbers[0] ??
+        Math.min(model.activeSheet.rowCount, Math.max(candidate ?? 1, 1))
+    );
+}
+
+function getPreferredSelectionColumnNumber(): number {
+    if (!model) {
+        return 1;
+    }
+
+    const viewportState = getVirtualViewportState(model);
+    const candidate = selectedCell?.columnNumber;
+    if (
+        candidate &&
+        candidate >= 1 &&
+        candidate <= model.activeSheet.columnCount &&
+        (!viewportState || isColumnVisibleInViewport(candidate, viewportState))
+    ) {
+        return candidate;
+    }
+
+    return (
+        viewportState?.frozenColumnNumbers[0] ??
+        viewportState?.columnNumbers[0] ??
+        Math.min(model.activeSheet.columnCount, Math.max(candidate ?? 1, 1))
+    );
+}
+
+function selectEntireRow(rowNumber: number): void {
+    if (!model) {
+        return;
+    }
+
+    const selectionRange = createRowSelectionRange(rowNumber, model.activeSheet.columnCount);
+    if (!selectionRange) {
+        return;
+    }
+
+    const forceRender = Boolean(editingCell);
+    if (forceRender) {
+        finishEdit({ mode: "commit", refresh: false });
+    }
+
+    setSelectedCellLocal(
+        {
+            rowNumber,
+            columnNumber: getPreferredSelectionColumnNumber(),
+        },
+        {
+            syncHost: true,
+            selectionRange,
+            forceRender,
+        }
+    );
+}
+
+function selectEntireColumn(columnNumber: number): void {
+    if (!model) {
+        return;
+    }
+
+    const selectionRange = createColumnSelectionRange(
+        columnNumber,
+        model.activeSheet.rowCount
+    );
+    if (!selectionRange) {
+        return;
+    }
+
+    const forceRender = Boolean(editingCell);
+    if (forceRender) {
+        finishEdit({ mode: "commit", refresh: false });
+    }
+
+    setSelectedCellLocal(
+        {
+            rowNumber: getPreferredSelectionRowNumber(),
+            columnNumber,
+        },
+        {
+            syncHost: true,
+            selectionRange,
+            forceRender,
+        }
+    );
+}
+
 function syncSelectedCellToHost(): void {
     if (!model || !selectedCell) {
         return;
@@ -908,14 +1054,14 @@ function syncSelectedCellToHost(): void {
 
 function isSimpleSelection(
     cell: CellPosition | null,
-    anchorCell: CellPosition | null = selectionAnchorCell
+    anchorCell: CellPosition | null = selectionAnchorCell,
+    selectionRange: CellRange | null = selectionRangeOverride
 ): boolean {
     if (!cell) {
-        return anchorCell === null;
+        return anchorCell === null && selectionRange === null;
     }
 
-    const anchor = anchorCell ?? cell;
-    return anchor.rowNumber === cell.rowNumber && anchor.columnNumber === cell.columnNumber;
+    return !hasExpandedSelectionRange(selectionRange ?? createSelectionRange(anchorCell ?? cell, cell));
 }
 
 function getRenderedCellElements(
@@ -1031,9 +1177,11 @@ function canUseLocalSimpleSelectionUpdate(
     nextCell: CellPosition | null,
     {
         anchorCell,
+        selectionRange,
         forceRender = false,
     }: {
         anchorCell: CellPosition | null;
+        selectionRange: CellRange | null;
         forceRender?: boolean;
     }
 ): boolean {
@@ -1043,7 +1191,7 @@ function canUseLocalSimpleSelectionUpdate(
         hasEditingCell: Boolean(editingCell),
         isNextCellVisible: isCellVisible(nextCell),
         hasExpandedSelection: hasExpandedSelection(),
-        isSimpleSelection: isSimpleSelection(nextCell, anchorCell),
+        isSimpleSelection: isSimpleSelection(nextCell, anchorCell, selectionRange),
         forceRender,
     });
 }
@@ -1054,23 +1202,31 @@ function setSelectedCellLocal(
         reveal = false,
         syncHost = true,
         anchorCell,
+        selectionRange,
         forceRender = false,
     }: {
         reveal?: boolean;
         syncHost?: boolean;
         anchorCell?: CellPosition | null;
+        selectionRange?: CellRange | null;
         forceRender?: boolean;
     } = {}
 ): void {
     const previousCell = selectedCell;
     const nextAnchorCell = nextCell ? (anchorCell ?? nextCell) : null;
+    const nextSelectionRange =
+        nextCell && nextAnchorCell
+            ? (selectionRange ?? createSelectionRange(nextAnchorCell, nextCell))
+            : null;
     const canUseLocalUpdate = canUseLocalSimpleSelectionUpdate(nextCell, {
         anchorCell: nextAnchorCell,
+        selectionRange: nextSelectionRange,
         forceRender,
     });
 
     selectedCell = nextCell;
     selectionAnchorCell = nextAnchorCell;
+    selectionRangeOverride = selectionRange ?? null;
     suppressAutoSelection = nextCell === null;
     clearBrowserTextSelection();
 
@@ -1110,6 +1266,7 @@ function prepareSelectionForRender({
             columnNumber: model.selection.columnNumber,
         };
         selectionAnchorCell = selectedCell;
+        selectionRangeOverride = null;
         suppressAutoSelection = false;
         pendingSelectionAfterRender = null;
         if (
@@ -1131,6 +1288,7 @@ function prepareSelectionForRender({
             columnNumber: pendingSelectionAfterRender.columnNumber,
         };
         selectionAnchorCell = selectedCell;
+        selectionRangeOverride = null;
         suppressAutoSelection = false;
         shouldReveal = pendingSelectionAfterRender.reveal;
         pendingSelectionAfterRender = null;
@@ -1141,7 +1299,7 @@ function prepareSelectionForRender({
     pendingSelectionAfterRender = null;
 
     if (isCellVisible(selectedCell)) {
-        if (!isCellVisible(selectionAnchorCell)) {
+        if (!selectionRangeOverride && !isCellVisible(selectionAnchorCell)) {
             selectionAnchorCell = selectedCell;
         }
         syncSelectedCellToHost();
@@ -1160,6 +1318,7 @@ function prepareSelectionForRender({
         : model && model.activeSheet.rowCount > 0 && model.activeSheet.columnCount > 0
           ? { rowNumber: 1, columnNumber: 1 }
           : null;
+    selectionRangeOverride = null;
 
     if (selectedCell) {
         selectionAnchorCell = selectedCell;
@@ -1352,6 +1511,7 @@ function finishEdit({
     if (clearSelection) {
         selectedCell = null;
         selectionAnchorCell = null;
+        selectionRangeOverride = null;
         suppressAutoSelection = true;
     }
 
@@ -1495,6 +1655,7 @@ function startEditCell(rowNumber: number, columnNumber: number, currentValue: st
     clearBrowserTextSelection();
     selectedCell = { rowNumber, columnNumber };
     selectionAnchorCell = selectedCell;
+    selectionRangeOverride = null;
     suppressAutoSelection = false;
     editingCell = {
         sheetKey: model.activeSheet.key,
@@ -1544,6 +1705,7 @@ function ensureSelection(): CellPosition | null {
             columnNumber: model.selection.columnNumber,
         };
         selectionAnchorCell = selectedCell;
+        selectionRangeOverride = null;
         suppressAutoSelection = false;
         return selectedCell;
     }
@@ -1554,6 +1716,7 @@ function ensureSelection(): CellPosition | null {
             columnNumber: 1,
         };
         selectionAnchorCell = selectedCell;
+        selectionRangeOverride = null;
         suppressAutoSelection = false;
         return selectedCell;
     }
@@ -1682,7 +1845,7 @@ function focusToolbarInput(role: "position" | "value"): void {
 }
 
 function getPositionInputValue(): string {
-    return selectedCell ? getActiveCellAddress() : "";
+    return selectedCell ? getSelectedCellAddress() : "";
 }
 
 function getCellValueInputValue(): string {
@@ -1690,7 +1853,11 @@ function getCellValueInputValue(): string {
 }
 
 function getCellValueInputPlaceholder(): string {
-    return selectedCell ? "" : STRINGS.noCellSelected;
+    if (!selectedCell) {
+        return STRINGS.noCellSelected;
+    }
+
+    return hasExpandedSelection() ? STRINGS.multipleCellsSelected : "";
 }
 
 function submitGotoSelection(reference: string): void {
@@ -2577,6 +2744,15 @@ const EditorColumnHeaderCell = React.memo(function EditorColumnHeaderCell({
                 width: EDITOR_VIRTUAL_COLUMN_WIDTH,
                 height: EDITOR_VIRTUAL_HEADER_HEIGHT,
             })}
+            onClick={() => {
+                closeContextMenu({ refresh: false });
+                selectEntireColumn(columnNumber);
+            }}
+            onContextMenu={(event) => {
+                event.preventDefault();
+                selectEntireColumn(columnNumber);
+                openColumnContextMenu(columnNumber, event.clientX, event.clientY);
+            }}
         >
             <span className="grid__column-label">
                 {hasPending ? <PendingMarker /> : null}
@@ -2626,6 +2802,15 @@ const EditorRowHeaderCell = React.memo(function EditorRowHeaderCell({
                 width: rowHeaderWidth,
                 height: EDITOR_VIRTUAL_ROW_HEIGHT,
             })}
+            onClick={() => {
+                closeContextMenu({ refresh: false });
+                selectEntireRow(rowNumber);
+            }}
+            onContextMenu={(event) => {
+                event.preventDefault();
+                selectEntireRow(rowNumber);
+                openRowContextMenu(rowNumber, event.clientX, event.clientY);
+            }}
         >
             <span className="grid__row-label">
                 {hasPending ? <PendingMarker /> : null}
@@ -2719,7 +2904,7 @@ const EditorVirtualCell = React.memo(function EditorVirtualCell({
                     return;
                 }
 
-                closeTabContextMenu({ refresh: false });
+                closeContextMenu({ refresh: false });
                 startSelectionDrag(event.pointerId, { rowNumber, columnNumber });
                 setSelectedCellLocal(
                     { rowNumber, columnNumber },
@@ -3092,39 +3277,87 @@ function TabContextMenu({
 }: {
     currentModel: EditorRenderModel;
 }): React.ReactElement | null {
-    if (!tabContextMenu || !currentModel.canEdit) {
+    if (!contextMenu || !currentModel.canEdit) {
         return null;
     }
 
-    const { sheetKey } = tabContextMenu;
+    const menu = contextMenu;
     const menuStyle: React.CSSProperties = {
-        left: Math.max(8, Math.min(tabContextMenu.x, window.innerWidth - 188)),
-        top: Math.max(8, Math.min(tabContextMenu.y, window.innerHeight - 132)),
+        left: Math.max(8, Math.min(menu.x, window.innerWidth - 188)),
+        top: Math.max(8, Math.min(menu.y, window.innerHeight - 132)),
     };
-    const disableDelete = currentModel.sheets.length <= 1;
+
+    if (menu.kind === "tab") {
+        const disableDelete = currentModel.sheets.length <= 1;
+        return (
+            <div className="context-menu" data-role="context-menu" style={menuStyle}>
+                <button className="context-menu__item" type="button" onClick={requestAddSheet}>
+                    <span className="codicon codicon-add context-menu__icon" aria-hidden />
+                    <span>{STRINGS.addSheet}</span>
+                </button>
+                <button
+                    className="context-menu__item"
+                    type="button"
+                    onClick={() => requestRenameSheet(menu.sheetKey)}
+                >
+                    <span className="codicon codicon-edit context-menu__icon" aria-hidden />
+                    <span>{STRINGS.renameSheet}</span>
+                </button>
+                <button
+                    className="context-menu__item context-menu__item--danger"
+                    disabled={disableDelete}
+                    type="button"
+                    onClick={() => requestDeleteSheet(menu.sheetKey)}
+                >
+                    <span className="codicon codicon-trash context-menu__icon" aria-hidden />
+                    <span>{STRINGS.deleteSheet}</span>
+                </button>
+            </div>
+        );
+    }
+
+    if (menu.kind === "row") {
+        return (
+            <div className="context-menu" data-role="context-menu" style={menuStyle}>
+                <button
+                    className="context-menu__item"
+                    type="button"
+                    onClick={() => requestInsertRow(menu.rowNumber)}
+                >
+                    <span className="codicon codicon-add context-menu__icon" aria-hidden />
+                    <span>{STRINGS.insertRowAbove}</span>
+                </button>
+                <button
+                    className="context-menu__item context-menu__item--danger"
+                    disabled={currentModel.activeSheet.rowCount <= 1}
+                    type="button"
+                    onClick={() => requestDeleteRow(menu.rowNumber)}
+                >
+                    <span className="codicon codicon-trash context-menu__icon" aria-hidden />
+                    <span>{STRINGS.deleteRow}</span>
+                </button>
+            </div>
+        );
+    }
 
     return (
-        <div className="context-menu" data-role="tab-context-menu" style={menuStyle}>
-            <button className="context-menu__item" type="button" onClick={requestAddSheet}>
-                <span className="codicon codicon-add context-menu__icon" aria-hidden />
-                <span>{STRINGS.addSheet}</span>
-            </button>
+        <div className="context-menu" data-role="context-menu" style={menuStyle}>
             <button
                 className="context-menu__item"
                 type="button"
-                onClick={() => requestRenameSheet(sheetKey)}
+                onClick={() => requestInsertColumn(menu.columnNumber)}
             >
-                <span className="codicon codicon-edit context-menu__icon" aria-hidden />
-                <span>{STRINGS.renameSheet}</span>
+                <span className="codicon codicon-add context-menu__icon" aria-hidden />
+                <span>{STRINGS.insertColumnLeft}</span>
             </button>
             <button
                 className="context-menu__item context-menu__item--danger"
-                disabled={disableDelete}
+                disabled={currentModel.activeSheet.columnCount <= 1}
                 type="button"
-                onClick={() => requestDeleteSheet(sheetKey)}
+                onClick={() => requestDeleteColumn(menu.columnNumber)}
             >
                 <span className="codicon codicon-trash context-menu__icon" aria-hidden />
-                <span>{STRINGS.deleteSheet}</span>
+                <span>{STRINGS.deleteColumn}</span>
             </button>
         </div>
     );
@@ -3266,9 +3499,9 @@ window.addEventListener("message", (event: MessageEvent<IncomingMessage>) => {
 document.addEventListener("keydown", (event: KeyboardEvent) => {
     const isTextInputContext = isTextInputTarget(event.target);
 
-    if (event.key === "Escape" && tabContextMenu) {
+    if (event.key === "Escape" && contextMenu) {
         event.preventDefault();
-        closeTabContextMenu();
+        closeContextMenu();
         return;
     }
 
@@ -3392,21 +3625,21 @@ document.addEventListener("copy", (event: ClipboardEvent) => {
 });
 
 document.addEventListener("pointerdown", (event: PointerEvent) => {
-    if (!tabContextMenu) {
+    if (!contextMenu) {
         return;
     }
 
     const target = event.target;
     if (!(target instanceof HTMLElement)) {
-        closeTabContextMenu();
+        closeContextMenu();
         return;
     }
 
-    if (target.closest('[data-role="tab-context-menu"]')) {
+    if (target.closest('[data-role="context-menu"]')) {
         return;
     }
 
-    closeTabContextMenu();
+    closeContextMenu();
 });
 
 document.addEventListener("pointermove", (event: PointerEvent) => {

@@ -32,7 +32,46 @@ export interface RenameSheetEdit {
     nextSheetName: string;
 }
 
-export type SheetEdit = AddSheetEdit | DeleteSheetEdit | RenameSheetEdit;
+export interface InsertRowEdit {
+    type: "insertRow";
+    sheetKey: string;
+    sheetName: string;
+    rowNumber: number;
+    count: number;
+}
+
+export interface DeleteRowEdit {
+    type: "deleteRow";
+    sheetKey: string;
+    sheetName: string;
+    rowNumber: number;
+    count: number;
+}
+
+export interface InsertColumnEdit {
+    type: "insertColumn";
+    sheetKey: string;
+    sheetName: string;
+    columnNumber: number;
+    count: number;
+}
+
+export interface DeleteColumnEdit {
+    type: "deleteColumn";
+    sheetKey: string;
+    sheetName: string;
+    columnNumber: number;
+    count: number;
+}
+
+export type SheetEdit =
+    | AddSheetEdit
+    | DeleteSheetEdit
+    | RenameSheetEdit
+    | InsertRowEdit
+    | DeleteRowEdit
+    | InsertColumnEdit
+    | DeleteColumnEdit;
 
 export interface SheetViewEdit {
     sheetKey: string;
@@ -121,7 +160,9 @@ export async function writeWorkbookEditsToDestination(
                 continue;
             }
 
-            currentWorkbook.deleteSheet(edit.sheetName);
+            if (edit.type === "deleteSheet") {
+                currentWorkbook.deleteSheet(edit.sheetName);
+            }
         }
 
         const sheets = new Map<string, ReturnType<typeof currentWorkbook.getSheet>>();
@@ -135,6 +176,27 @@ export async function writeWorkbookEditsToDestination(
             sheets.set(sheetName, sheet);
             return sheet;
         };
+
+        for (const edit of edits.sheetEdits) {
+            if (edit.type === "insertRow") {
+                getSheet(edit.sheetName).insertRow(edit.rowNumber, edit.count);
+                continue;
+            }
+
+            if (edit.type === "deleteRow") {
+                getSheet(edit.sheetName).deleteRow(edit.rowNumber, edit.count);
+                continue;
+            }
+
+            if (edit.type === "insertColumn") {
+                getSheet(edit.sheetName).insertColumn(edit.columnNumber, edit.count);
+                continue;
+            }
+
+            if (edit.type === "deleteColumn") {
+                getSheet(edit.sheetName).deleteColumn(edit.columnNumber, edit.count);
+            }
+        }
 
         for (const edit of edits.cellEdits) {
             const sheet = getSheet(edit.sheetName);

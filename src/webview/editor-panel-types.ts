@@ -18,6 +18,10 @@ export type EditorWebviewMessage =
     | { type: "addSheet" }
     | { type: "deleteSheet"; sheetKey: string }
     | { type: "renameSheet"; sheetKey: string }
+    | { type: "insertRow"; rowNumber: number }
+    | { type: "deleteRow"; rowNumber: number }
+    | { type: "insertColumn"; columnNumber: number }
+    | { type: "deleteColumn"; columnNumber: number }
     | {
           type: "search";
           query: string;
@@ -52,6 +56,10 @@ export interface EditorPanelStrings {
     addSheet: string;
     deleteSheet: string;
     renameSheet: string;
+    insertRowAbove: string;
+    deleteRow: string;
+    insertColumnLeft: string;
+    deleteColumn: string;
     renameSheetPrompt: string;
     renameSheetTitle: string;
     sheetNameEmpty: string;
@@ -68,6 +76,7 @@ export interface EditorPanelStrings {
     cancelInput: string;
     confirmInput: string;
     selectedCell: string;
+    multipleCellsSelected: string;
     noCellSelected: string;
     noRowsAvailable: string;
     localChangesBlockedReload: string;

@@ -70,6 +70,20 @@ function areSheetEditsEqual(left: readonly SheetEdit[], right: readonly SheetEdi
             return edit.nextSheetName === other.nextSheetName;
         }
 
+        if (
+            (edit.type === "insertRow" && other.type === "insertRow") ||
+            (edit.type === "deleteRow" && other.type === "deleteRow")
+        ) {
+            return edit.rowNumber === other.rowNumber && edit.count === other.count;
+        }
+
+        if (
+            (edit.type === "insertColumn" && other.type === "insertColumn") ||
+            (edit.type === "deleteColumn" && other.type === "deleteColumn")
+        ) {
+            return edit.columnNumber === other.columnNumber && edit.count === other.count;
+        }
+
         return true;
     });
 }

@@ -5,7 +5,8 @@ import { buildWorkbookDiff } from "../core/diff/build-workbook-diff";
 import { loadWorkbookSnapshot } from "../core/fastxlsx/load-workbook-snapshot";
 import { writeCellValues, type CellEdit } from "../core/fastxlsx/write-cell-value";
 import type { WorkbookDiffModel } from "../core/model/types";
-import { getHtmlLanguageTag, isChineseDisplayLanguage } from "../display-language";
+import { getHtmlLanguageTag } from "../display-language";
+import { getRuntimeMessages, type DiffPanelStrings } from "../i18n";
 import { getWorkbookResourceName } from "../workbook/resource-uri";
 import { withWorkbookSaveProgress } from "../workbook/save-progress";
 import { createDiffPanelRenderModel } from "./diff-panel-model";
@@ -27,33 +28,6 @@ type WebviewMessage =
     | { type: "swap" }
     | { type: "reload" };
 
-interface WebviewStrings {
-    loading: string;
-    reload: string;
-    swap: string;
-    all: string;
-    diffs: string;
-    same: string;
-    diffRows: string;
-    sameRows: string;
-    prevDiff: string;
-    nextDiff: string;
-    sheets: string;
-    diffCells: string;
-    rows: string;
-    filter: string;
-    visibleRows: string;
-    currentDiff: string;
-    selected: string;
-    save: string;
-    none: string;
-    modified: string;
-    size: string;
-    readOnly: string;
-    noSheet: string;
-    noRows: string;
-}
-
 function getNonce(): string {
     return Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
 }
@@ -66,62 +40,8 @@ function escapeWatcherGlobSegment(value: string): string {
     return value.replace(/[{}\[\]*?]/g, "[$&]");
 }
 
-function getWebviewStrings(): WebviewStrings {
-    if (isChineseDisplayLanguage()) {
-        return {
-            loading: "正在加载 XLSX 对比...",
-            reload: "刷新",
-            swap: "交换",
-            all: "全部",
-            diffs: "差异",
-            same: "相同",
-            diffRows: "差异行",
-            sameRows: "相同行",
-            prevDiff: "上一处差异",
-            nextDiff: "下一处差异",
-            sheets: "工作表",
-            diffCells: "差异单元格",
-            rows: "行",
-            filter: "筛选",
-            visibleRows: "可见行",
-            currentDiff: "当前差异",
-            selected: "选中",
-            save: "保存",
-            none: "-",
-            modified: "修改时间",
-            size: "大小",
-            readOnly: "只读",
-            noSheet: "没有可显示的工作表。",
-            noRows: "当前工作表没有可显示的行。",
-        };
-    }
-
-    return {
-        loading: "Loading XLSX diff...",
-        reload: "Reload",
-        swap: "Swap",
-        all: "All",
-        diffs: "Diffs",
-        same: "Same",
-        diffRows: "Diff Rows",
-        sameRows: "Same Rows",
-        prevDiff: "Prev Diff",
-        nextDiff: "Next Diff",
-        sheets: "Sheets",
-        diffCells: "Diff Cells",
-        rows: "Rows",
-        filter: "Filter",
-        visibleRows: "Visible Rows",
-        currentDiff: "Current Diff",
-        selected: "Selected",
-        save: "Save",
-        none: "-",
-        modified: "Modified",
-        size: "Size",
-        readOnly: "Read-only",
-        noSheet: "No sheet is available.",
-        noRows: "No rows are available in this sheet.",
-    };
+function getWebviewStrings(): DiffPanelStrings {
+    return getRuntimeMessages().diffPanel;
 }
 
 export class XlsxDiffPanel {

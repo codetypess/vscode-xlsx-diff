@@ -14,6 +14,11 @@ import type {
     WorkingSheetEntry,
 } from "./editor-panel-types";
 
+export type GridSheetEdit = Extract<
+    SheetEdit,
+    { type: "insertRow" | "deleteRow" | "insertColumn" | "deleteColumn" }
+>;
+
 export function cloneCellEdit(edit: CellEdit): CellEdit {
     return { ...edit };
 }
@@ -110,6 +115,160 @@ export function createWorkingWorkbook(
     return {
         ...workbook,
         sheets: sheetEntries.map((entry) => entry.sheet),
+    };
+}
+
+export function isGridSheetEdit(edit: SheetEdit): edit is GridSheetEdit {
+    return (
+        edit.type === "insertRow" ||
+        edit.type === "deleteRow" ||
+        edit.type === "insertColumn" ||
+        edit.type === "deleteColumn"
+    );
+}
+
+function createPendingSheetSignature(
+    sheetName: string,
+    rowCount: number,
+    columnCount: number,
+    cellCount: number
+): string {
+    return `pending:${sheetName}:${rowCount}:${columnCount}:${cellCount}`;
+}
+
+function transformCellPosition(
+    rowNumber: number,
+    columnNumber: number,
+    edit: GridSheetEdit
+): { rowNumber: number; columnNumber: number } | null {
+    if (edit.type === "insertRow") {
+        return {
+            rowNumber: rowNumber >= edit.rowNumber ? rowNumber + edit.count : rowNumber,
+            columnNumber,
+        };
+    }
+
+    if (edit.type === "deleteRow") {
+        const lastDeletedRow = edit.rowNumber + edit.count - 1;
+        if (rowNumber >= edit.rowNumber && rowNumber <= lastDeletedRow) {
+            return null;
+        }
+
+        return {
+            rowNumber: rowNumber > lastDeletedRow ? rowNumber - edit.count : rowNumber,
+            columnNumber,
+        };
+    }
+
+    if (edit.type === "insertColumn") {
+        return {
+            rowNumber,
+            columnNumber:
+                columnNumber >= edit.columnNumber ? columnNumber + edit.count : columnNumber,
+        };
+    }
+
+    const lastDeletedColumn = edit.columnNumber + edit.count - 1;
+    if (columnNumber >= edit.columnNumber && columnNumber <= lastDeletedColumn) {
+        return null;
+    }
+
+    return {
+        rowNumber,
+        columnNumber:
+            columnNumber > lastDeletedColumn ? columnNumber - edit.count : columnNumber,
+    };
+}
+
+export function shiftPendingCellEditsForGridSheetEdit(
+    pendingCellEdits: CellEdit[],
+    edit: GridSheetEdit
+): CellEdit[] {
+    return pendingCellEdits.flatMap((pendingEdit) => {
+        if (pendingEdit.sheetName !== edit.sheetName) {
+            return [pendingEdit];
+        }
+
+        const nextPosition = transformCellPosition(
+            pendingEdit.rowNumber,
+            pendingEdit.columnNumber,
+            edit
+        );
+        if (!nextPosition) {
+            return [];
+        }
+
+        return [
+            {
+                ...pendingEdit,
+                rowNumber: nextPosition.rowNumber,
+                columnNumber: nextPosition.columnNumber,
+            },
+        ];
+    });
+}
+
+export function applyGridSheetEditToSheet(
+    sheet: WorkbookSnapshot["sheets"][number],
+    edit: GridSheetEdit
+): WorkbookSnapshot["sheets"][number] {
+    if (sheet.name !== edit.sheetName) {
+        return sheet;
+    }
+
+    const nextCount = Math.max(0, edit.count);
+    if (nextCount === 0) {
+        return sheet;
+    }
+
+    const nextCells = Object.fromEntries(
+        Object.values(sheet.cells)
+            .flatMap((cell) => {
+                const nextPosition = transformCellPosition(
+                    cell.rowNumber,
+                    cell.columnNumber,
+                    edit
+                );
+                if (!nextPosition) {
+                    return [];
+                }
+
+                const nextCell = {
+                    ...cell,
+                    key: createCellKey(nextPosition.rowNumber, nextPosition.columnNumber),
+                    rowNumber: nextPosition.rowNumber,
+                    columnNumber: nextPosition.columnNumber,
+                    address: getCellAddress(nextPosition.rowNumber, nextPosition.columnNumber),
+                };
+                return [[nextCell.key, nextCell] as const];
+            })
+            .sort((left, right) => left[0].localeCompare(right[0]))
+    );
+
+    const rowCount =
+        edit.type === "insertRow"
+            ? sheet.rowCount + nextCount
+            : edit.type === "deleteRow"
+              ? Math.max(0, sheet.rowCount - nextCount)
+              : sheet.rowCount;
+    const columnCount =
+        edit.type === "insertColumn"
+            ? sheet.columnCount + nextCount
+            : edit.type === "deleteColumn"
+              ? Math.max(0, sheet.columnCount - nextCount)
+              : sheet.columnCount;
+
+    return {
+        ...sheet,
+        rowCount,
+        columnCount,
+        cells: nextCells,
+        signature: createPendingSheetSignature(
+            sheet.name,
+            rowCount,
+            columnCount,
+            Object.keys(nextCells).length
+        ),
     };
 }
 
@@ -228,15 +387,32 @@ export function restorePendingWorkbookState(
             continue;
         }
 
+        if (edit.type === "renameSheet") {
+            sheetEntries = sheetEntries.map((entry) =>
+                entry.key === edit.sheetKey
+                    ? {
+                          ...entry,
+                          sheet: {
+                              ...entry.sheet,
+                              name: edit.nextSheetName,
+                              signature: `pending:${edit.sheetKey}:${edit.nextSheetName}`,
+                          },
+                      }
+                    : entry
+            );
+        }
+    }
+
+    for (const edit of pendingSheetEdits) {
+        if (!isGridSheetEdit(edit)) {
+            continue;
+        }
+
         sheetEntries = sheetEntries.map((entry) =>
             entry.key === edit.sheetKey
                 ? {
                       ...entry,
-                      sheet: {
-                          ...entry.sheet,
-                          name: edit.nextSheetName,
-                          signature: `pending:${edit.sheetKey}:${edit.nextSheetName}`,
-                      },
+                      sheet: applyGridSheetEditToSheet(entry.sheet, edit),
                   }
                 : entry
         );

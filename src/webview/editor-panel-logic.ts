@@ -178,9 +178,8 @@ export function validateEditorSheetName(
 
 export function getNewEditorSheetName(
     sheetEntries: WorkingSheetEntry[],
-    { isChinese }: { isChinese: boolean }
+    baseName: string
 ): string {
-    const baseName = isChinese ? "工作表" : "Sheet";
     const existingNames = new Set(sheetEntries.map((entry) => entry.sheet.name));
 
     let suffix = 1;

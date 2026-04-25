@@ -1,6 +1,7 @@
 import * as React from "react";
 import { createRoot } from "react-dom/client";
 import type { CellDiffStatus } from "../core/model/types";
+import { RUNTIME_MESSAGES } from "../i18n/catalog";
 import { getSelectionPreviewInlineDiff } from "./selection-preview-diff";
 import type {
     DiffPanelRenderModel,
@@ -104,32 +105,7 @@ const ROW_OVERSCAN = 8;
 const COLUMN_WIDTH = 120;
 const COLUMN_OVERSCAN = 2;
 
-const DEFAULT_STRINGS = {
-    loading: "Loading XLSX diff...",
-    reload: "Reload",
-    swap: "Swap",
-    all: "All",
-    diffs: "Diffs",
-    same: "Same",
-    diffRows: "Diff Rows",
-    sameRows: "Same Rows",
-    prevDiff: "Prev Diff",
-    nextDiff: "Next Diff",
-    sheets: "Sheets",
-    diffCells: "Diff Cells",
-    rows: "Rows",
-    filter: "Filter",
-    visibleRows: "Visible Rows",
-    currentDiff: "Current Diff",
-    selected: "Selected",
-    save: "Save",
-    none: "-",
-    modified: "Modified",
-    size: "Size",
-    readOnly: "Read-only",
-    noSheet: "No sheet is available.",
-    noRows: "No rows are available in this sheet.",
-};
+const DEFAULT_STRINGS = RUNTIME_MESSAGES.en.diffPanel;
 
 type Strings = typeof DEFAULT_STRINGS;
 

@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import * as vscode from "vscode";
-import { isChineseDisplayLanguage } from "../display-language";
+import { formatI18nMessage, getRuntimeMessages } from "../i18n";
 import {
     getScmWorkbookResourceDetail,
     getScmWorkbookResourceInfo,
@@ -73,9 +73,9 @@ export function getWorkbookResourceTimeLabel(uri: vscode.Uri): string | undefine
 
     return uri.scheme === "file"
         ? undefined
-        : isChineseDisplayLanguage()
-          ? `${uri.scheme.toUpperCase()} 资源`
-          : `${uri.scheme.toUpperCase()} resource`;
+        : formatI18nMessage(getRuntimeMessages().workbook.schemeResource, {
+              scheme: uri.scheme.toUpperCase(),
+          });
 }
 
 export async function getWorkbookResourceDetail(

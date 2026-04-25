@@ -1,5 +1,4 @@
 import { createCellKey, getColumnLabel } from "../core/model/cells";
-import { isChineseDisplayLanguage } from "../display-language";
 import {
     type EditorPanelState,
     type EditorRenderModel,
@@ -9,6 +8,7 @@ import {
     type SheetSnapshot,
     type WorkbookSnapshot,
 } from "../core/model/types";
+import { getRuntimeMessages } from "../i18n";
 
 export interface EditorSheetEntry {
     key: string;
@@ -17,7 +17,7 @@ export interface EditorSheetEntry {
 }
 
 function getUntitledSheetLabel(): string {
-    return isChineseDisplayLanguage() ? "未命名工作表" : "Untitled Sheet";
+    return getRuntimeMessages().workbook.untitledSheet;
 }
 
 function getWorkbookTitle(workbook: WorkbookSnapshot): string {

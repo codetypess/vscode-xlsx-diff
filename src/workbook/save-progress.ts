@@ -1,16 +1,15 @@
 import * as vscode from "vscode";
-import { isChineseDisplayLanguage } from "../display-language";
+import { formatI18nMessage, getRuntimeMessages } from "../i18n";
 import { getWorkbookResourceName } from "./resource-uri";
 
 function getSaveProgressTitle(workbookUri?: vscode.Uri): string {
+    const { workbook } = getRuntimeMessages();
     if (workbookUri) {
         const workbookName = getWorkbookResourceName(workbookUri);
-        return isChineseDisplayLanguage()
-            ? `正在保存 ${workbookName}...`
-            : `Saving ${workbookName}...`;
+        return formatI18nMessage(workbook.savingWorkbook, { workbookName });
     }
 
-    return isChineseDisplayLanguage() ? "正在保存工作簿修改..." : "Saving workbook changes...";
+    return workbook.savingChanges;
 }
 
 export async function withWorkbookSaveProgress<Result>(

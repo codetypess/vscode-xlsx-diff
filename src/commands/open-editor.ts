@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
-import { isChineseDisplayLanguage } from "../display-language";
 import { WEBVIEW_TYPE_EDITOR_PANEL } from "../constants";
+import { getRuntimeMessages } from "../i18n";
 import { getActiveWorkbookUri, getWorkbookUriFromCommandArg } from "./workbook-picker";
 
 export function resolveWorkbookUriForOpenEditor(
@@ -11,15 +11,11 @@ export function resolveWorkbookUriForOpenEditor(
 }
 
 export async function openEditor(resource?: unknown): Promise<void> {
-    const isChinese = isChineseDisplayLanguage();
+    const { commands } = getRuntimeMessages();
     const workbookUri = resolveWorkbookUriForOpenEditor(resource, getActiveWorkbookUri());
 
     if (!workbookUri) {
-        await vscode.window.showErrorMessage(
-            isChinese
-                ? "请先选择或打开一个本地 .xlsx 文件。"
-                : "Select or open a local .xlsx file first."
-        );
+        await vscode.window.showErrorMessage(commands.openEditorSelectLocalWorkbook);
         return;
     }
 

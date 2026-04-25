@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import type { I18nLanguage } from "./i18n/catalog";
 
 const CONFIGURATION_SECTION = "xlsx-diff";
 const DISPLAY_LANGUAGE_SETTING = "displayLanguage";
@@ -6,7 +7,7 @@ const DISPLAY_LANGUAGE_SETTING = "displayLanguage";
 export const DISPLAY_LANGUAGE_CONFIGURATION_KEY = `${CONFIGURATION_SECTION}.${DISPLAY_LANGUAGE_SETTING}`;
 
 export type DisplayLanguageSetting = "auto" | "en" | "zh-cn";
-export type ResolvedDisplayLanguage = "en" | "zh-cn";
+export type ResolvedDisplayLanguage = I18nLanguage;
 
 export function resolveDisplayLanguage(
     configuredLanguage: DisplayLanguageSetting | undefined,
@@ -37,7 +38,7 @@ export function isChineseDisplayLanguage(): boolean {
 }
 
 export function getHtmlLanguageTag(): string {
-    return isChineseDisplayLanguage() ? "zh-CN" : "en";
+    return getResolvedDisplayLanguage() === "zh-cn" ? "zh-CN" : "en";
 }
 
 export function affectsDisplayLanguage(event: vscode.ConfigurationChangeEvent): boolean {
