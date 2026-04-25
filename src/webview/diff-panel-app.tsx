@@ -67,9 +67,7 @@ interface PendingSummary {
 }
 
 interface SelectionPreview {
-    address: string;
     value: string;
-    title: string;
 }
 
 interface SheetRuntime {
@@ -486,15 +484,11 @@ function getSelectionPreview(
 ): SelectionPreview {
     if (!sheet || !selection) {
         return {
-            address: STRINGS.none,
             value: "",
-            title: STRINGS.none,
         };
     }
 
-    const columnLabel = sheet.columns[selection.columnNumber - 1] ?? String(selection.columnNumber);
     const row = runtime?.rowByNumber.get(selection.rowNumber) ?? null;
-    const sourceRowNumber = getSourceRowNumber(row, side);
     const cell = row?.cells.find((item) => item.columnNumber === selection.columnNumber) ?? null;
     const pendingEdit = pendingEdits.get(
         getPendingEditKey(sheet.key, side, selection.rowNumber, selection.columnNumber)
@@ -507,12 +501,9 @@ function getSelectionPreview(
         editingCell.columnNumber === selection.columnNumber
             ? editingCell.value
             : (pendingEdit?.value ?? modelDisplay.value);
-    const address = sourceRowNumber === null ? STRINGS.none : `${columnLabel}${sourceRowNumber}`;
 
     return {
-        address,
         value,
-        title: getCellTitle(columnLabel, sourceRowNumber ?? selection.rowNumber, value, null),
     };
 }
 
@@ -806,9 +797,8 @@ function SelectionPreviewPane({
                 "diff-selectionPreviewPane",
                 isActive && "diff-selectionPreviewPane--active",
             ])}
-            title={preview.title}
+            title={preview.value || undefined}
         >
-            <span className="diff-selectionPreviewPane__address">{preview.address}</span>
             <span className="diff-selectionPreviewPane__value">
                 {inlineDiff.before}
                 {inlineDiff.changed ? (

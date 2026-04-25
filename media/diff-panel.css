@@ -650,10 +650,8 @@ select {
 }
 
 .diff-selectionPreviewPane {
-    display: grid;
-    grid-template-columns: 72px minmax(0, 1fr);
-    align-items: center;
-    gap: 10px;
+    display: flex;
+    align-items: stretch;
     min-height: calc(1.35em * 2 + 12px);
     padding: 6px 12px;
     background: color-mix(
@@ -667,29 +665,19 @@ select {
     box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--vscode-focusBorder) 45%, transparent 55%);
 }
 
-.diff-selectionPreviewPane__address {
-    align-self: center;
-    color: var(--diff-subtle-text);
-    font-size: 14px;
-    font-weight: 700;
-    font-variant-numeric: tabular-nums;
-    line-height: 1.2;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
 .diff-selectionPreviewPane__value {
     min-width: 0;
-    display: -webkit-box;
-    overflow: hidden;
+    flex: 1 1 auto;
+    display: block;
+    max-height: calc(1.35em * 2);
+    overflow-y: auto;
+    overflow-x: hidden;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+    padding-right: 4px;
     white-space: pre-wrap;
     word-break: break-word;
     line-height: 1.35;
-    align-self: center;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
-    line-clamp: 2;
 }
 
 .diff-selectionPreviewPane__valueDiff {
@@ -731,7 +719,4 @@ select {
         display: none;
     }
 
-    .diff-selectionPreviewPane {
-        grid-template-columns: 64px minmax(0, 1fr);
-    }
 }
