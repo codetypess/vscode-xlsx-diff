@@ -4,10 +4,15 @@ export interface DiffPanelFileView {
     title: string;
     path: string;
     sizeLabel: string;
-    detailLabel?: string;
-    detailValue?: string;
+    detailFacts: DiffPanelFileFactView[];
     modifiedLabel: string;
     isReadonly: boolean;
+}
+
+export interface DiffPanelFileFactView {
+    label: string;
+    value: string;
+    title?: string;
 }
 
 export interface DiffPanelSheetTabView {

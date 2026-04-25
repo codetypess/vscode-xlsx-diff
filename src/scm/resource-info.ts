@@ -1,11 +1,18 @@
 import * as vscode from "vscode";
 import { gitWorkbookResourceProvider } from "../git/resource-info";
 import {
-    svnGraphWorkbookResourceProvider,
+    svnTreeWorkbookResourceProvider,
     svnWorkbookResourceProvider,
 } from "../svn/resource-info";
 
 export interface WorkbookResourceDetail {
+    label: string;
+    value: string;
+    titleValue?: string;
+    extraFacts?: WorkbookResourceFact[];
+}
+
+export interface WorkbookResourceFact {
     label: string;
     value: string;
     titleValue?: string;
@@ -40,7 +47,7 @@ export interface ScmWorkbookResourceProvider {
 const scmWorkbookResourceProviders: readonly ScmWorkbookResourceProvider[] = [
     gitWorkbookResourceProvider,
     svnWorkbookResourceProvider,
-    svnGraphWorkbookResourceProvider,
+    svnTreeWorkbookResourceProvider,
 ];
 
 function getProvider(providerName: string): ScmWorkbookResourceProvider | undefined {

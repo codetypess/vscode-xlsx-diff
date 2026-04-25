@@ -37,6 +37,11 @@ import {
     shouldResetToolbarCellValueDraft,
     type ToolbarCellEditTarget,
 } from "./editor-toolbar-input";
+import type {
+    EditorSearchResultMessage,
+    EditorSearchScope,
+    SearchOptions,
+} from "./editor-panel-types";
 import { getFreezePaneCountsForCell, hasLockedView } from "./view-lock";
 
 interface VsCodeApi {
@@ -60,6 +65,8 @@ type OutgoingMessage =
           query: string;
           direction: "next" | "prev";
           options: SearchOptions;
+          scope: EditorSearchScope;
+          selectionRange?: CellRange;
       }
     | { type: "gotoCell"; reference: string }
     | { type: "selectCell"; rowNumber: number; columnNumber: number }
@@ -82,6 +89,7 @@ type OutgoingMessage =
 type IncomingMessage =
     | { type: "loading"; message: string }
     | { type: "error"; message: string }
+    | EditorSearchResultMessage
     | {
           type: "render";
           payload: EditorRenderModel;
@@ -96,12 +104,6 @@ type IncomingMessage =
           }>;
           resetPendingHistory?: boolean;
       };
-
-interface SearchOptions {
-    isRegexp: boolean;
-    matchCase: boolean;
-    wholeWord: boolean;
-}
 
 interface CellPosition {
     rowNumber: number;
@@ -178,6 +180,17 @@ interface SelectionDragState {
     pointerId: number;
 }
 
+interface SearchPanelPosition {
+    left: number;
+    top: number;
+}
+
+interface SearchPanelDragState {
+    pointerId: number;
+    offsetX: number;
+    offsetY: number;
+}
+
 type ViewState =
     | { kind: "loading"; message: string }
     | { kind: "error"; message: string }
@@ -216,6 +229,7 @@ let viewRevision = 0;
 let setViewState: React.Dispatch<React.SetStateAction<ViewState>> | null = null;
 let contextMenu: ContextMenuState | null = null;
 let selectionDragState: SelectionDragState | null = null;
+let searchPanelDragState: SearchPanelDragState | null = null;
 let suppressNextCellClick = false;
 
 const WHEEL_DELTA_LINE_MODE = 1;
@@ -223,6 +237,19 @@ const WHEEL_DELTA_PAGE_MODE = 2;
 const WHEEL_LINE_SCROLL_PIXELS = 40;
 const DEFAULT_EDITOR_VIEWPORT_HEIGHT = 480;
 const DEFAULT_EDITOR_VIEWPORT_WIDTH = 960;
+const DEFAULT_SEARCH_OPTIONS: SearchOptions = {
+    isRegexp: false,
+    matchCase: false,
+    wholeWord: false,
+};
+
+let isSearchPanelOpen = false;
+let searchQuery = "";
+let searchOptions: SearchOptions = { ...DEFAULT_SEARCH_OPTIONS };
+let searchScope: EditorSearchScope = "sheet";
+let searchFeedback: EditorSearchResultMessage | null = null;
+let searchPanelPosition: SearchPanelPosition | null = null;
+let searchSelectionRange: CellRange | null = null;
 
 function stabilizeIncomingRenderModel(
     previousModel: EditorRenderModel | null,
@@ -277,6 +304,69 @@ interface VirtualViewportState {
 
 function getViewportElement(): HTMLElement | null {
     return document.querySelector<HTMLElement>('[data-role="grid-scroll-main"]');
+}
+
+function getEditorAppElement(): HTMLElement | null {
+    return document.querySelector<HTMLElement>('[data-role="editor-app"]');
+}
+
+function getSearchPanelShellElement(): HTMLElement | null {
+    return document.querySelector<HTMLElement>('[data-role="search-panel-shell"]');
+}
+
+function clampSearchPanelPosition(
+    position: SearchPanelPosition,
+    {
+        appElement = getEditorAppElement(),
+        panelElement = getSearchPanelShellElement(),
+    }: {
+        appElement?: HTMLElement | null;
+        panelElement?: HTMLElement | null;
+    } = {}
+): SearchPanelPosition {
+    if (!appElement || !panelElement) {
+        return position;
+    }
+
+    const margin = 12;
+    const maxLeft = Math.max(margin, appElement.clientWidth - panelElement.offsetWidth - margin);
+    const maxTop = Math.max(margin, appElement.clientHeight - panelElement.offsetHeight - margin);
+
+    return {
+        left: Math.max(margin, Math.min(position.left, maxLeft)),
+        top: Math.max(margin, Math.min(position.top, maxTop)),
+    };
+}
+
+function syncSearchPanelShellPosition(): void {
+    if (!searchPanelPosition) {
+        return;
+    }
+
+    const shell = getSearchPanelShellElement();
+    if (!shell) {
+        return;
+    }
+
+    const nextPosition = clampSearchPanelPosition(searchPanelPosition, {
+        panelElement: shell,
+    });
+    searchPanelPosition = nextPosition;
+    shell.style.left = `${nextPosition.left}px`;
+    shell.style.top = `${nextPosition.top}px`;
+    shell.style.right = "auto";
+}
+
+function isSearchPanelInteractiveTarget(target: EventTarget | null): boolean {
+    if (!(target instanceof Element)) {
+        return false;
+    }
+
+    return Boolean(
+        target.closest(
+            'button, input, textarea, select, a, [role="button"], [role="tab"], .search-strip__input-wrap'
+        )
+    );
 }
 
 function getVirtualViewportState(currentModel: EditorRenderModel | null): VirtualViewportState | null {
@@ -454,6 +544,33 @@ function hasExpandedSelection(range: CellRange | null = getSelectionRange()): bo
     return hasExpandedSelectionRange(range);
 }
 
+function getExpandedSelectionRange(): CellRange | null {
+    const range = getSelectionRange();
+    return hasExpandedSelection(range) ? range : null;
+}
+
+function getSelectionRangeAddress(range: CellRange): string {
+    return `${getCellAddressLabel(range.startRow, range.startColumn)}:${getCellAddressLabel(range.endRow, range.endColumn)}`;
+}
+
+function normalizeSearchPanelState(): void {
+    const currentSelectionRange = getExpandedSelectionRange();
+
+    if (searchScope !== "selection") {
+        searchSelectionRange = currentSelectionRange;
+        return;
+    }
+
+    if (!currentSelectionRange) {
+        searchScope = "sheet";
+        searchSelectionRange = null;
+        searchFeedback = null;
+        return;
+    }
+
+    searchSelectionRange = currentSelectionRange;
+}
+
 function getSelectionOutlineClasses(
     rowNumber: number,
     columnNumber: number,
@@ -481,6 +598,10 @@ function getSelectionStartCell(): CellPosition | null {
         rowNumber: range.startRow,
         columnNumber: range.startColumn,
     };
+}
+
+function getActiveHighlightCell(): CellPosition | null {
+    return selectionAnchorCell ?? selectedCell;
 }
 
 function isActiveSelectionCell(rowNumber: number, columnNumber: number): boolean {
@@ -560,7 +681,7 @@ function getSelectedCellAddress(): string {
     }
 
     if (hasExpandedSelection(range)) {
-        return `${getCellAddressLabel(range.startRow, range.startColumn)}:${getCellAddressLabel(range.endRow, range.endColumn)}`;
+        return getSelectionRangeAddress(range);
     }
 
     const cell = getCellView(selectedCell.rowNumber, selectedCell.columnNumber);
@@ -713,6 +834,70 @@ function requestInsertColumn(columnNumber: number): void {
 function requestDeleteColumn(columnNumber: number): void {
     closeContextMenu({ refresh: false });
     vscode.postMessage({ type: "deleteColumn", columnNumber });
+}
+
+function beginSearchPanelDrag(pointerId: number, clientX: number, clientY: number): void {
+    const appElement = getEditorAppElement();
+    const panelElement = getSearchPanelShellElement();
+    if (!appElement || !panelElement) {
+        return;
+    }
+
+    const appRect = appElement.getBoundingClientRect();
+    const panelRect = panelElement.getBoundingClientRect();
+    const initialPosition = {
+        left: panelRect.left - appRect.left,
+        top: panelRect.top - appRect.top,
+    };
+
+    searchPanelPosition = clampSearchPanelPosition(initialPosition, {
+        appElement,
+        panelElement,
+    });
+    searchPanelDragState = {
+        pointerId,
+        offsetX: clientX - panelRect.left,
+        offsetY: clientY - panelRect.top,
+    };
+    clearBrowserTextSelection();
+    syncSearchPanelShellPosition();
+}
+
+function updateSearchPanelDrag(clientX: number, clientY: number): void {
+    if (!searchPanelDragState) {
+        return;
+    }
+
+    const appElement = getEditorAppElement();
+    const panelElement = getSearchPanelShellElement();
+    if (!appElement || !panelElement) {
+        return;
+    }
+
+    const appRect = appElement.getBoundingClientRect();
+    searchPanelPosition = clampSearchPanelPosition(
+        {
+            left: clientX - appRect.left - searchPanelDragState.offsetX,
+            top: clientY - appRect.top - searchPanelDragState.offsetY,
+        },
+        {
+            appElement,
+            panelElement,
+        }
+    );
+    syncSearchPanelShellPosition();
+}
+
+function stopSearchPanelDrag(pointerId?: number): void {
+    if (!searchPanelDragState) {
+        return;
+    }
+
+    if (pointerId !== undefined && searchPanelDragState.pointerId !== pointerId) {
+        return;
+    }
+
+    searchPanelDragState = null;
 }
 
 function getCellPositionFromElement(element: Element | null): CellPosition | null {
@@ -1844,6 +2029,149 @@ function focusToolbarInput(role: "position" | "value"): void {
     input.select();
 }
 
+function focusSearchInput(): void {
+    const input = document.querySelector<HTMLInputElement>('[data-role="search-input"]');
+    if (!input) {
+        return;
+    }
+
+    input.focus();
+    input.select();
+}
+
+function openSearchPanel(): void {
+    if (!isSearchPanelOpen) {
+        isSearchPanelOpen = true;
+        searchScope = "sheet";
+        searchSelectionRange = getExpandedSelectionRange();
+        searchFeedback = null;
+        renderApp({ commitEditing: false });
+    }
+
+    requestAnimationFrame(() => {
+        focusSearchInput();
+    });
+}
+
+function closeSearchPanel(): void {
+    if (!isSearchPanelOpen) {
+        return;
+    }
+
+    stopSearchPanelDrag();
+    isSearchPanelOpen = false;
+    searchScope = "sheet";
+    searchSelectionRange = null;
+    searchFeedback = null;
+    renderApp({ commitEditing: false });
+}
+
+function updateSearchQuery(value: string): void {
+    if (searchQuery === value && !searchFeedback) {
+        return;
+    }
+
+    searchQuery = value;
+    searchFeedback = null;
+    renderApp({ commitEditing: false });
+}
+
+function updateSearchScope(scope: EditorSearchScope): void {
+    if (scope === "selection") {
+        const currentSelectionRange = getExpandedSelectionRange();
+        if (!currentSelectionRange) {
+            return;
+        }
+
+        searchSelectionRange = currentSelectionRange;
+    } else {
+        searchSelectionRange = getExpandedSelectionRange();
+    }
+
+    if (searchScope === scope && !searchFeedback) {
+        return;
+    }
+
+    searchScope = scope;
+    searchFeedback = null;
+    renderApp({ commitEditing: false });
+}
+
+function toggleSearchOption(option: keyof SearchOptions): void {
+    searchOptions = {
+        ...searchOptions,
+        [option]: !searchOptions[option],
+    };
+    searchFeedback = null;
+    renderApp({ commitEditing: false });
+}
+
+function getEffectiveSearchScope(): EditorSearchScope {
+    return searchScope === "selection" && Boolean(searchSelectionRange ?? getExpandedSelectionRange())
+        ? "selection"
+        : "sheet";
+}
+
+function submitSearch(direction: "next" | "prev"): void {
+    const normalizedQuery = searchQuery.trim();
+    if (!normalizedQuery) {
+        focusSearchInput();
+        return;
+    }
+
+    const effectiveScope = getEffectiveSearchScope();
+    const selectionRange =
+        effectiveScope === "selection"
+            ? (searchSelectionRange ?? getExpandedSelectionRange())
+            : null;
+
+    searchFeedback = null;
+    renderApp({ commitEditing: false });
+    vscode.postMessage({
+        type: "search",
+        query: normalizedQuery,
+        direction,
+        options: searchOptions,
+        scope: effectiveScope,
+        selectionRange: selectionRange ?? undefined,
+    });
+}
+
+function handleSearchResult(message: EditorSearchResultMessage): void {
+    if (message.status !== "matched" || !message.match) {
+        searchFeedback = message;
+        renderApp({ commitEditing: false, sync: true });
+        return;
+    }
+
+    const preservedSelectionRange =
+        message.scope === "selection"
+            ? (searchSelectionRange ?? getExpandedSelectionRange())
+            : null;
+    const fallbackAnchor = {
+        rowNumber: message.match.rowNumber,
+        columnNumber: message.match.columnNumber,
+    };
+
+    searchFeedback = null;
+    setSelectedCellLocal(
+        {
+            rowNumber: message.match.rowNumber,
+            columnNumber: message.match.columnNumber,
+        },
+        {
+            reveal: true,
+            syncHost: false,
+            anchorCell:
+                message.scope === "selection"
+                    ? (selectionAnchorCell ?? selectedCell ?? fallbackAnchor)
+                    : undefined,
+            selectionRange: preservedSelectionRange ?? undefined,
+            forceRender: true,
+        }
+    );
+}
+
 function getPositionInputValue(): string {
     return selectedCell ? getSelectedCellAddress() : "";
 }
@@ -1938,6 +2266,7 @@ function renderApp({
         revealSelection,
         useModelSelection,
     });
+    normalizeSearchPanelState();
     viewRevision += 1;
     updateView({
         kind: "app",
@@ -2027,6 +2356,265 @@ function ToolbarButton({
             />
             {iconOnly ? null : <span>{actionLabel}</span>}
         </button>
+    );
+}
+
+function SearchPanel({
+    currentModel,
+}: {
+    currentModel: EditorRenderModel;
+}): React.ReactElement | null {
+    const shellRef = React.useRef<HTMLElement | null>(null);
+
+    React.useLayoutEffect(() => {
+        if (!isSearchPanelOpen) {
+            return;
+        }
+
+        const shell = shellRef.current;
+        if (!shell || !searchPanelPosition) {
+            return;
+        }
+
+        const nextPosition = clampSearchPanelPosition(searchPanelPosition, {
+            panelElement: shell,
+        });
+        if (
+            nextPosition.left !== searchPanelPosition.left ||
+            nextPosition.top !== searchPanelPosition.top
+        ) {
+            searchPanelPosition = nextPosition;
+            shell.style.left = `${nextPosition.left}px`;
+            shell.style.top = `${nextPosition.top}px`;
+            shell.style.right = "auto";
+        }
+    });
+
+    if (!isSearchPanelOpen) {
+        return null;
+    }
+
+    const currentSelectionRange = getExpandedSelectionRange();
+    const selectionRange =
+        searchScope === "selection"
+            ? (searchSelectionRange ?? currentSelectionRange)
+            : currentSelectionRange;
+    const isSelectionScopeAvailable = Boolean(currentSelectionRange);
+    const effectiveScope = getEffectiveSearchScope();
+    const isQueryEmpty = searchQuery.trim().length === 0;
+    const hasSearchableGrid =
+        currentModel.activeSheet.rowCount > 0 && currentModel.activeSheet.columnCount > 0;
+    const feedbackToneClass =
+        searchFeedback?.status === "invalid-pattern"
+            ? "search-strip__feedback--error"
+            : searchFeedback?.status === "no-match"
+              ? "search-strip__feedback--warn"
+              : undefined;
+    const panelStyle: React.CSSProperties | undefined = searchPanelPosition
+        ? {
+              left: `${searchPanelPosition.left}px`,
+              top: `${searchPanelPosition.top}px`,
+              right: "auto",
+          }
+        : undefined;
+
+    return (
+        <section
+            ref={shellRef}
+            className="search-strip-shell"
+            data-role="search-panel-shell"
+            style={panelStyle}
+            onPointerDown={(event) => {
+                if (event.button !== 0 || isSearchPanelInteractiveTarget(event.target)) {
+                    return;
+                }
+
+                event.preventDefault();
+                closeContextMenu({ refresh: false });
+                beginSearchPanelDrag(event.pointerId, event.clientX, event.clientY);
+            }}
+        >
+            <div className="search-strip" data-role="search-panel" role="search">
+                <div className="search-strip__header">
+                    <div className="search-strip__tabs" role="tablist" aria-label={STRINGS.search}>
+                        <button
+                            aria-selected={true}
+                            className="search-strip__tab is-active"
+                            role="tab"
+                            tabIndex={0}
+                            type="button"
+                        >
+                            <span className="codicon codicon-search search-strip__tab-icon" aria-hidden />
+                            <span>{STRINGS.searchFind}</span>
+                        </button>
+                        <button
+                            aria-selected={false}
+                            className="search-strip__tab"
+                            disabled={true}
+                            role="tab"
+                            tabIndex={-1}
+                            title={STRINGS.searchReplaceComingSoon}
+                            type="button"
+                        >
+                            <span className="codicon codicon-replace search-strip__tab-icon" aria-hidden />
+                            <span>{STRINGS.searchReplace}</span>
+                        </button>
+                    </div>
+                    <div className="search-strip__header-tools">
+                        <span className="search-strip__soon">{STRINGS.searchReplaceComingSoon}</span>
+                    </div>
+                </div>
+                <div className="search-strip__row search-strip__row--primary">
+                    <div
+                        className={classNames([
+                            "search-strip__input-wrap",
+                            searchFeedback?.status === "invalid-pattern" && "is-invalid",
+                        ])}
+                    >
+                        <span
+                            className="codicon codicon-search search-strip__input-icon"
+                            aria-hidden
+                        />
+                        <input
+                            aria-label={STRINGS.search}
+                            className="search-strip__input"
+                            data-role="search-input"
+                            placeholder={STRINGS.searchPlaceholder}
+                            type="text"
+                            value={searchQuery}
+                            onChange={(event) => {
+                                updateSearchQuery(event.currentTarget.value);
+                            }}
+                            onKeyDown={(event) => {
+                                if (event.key === "Enter") {
+                                    event.preventDefault();
+                                    submitSearch(event.shiftKey ? "prev" : "next");
+                                    return;
+                                }
+
+                                if (event.key === "Escape") {
+                                    event.preventDefault();
+                                    event.stopPropagation();
+                                    closeSearchPanel();
+                                }
+                            }}
+                        />
+                        <div className="search-strip__input-tools" role="group" aria-label={STRINGS.search}>
+                            <button
+                                aria-label={STRINGS.searchRegex}
+                                aria-pressed={searchOptions.isRegexp}
+                                className={classNames([
+                                    "search-strip__icon-toggle",
+                                    searchOptions.isRegexp && "is-active",
+                                ])}
+                                title={STRINGS.searchRegex}
+                                type="button"
+                                onMouseDown={(event) => event.preventDefault()}
+                                onClick={() => toggleSearchOption("isRegexp")}
+                            >
+                                <span className="codicon codicon-regex" aria-hidden />
+                            </button>
+                            <button
+                                aria-label={STRINGS.searchMatchCase}
+                                aria-pressed={searchOptions.matchCase}
+                                className={classNames([
+                                    "search-strip__icon-toggle",
+                                    searchOptions.matchCase && "is-active",
+                                ])}
+                                title={STRINGS.searchMatchCase}
+                                type="button"
+                                onMouseDown={(event) => event.preventDefault()}
+                                onClick={() => toggleSearchOption("matchCase")}
+                            >
+                                <span className="codicon codicon-case-sensitive" aria-hidden />
+                            </button>
+                            <button
+                                aria-label={STRINGS.searchWholeWord}
+                                aria-pressed={searchOptions.wholeWord}
+                                className={classNames([
+                                    "search-strip__icon-toggle",
+                                    searchOptions.wholeWord && "is-active",
+                                ])}
+                                title={STRINGS.searchWholeWord}
+                                type="button"
+                                onMouseDown={(event) => event.preventDefault()}
+                                onClick={() => toggleSearchOption("wholeWord")}
+                            >
+                                <span className="codicon codicon-whole-word" aria-hidden />
+                            </button>
+                        </div>
+                    </div>
+                    <div className="search-strip__actions">
+                        <ToolbarButton
+                            actionLabel={STRINGS.findPrev}
+                            disabled={isQueryEmpty || !hasSearchableGrid}
+                            icon="codicon-arrow-up"
+                            iconOnly={true}
+                            onClick={() => submitSearch("prev")}
+                        />
+                        <ToolbarButton
+                            actionLabel={STRINGS.findNext}
+                            disabled={isQueryEmpty || !hasSearchableGrid}
+                            icon="codicon-arrow-down"
+                            iconOnly={true}
+                            onClick={() => submitSearch("next")}
+                        />
+                        <ToolbarButton
+                            actionLabel={STRINGS.searchClose}
+                            icon="codicon-close"
+                            iconOnly={true}
+                            onClick={closeSearchPanel}
+                        />
+                    </div>
+                </div>
+                <div className="search-strip__row search-strip__row--meta">
+                    <div className="search-strip__scope-group">
+                        <button
+                            aria-pressed={effectiveScope === "sheet"}
+                            className={classNames([
+                                "search-strip__scope-button",
+                                effectiveScope === "sheet" && "is-active",
+                            ])}
+                            type="button"
+                            onClick={() => updateSearchScope("sheet")}
+                        >
+                            {STRINGS.searchScopeSheet}
+                        </button>
+                        <button
+                            aria-pressed={effectiveScope === "selection"}
+                            className={classNames([
+                                "search-strip__scope-button",
+                                effectiveScope === "selection" && "is-active",
+                            ])}
+                            disabled={!isSelectionScopeAvailable}
+                            title={
+                                isSelectionScopeAvailable
+                                    ? STRINGS.searchScopeSelection
+                                    : STRINGS.searchScopeSelectionDisabled
+                            }
+                            type="button"
+                            onClick={() => updateSearchScope("selection")}
+                        >
+                            {STRINGS.searchScopeSelection}
+                        </button>
+                    </div>
+                    {selectionRange ? (
+                        <span className="search-strip__range">
+                            {getSelectionRangeAddress(selectionRange)}
+                        </span>
+                    ) : (
+                        <span className="search-strip__hint">
+                            {STRINGS.searchScopeSelectionDisabled}
+                        </span>
+                    )}
+                </div>
+                {searchFeedback?.message ? (
+                    <div className={classNames(["search-strip__feedback", feedbackToneClass])}>
+                        {searchFeedback.message}
+                    </div>
+                ) : null}
+            </div>
+        </section>
     );
 }
 
@@ -2240,6 +2828,13 @@ function EditorToolbar({ currentModel }: { currentModel: EditorRenderModel }): R
             </div>
             <div className="toolbar__group">
                 <ToolbarButton
+                    actionLabel={STRINGS.search}
+                    icon="codicon-search"
+                    iconOnly={true}
+                    isActive={isSearchPanelOpen}
+                    onClick={openSearchPanel}
+                />
+                <ToolbarButton
                     actionLabel={STRINGS.undo}
                     disabled={!currentModel.canEdit || !canUndo || isSaving}
                     icon="codicon-redo"
@@ -2389,23 +2984,15 @@ function arePendingEditsEqual(
     );
 }
 
-function isRowWithinSelectionRange(selectionRange: CellRange | null, rowNumber: number): boolean {
-    return Boolean(
-        selectionRange &&
-            rowNumber >= selectionRange.startRow &&
-            rowNumber <= selectionRange.endRow
-    );
+function isActiveHighlightRow(activeRowNumber: number | null, rowNumber: number): boolean {
+    return activeRowNumber === rowNumber;
 }
 
-function isColumnWithinSelectionRange(
-    selectionRange: CellRange | null,
+function isActiveHighlightColumn(
+    activeColumnNumber: number | null,
     columnNumber: number
 ): boolean {
-    return Boolean(
-        selectionRange &&
-            columnNumber >= selectionRange.startColumn &&
-            columnNumber <= selectionRange.endColumn
-    );
+    return activeColumnNumber === columnNumber;
 }
 
 function isCellWithinSelectionRange(
@@ -2713,18 +3300,18 @@ const EditorColumnHeaderCell = React.memo(function EditorColumnHeaderCell({
     label,
     columnNumber,
     hasPending,
-    selectionRange,
+    activeColumnNumber,
     top,
     left,
 }: {
     label: string;
     columnNumber: number;
     hasPending: boolean;
-    selectionRange: CellRange | null;
+    activeColumnNumber: number | null;
     top: number;
     left: number;
 }): React.ReactElement {
-    const isActiveColumn = isColumnWithinSelectionRange(selectionRange, columnNumber);
+    const isActiveColumn = isActiveHighlightColumn(activeColumnNumber, columnNumber);
 
     return (
         <div
@@ -2765,25 +3352,25 @@ const EditorColumnHeaderCell = React.memo(function EditorColumnHeaderCell({
     previous.label === next.label &&
     previous.columnNumber === next.columnNumber &&
     previous.hasPending === next.hasPending &&
+    previous.activeColumnNumber === next.activeColumnNumber &&
     previous.top === next.top &&
-    previous.left === next.left &&
-    areSelectionRangesEqual(previous.selectionRange, next.selectionRange)
+    previous.left === next.left
 );
 
 const EditorRowHeaderCell = React.memo(function EditorRowHeaderCell({
     rowNumber,
     hasPending,
-    selectionRange,
+    activeRowNumber,
     top,
     rowHeaderWidth,
 }: {
     rowNumber: number;
     hasPending: boolean;
-    selectionRange: CellRange | null;
+    activeRowNumber: number | null;
     top: number;
     rowHeaderWidth: number;
 }): React.ReactElement {
-    const isActiveRow = isRowWithinSelectionRange(selectionRange, rowNumber);
+    const isActiveRow = isActiveHighlightRow(activeRowNumber, rowNumber);
 
     return (
         <div
@@ -2822,9 +3409,9 @@ const EditorRowHeaderCell = React.memo(function EditorRowHeaderCell({
 (previous, next) =>
     previous.rowNumber === next.rowNumber &&
     previous.hasPending === next.hasPending &&
+    previous.activeRowNumber === next.activeRowNumber &&
     previous.top === next.top &&
-    previous.rowHeaderWidth === next.rowHeaderWidth &&
-    areSelectionRangesEqual(previous.selectionRange, next.selectionRange)
+    previous.rowHeaderWidth === next.rowHeaderWidth
 );
 
 const EditorVirtualCell = React.memo(function EditorVirtualCell({
@@ -2834,6 +3421,8 @@ const EditorVirtualCell = React.memo(function EditorVirtualCell({
     top,
     left,
     selectionRange,
+    activeRowNumber,
+    activeColumnNumber,
     hasExpandedRange,
     currentSelection,
     activeEditingCell,
@@ -2845,6 +3434,8 @@ const EditorVirtualCell = React.memo(function EditorVirtualCell({
     top: number;
     left: number;
     selectionRange: CellRange | null;
+    activeRowNumber: number | null;
+    activeColumnNumber: number | null;
     hasExpandedRange: boolean;
     currentSelection: CellPosition | null;
     activeEditingCell: EditingCell | null;
@@ -2867,8 +3458,8 @@ const EditorVirtualCell = React.memo(function EditorVirtualCell({
         currentSelection?.rowNumber === rowNumber &&
         currentSelection.columnNumber === columnNumber;
     const isSelected = isCellWithinSelectionRange(selectionRange, rowNumber, columnNumber);
-    const isActiveRow = isRowWithinSelectionRange(selectionRange, rowNumber);
-    const isActiveColumn = isColumnWithinSelectionRange(selectionRange, columnNumber);
+    const isActiveRow = isActiveHighlightRow(activeRowNumber, rowNumber);
+    const isActiveColumn = isActiveHighlightColumn(activeColumnNumber, columnNumber);
     const isEditing =
         activeEditingCell?.rowNumber === rowNumber &&
         activeEditingCell.columnNumber === columnNumber;
@@ -2965,6 +3556,8 @@ const EditorVirtualCell = React.memo(function EditorVirtualCell({
     previous.columnNumber === next.columnNumber &&
     previous.top === next.top &&
     previous.left === next.left &&
+    previous.activeRowNumber === next.activeRowNumber &&
+    previous.activeColumnNumber === next.activeColumnNumber &&
     previous.hasExpandedRange === next.hasExpandedRange &&
     areSelectionRangesEqual(previous.selectionRange, next.selectionRange) &&
     areCellPositionsEqual(previous.currentSelection, next.currentSelection) &&
@@ -2989,6 +3582,9 @@ function EditorVirtualGrid({
     const selectionRange = getSelectionRange();
     const hasExpandedRange = hasExpandedSelection(selectionRange);
     const currentSelection = selectedCell;
+    const activeHighlightCell = getActiveHighlightCell();
+    const activeRowNumber = activeHighlightCell?.rowNumber ?? null;
+    const activeColumnNumber = activeHighlightCell?.columnNumber ?? null;
     const activeEditingCell = editingCell;
     const bodyItems: React.ReactElement[] = [];
     const topItems: React.ReactElement[] = [];
@@ -3020,6 +3616,8 @@ function EditorVirtualGrid({
                 top={top}
                 left={left}
                 selectionRange={selectionRange}
+                activeRowNumber={activeRowNumber}
+                activeColumnNumber={activeColumnNumber}
                 hasExpandedRange={hasExpandedRange}
                 currentSelection={currentSelection}
                 activeEditingCell={activeEditingCell}
@@ -3038,7 +3636,7 @@ function EditorVirtualGrid({
                 }
                 columnNumber={columnNumber}
                 hasPending={pendingSummary.columns.has(columnNumber)}
-                selectionRange={selectionRange}
+                activeColumnNumber={activeColumnNumber}
                 top={0}
                 left={getEditorGridLeft(metrics.rowHeaderWidth, columnNumber)}
             />
@@ -3055,7 +3653,7 @@ function EditorVirtualGrid({
                 }
                 columnNumber={columnNumber}
                 hasPending={pendingSummary.columns.has(columnNumber)}
-                selectionRange={selectionRange}
+                activeColumnNumber={activeColumnNumber}
                 top={0}
                 left={getEditorGridLeft(metrics.rowHeaderWidth, columnNumber)}
             />
@@ -3068,7 +3666,7 @@ function EditorVirtualGrid({
                 key={`left:row:${rowNumber}`}
                 rowNumber={rowNumber}
                 hasPending={pendingSummary.rows.has(rowNumber)}
-                selectionRange={selectionRange}
+                activeRowNumber={activeRowNumber}
                 top={getEditorGridTop(rowNumber)}
                 rowHeaderWidth={metrics.rowHeaderWidth}
             />
@@ -3089,7 +3687,7 @@ function EditorVirtualGrid({
                 key={`corner:row:${rowNumber}`}
                 rowNumber={rowNumber}
                 hasPending={pendingSummary.rows.has(rowNumber)}
-                selectionRange={selectionRange}
+                activeRowNumber={activeRowNumber}
                 top={getEditorGridTop(rowNumber)}
                 rowHeaderWidth={metrics.rowHeaderWidth}
             />
@@ -3381,8 +3979,9 @@ function EditorApp({ view }: { view: Extract<ViewState, { kind: "app" }> }): Rea
     const pendingSummary = getPendingSummary(view.model.activeSheet.key);
 
     return (
-        <div className="app app--editor">
+        <div className="app app--editor" data-role="editor-app">
             <EditorToolbar currentModel={view.model} />
+            <SearchPanel currentModel={view.model} />
             <section className="panes panes--single">
                 <EditorPane
                     currentModel={view.model}
@@ -3440,21 +4039,33 @@ window.addEventListener("message", (event: MessageEvent<IncomingMessage>) => {
     const message = event.data;
 
     if (message.type === "loading") {
+        stopSearchPanelDrag();
+        isSearchPanelOpen = false;
+        searchQuery = "";
+        searchOptions = { ...DEFAULT_SEARCH_OPTIONS };
+        searchScope = "sheet";
+        searchSelectionRange = null;
+        searchFeedback = null;
         renderLoading(message.message);
         return;
     }
 
     if (message.type === "error") {
+        stopSearchPanelDrag();
         isSaving = false;
         renderError(message.message);
         return;
     }
 
+    if (message.type === "searchResult") {
+        handleSearchResult(message);
+        return;
+    }
+
     if (message.type === "render") {
-        const previousModel = model;
         const canReuseActiveSheetData =
             Boolean(message.clearPendingEdits) && pendingEdits.size === 0;
-        model = stabilizeIncomingRenderModel(previousModel, message.payload, {
+        model = stabilizeIncomingRenderModel(model, message.payload, {
             canReuseActiveSheetData,
         });
         isSaving = false;
@@ -3508,6 +4119,23 @@ document.addEventListener("keydown", (event: KeyboardEvent) => {
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
         event.preventDefault();
         triggerSave();
+        return;
+    }
+
+    if (
+        !editingCell &&
+        (event.ctrlKey || event.metaKey) &&
+        !event.altKey &&
+        event.key.toLowerCase() === "f"
+    ) {
+        event.preventDefault();
+        openSearchPanel();
+        return;
+    }
+
+    if (event.key === "Escape" && isSearchPanelOpen && !isTextInputContext) {
+        event.preventDefault();
+        closeSearchPanel();
         return;
     }
 
@@ -3643,6 +4271,12 @@ document.addEventListener("pointerdown", (event: PointerEvent) => {
 });
 
 document.addEventListener("pointermove", (event: PointerEvent) => {
+    if (searchPanelDragState && searchPanelDragState.pointerId === event.pointerId) {
+        event.preventDefault();
+        updateSearchPanelDrag(event.clientX, event.clientY);
+        return;
+    }
+
     if (!selectionDragState || selectionDragState.pointerId !== event.pointerId) {
         return;
     }
@@ -3663,10 +4297,12 @@ document.addEventListener("pointermove", (event: PointerEvent) => {
 });
 
 document.addEventListener("pointerup", (event: PointerEvent) => {
+    stopSearchPanelDrag(event.pointerId);
     stopSelectionDrag(event.pointerId);
 });
 
 document.addEventListener("pointercancel", (event: PointerEvent) => {
+    stopSearchPanelDrag(event.pointerId);
     stopSelectionDrag(event.pointerId);
 });
 

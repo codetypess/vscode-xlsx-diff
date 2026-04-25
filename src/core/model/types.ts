@@ -50,9 +50,16 @@ export interface WorkbookSnapshot {
     modifiedTimeLabel?: string;
     detailLabel?: string;
     detailValue?: string;
+    detailFacts?: WorkbookDetailFact[];
     titleDetail?: string;
     isReadonly?: boolean;
     sheets: SheetSnapshot[];
+}
+
+export interface WorkbookDetailFact {
+    label: string;
+    value: string;
+    titleValue?: string;
 }
 
 export interface EditorSelectedCell {

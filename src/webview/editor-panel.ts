@@ -13,9 +13,9 @@ import { getRuntimeMessages } from "../i18n";
 import { rememberRecentWorkbookResourceUri } from "../scm/recent-workbook-resource-context";
 import { getWorkbookResourceName } from "../workbook/resource-uri";
 import {
-    findEditorSearchMatch,
     getInsertEditorSheetIndex,
     getNewEditorSheetName,
+    resolveEditorSearchResult,
     resolveEditorCellReference,
     validateEditorSheetName,
 } from "./editor-panel-logic";
@@ -37,6 +37,7 @@ import {
 } from "./editor-panel-state";
 import type {
     EditorPanelStrings,
+    EditorSearchResultMessage,
     EditorWebviewMessage,
     StructuralHistoryEntry,
     WorkingSheetEntry,
@@ -344,6 +345,14 @@ export class XlsxEditorPanel {
         await this.enqueueReload();
     }
 
+    private async postSearchResult(message: EditorSearchResultMessage): Promise<void> {
+        if (!this.isWebviewReady) {
+            return;
+        }
+
+        await this.panel.webview.postMessage(message);
+    }
+
     private getHtml(): string {
         const webview = this.panel.webview;
         const nonce = getNonce();
@@ -426,31 +435,47 @@ export class XlsxEditorPanel {
                         return;
                     }
 
-                    let match;
-                    try {
-                        match = findEditorSearchMatch(
-                            this.getSheetEntries(),
-                            this.state,
-                            message.query,
-                            message.direction,
-                            message.options
-                        );
-                    } catch (error) {
-                        await vscode.window.showInformationMessage(
-                            `${getWebviewStrings().invalidSearchPattern} ${toErrorMessage(error)}`
-                        );
+                    const result = resolveEditorSearchResult(
+                        this.getSheetEntries(),
+                        this.state,
+                        message,
+                        {
+                            pendingEdits: this.pendingCellEdits,
+                        }
+                    );
+                    if (result.status === "invalid-pattern") {
+                        await this.postSearchResult({
+                            type: "searchResult",
+                            status: "invalid-pattern",
+                            scope: message.scope,
+                            message: getWebviewStrings().invalidSearchPattern,
+                        });
                         return;
                     }
 
-                    if (!match) {
-                        await vscode.window.showInformationMessage(
-                            getWebviewStrings().noSearchMatches
-                        );
+                    if (result.status === "no-match" || !result.match) {
+                        await this.postSearchResult({
+                            type: "searchResult",
+                            status: "no-match",
+                            scope: message.scope,
+                            message: getWebviewStrings().noSearchMatches,
+                        });
                         return;
                     }
 
-                    this.revealCell(match.sheetKey, match.rowNumber, match.columnNumber);
-                    await this.render();
+                    this.state = setSelectedEditorCell(
+                        this.getWorkingWorkbook()!,
+                        this.state,
+                        result.match.rowNumber,
+                        result.match.columnNumber,
+                        this.getSheetEntries()
+                    );
+                    await this.postSearchResult({
+                        type: "searchResult",
+                        status: "matched",
+                        scope: message.scope,
+                        match: result.match,
+                    });
                     return;
                 }
                 case "gotoCell":

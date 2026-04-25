@@ -1,8 +1,13 @@
-import { getColumnNumber } from "../core/model/cells";
+import type { CellEdit } from "../core/fastxlsx/write-cell-value";
+import { createCellKey, getColumnNumber } from "../core/model/cells";
 import type { EditorPanelState } from "../core/model/types";
+import { isCellWithinSelectionRange } from "./editor-selection-range";
 import type {
+    EditorSearchRequest,
     EditorPanelStrings,
+    EditorSearchResult,
     EditorSearchMatch,
+    EditorSearchScope,
     SearchOptions,
     WorkingSheetEntry,
 } from "./editor-panel-types";
@@ -11,10 +16,63 @@ function escapeRegex(value: string): string {
     return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+interface SearchableEditorCell {
+    rowNumber: number;
+    columnNumber: number;
+    value: string;
+    formula: string | null;
+}
+
 export function createEditorSearchPattern(query: string, options: SearchOptions): RegExp {
     const source = options.isRegexp ? query.trim() : escapeRegex(query.trim());
     const wrappedSource = options.wholeWord ? `\\b(?:${source})\\b` : source;
     return new RegExp(wrappedSource, options.matchCase ? "" : "i");
+}
+
+function getActiveSearchSheetEntry(
+    sheetEntries: WorkingSheetEntry[],
+    state: EditorPanelState
+): WorkingSheetEntry | undefined {
+    return sheetEntries.find((entry) => entry.key === state.activeSheetKey) ?? sheetEntries[0];
+}
+
+function getEffectiveSearchScope(
+    scope: EditorSearchScope | undefined,
+    hasSelectionRange: boolean
+): EditorSearchScope {
+    return scope === "selection" && hasSelectionRange ? "selection" : "sheet";
+}
+
+function getSearchableEditorCells(
+    sheetEntry: WorkingSheetEntry,
+    pendingEdits: CellEdit[] | undefined
+): SearchableEditorCell[] {
+    const cells = new Map<string, SearchableEditorCell>(
+        Object.values(sheetEntry.sheet.cells).map((cell) => [
+            cell.key,
+            {
+                rowNumber: cell.rowNumber,
+                columnNumber: cell.columnNumber,
+                value: cell.displayValue,
+                formula: cell.formula ?? null,
+            },
+        ])
+    );
+
+    for (const edit of pendingEdits ?? []) {
+        if (edit.sheetName !== sheetEntry.sheet.name) {
+            continue;
+        }
+
+        cells.set(createCellKey(edit.rowNumber, edit.columnNumber), {
+            rowNumber: edit.rowNumber,
+            columnNumber: edit.columnNumber,
+            value: edit.value,
+            formula: null,
+        });
+    }
+
+    return [...cells.values()];
 }
 
 export function findEditorSearchMatch(
@@ -22,7 +80,17 @@ export function findEditorSearchMatch(
     state: EditorPanelState,
     query: string,
     direction: "next" | "prev",
-    options: SearchOptions
+    options: SearchOptions,
+    searchContext: {
+        pendingEdits?: CellEdit[];
+        scope?: EditorSearchScope;
+        selectionRange?: {
+            startRow: number;
+            endRow: number;
+            startColumn: number;
+            endColumn: number;
+        };
+    } = {}
 ): EditorSearchMatch | null {
     const normalizedQuery = query.trim();
     if (!normalizedQuery) {
@@ -30,15 +98,29 @@ export function findEditorSearchMatch(
     }
 
     const pattern = createEditorSearchPattern(normalizedQuery, options);
-    const activeSheetEntry =
-        sheetEntries.find((entry) => entry.key === state.activeSheetKey) ?? sheetEntries[0];
+    const activeSheetEntry = getActiveSearchSheetEntry(sheetEntries, state);
     if (!activeSheetEntry) {
         return null;
     }
 
-    const matches = Object.values(activeSheetEntry.sheet.cells)
+    const effectiveScope = getEffectiveSearchScope(
+        searchContext.scope,
+        Boolean(searchContext.selectionRange)
+    );
+    const matches = getSearchableEditorCells(activeSheetEntry, searchContext.pendingEdits)
         .filter((cell) => {
-            const value = cell.displayValue;
+            if (
+                effectiveScope === "selection" &&
+                !isCellWithinSelectionRange(
+                    searchContext.selectionRange ?? null,
+                    cell.rowNumber,
+                    cell.columnNumber
+                )
+            ) {
+                return false;
+            }
+
+            const value = cell.value;
             const formula = cell.formula ?? "";
             return pattern.test(value) || pattern.test(formula);
         })
@@ -63,11 +145,32 @@ export function findEditorSearchMatch(
     const selectionOnCurrentSheet =
         state.selectedCell &&
         state.selectedCell.rowNumber >= 1 &&
-        state.selectedCell.rowNumber <= activeSheetEntry.sheet.rowCount;
-    const anchor = {
-        rowNumber: selectionOnCurrentSheet ? state.selectedCell!.rowNumber : 1,
-        columnNumber: selectionOnCurrentSheet ? state.selectedCell!.columnNumber : 0,
-    };
+        state.selectedCell.rowNumber <= activeSheetEntry.sheet.rowCount &&
+        state.selectedCell.columnNumber >= 1 &&
+        state.selectedCell.columnNumber <= activeSheetEntry.sheet.columnCount;
+    const selectionWithinScope =
+        selectionOnCurrentSheet &&
+        (effectiveScope !== "selection" ||
+            isCellWithinSelectionRange(
+                searchContext.selectionRange ?? null,
+                state.selectedCell!.rowNumber,
+                state.selectedCell!.columnNumber
+            ));
+    const anchor =
+        selectionWithinScope
+            ? {
+                  rowNumber: state.selectedCell!.rowNumber,
+                  columnNumber: state.selectedCell!.columnNumber,
+              }
+            : effectiveScope === "selection" && searchContext.selectionRange
+              ? {
+                    rowNumber: searchContext.selectionRange.startRow,
+                    columnNumber: searchContext.selectionRange.startColumn - 1,
+                }
+              : {
+                    rowNumber: 1,
+                    columnNumber: 0,
+                };
     const compare = (
         candidate: { rowNumber: number; columnNumber: number },
         current: { rowNumber: number; columnNumber: number }
@@ -90,6 +193,34 @@ export function findEditorSearchMatch(
     }
 
     return matches.find((match) => compare(match, anchor) > 0) ?? matches[0]!;
+}
+
+export function resolveEditorSearchResult(
+    sheetEntries: WorkingSheetEntry[],
+    state: EditorPanelState,
+    request: EditorSearchRequest,
+    searchContext: {
+        pendingEdits?: CellEdit[];
+    } = {}
+): EditorSearchResult {
+    try {
+        const match = findEditorSearchMatch(
+            sheetEntries,
+            state,
+            request.query,
+            request.direction,
+            request.options,
+            {
+                pendingEdits: searchContext.pendingEdits,
+                scope: request.scope,
+                selectionRange: request.selectionRange,
+            }
+        );
+
+        return match ? { status: "matched", match } : { status: "no-match" };
+    } catch {
+        return { status: "invalid-pattern" };
+    }
 }
 
 export function resolveEditorCellReference(

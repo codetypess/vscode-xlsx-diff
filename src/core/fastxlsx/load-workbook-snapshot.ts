@@ -5,6 +5,7 @@ import * as vscode from "vscode";
 import { createCellKey, getCellAddress } from "../model/cells";
 import { Workbook } from "./runtime";
 import {
+    type WorkbookDetailFact,
     type CellSnapshot,
     type SheetFreezePaneSnapshot,
     type SheetSnapshot,
@@ -44,6 +45,7 @@ interface WorkbookSnapshotMetadata {
     modifiedTimeLabel?: string;
     detailLabel?: string;
     detailValue?: string;
+    detailFacts?: WorkbookDetailFact[];
     titleDetail?: string;
     isReadonly?: boolean;
 }
@@ -129,6 +131,38 @@ function createEmptyWorkbookSnapshot(metadata: WorkbookSnapshotMetadata): Workbo
     };
 }
 
+function createWorkbookDetailFacts(
+    resourceDetail:
+        | {
+              label: string;
+              value: string;
+              titleValue?: string;
+              extraFacts?: Array<{
+                  label: string;
+                  value: string;
+                  titleValue?: string;
+              }>;
+          }
+        | undefined
+): WorkbookDetailFact[] | undefined {
+    if (!resourceDetail) {
+        return undefined;
+    }
+
+    return [
+        {
+            label: resourceDetail.label,
+            value: resourceDetail.value,
+            titleValue: resourceDetail.titleValue,
+        },
+        ...(resourceDetail.extraFacts ?? []).map((fact) => ({
+            label: fact.label,
+            value: fact.value,
+            titleValue: fact.titleValue,
+        })),
+    ];
+}
+
 export async function loadWorkbookSnapshot(
     filePathOrUri: string | vscode.Uri
 ): Promise<WorkbookSnapshot> {
@@ -186,6 +220,7 @@ export async function loadWorkbookSnapshot(
             modifiedTimeLabel,
             detailLabel: resourceDetail?.label,
             detailValue: resourceDetail?.value,
+            detailFacts: createWorkbookDetailFacts(resourceDetail),
             titleDetail: resourceDetail?.titleValue,
             isReadonly: isWorkbookResourceReadOnly(filePathOrUri),
         });
@@ -204,6 +239,7 @@ export async function loadWorkbookSnapshot(
         modifiedTimeLabel,
         detailLabel: resourceDetail?.label,
         detailValue: resourceDetail?.value,
+        detailFacts: createWorkbookDetailFacts(resourceDetail),
         titleDetail: resourceDetail?.titleValue,
         isReadonly: isWorkbookResourceReadOnly(filePathOrUri),
     });

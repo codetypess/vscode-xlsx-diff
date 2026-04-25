@@ -8,6 +8,7 @@ import {
     findEditorSearchMatch,
     getInsertEditorSheetIndex,
     getNewEditorSheetName,
+    resolveEditorSearchResult,
     resolveEditorCellReference,
     validateEditorSheetName,
 } from "../webview/editor-panel-logic";
@@ -104,6 +105,118 @@ suite("Editor panel logic", () => {
             rowNumber: 4,
             columnNumber: 1,
         });
+    });
+
+    test("search can be limited to the selected range", () => {
+        const workbook = createWorkbook("editor.xlsx", [
+            createSheet("Sheet1", [
+                createCell(1, 1, "alpha"),
+                createCell(2, 1, "alpha"),
+                createCell(3, 1, "alpha"),
+            ]),
+        ]);
+        const sheetEntries = createWorkingSheetEntries(workbook);
+        const state: EditorPanelState = {
+            activeSheetKey: "sheet:0",
+            selectedCell: { rowNumber: 2, columnNumber: 1 },
+        };
+
+        const nextMatch = findEditorSearchMatch(
+            sheetEntries,
+            state,
+            "alpha",
+            "next",
+            {
+                isRegexp: false,
+                matchCase: false,
+                wholeWord: false,
+            },
+            {
+                scope: "selection",
+                selectionRange: {
+                    startRow: 2,
+                    endRow: 3,
+                    startColumn: 1,
+                    endColumn: 1,
+                },
+            }
+        );
+
+        assert.deepStrictEqual(nextMatch, {
+            sheetKey: "sheet:0",
+            rowNumber: 3,
+            columnNumber: 1,
+        });
+    });
+
+    test("search matches pending edits before the saved snapshot", () => {
+        const workbook = createWorkbook("editor.xlsx", [
+            createSheet("Sheet1", [
+                createCell(1, 1, "alpha"),
+                createCell(2, 1, "beta"),
+            ]),
+        ]);
+        const sheetEntries = createWorkingSheetEntries(workbook);
+        const state: EditorPanelState = {
+            activeSheetKey: "sheet:0",
+            selectedCell: { rowNumber: 1, columnNumber: 1 },
+        };
+
+        const nextMatch = findEditorSearchMatch(
+            sheetEntries,
+            state,
+            "alpha",
+            "next",
+            {
+                isRegexp: false,
+                matchCase: false,
+                wholeWord: false,
+            },
+            {
+                pendingEdits: [
+                    {
+                        sheetName: "Sheet1",
+                        rowNumber: 2,
+                        columnNumber: 1,
+                        value: "alpha",
+                    },
+                ],
+            }
+        );
+
+        assert.deepStrictEqual(nextMatch, {
+            sheetKey: "sheet:0",
+            rowNumber: 2,
+            columnNumber: 1,
+        });
+    });
+
+    test("invalid regexp search returns an invalid-pattern result", () => {
+        const workbook = createWorkbook("editor.xlsx", [
+            createSheet("Sheet1", [createCell(1, 1, "alpha")]),
+        ]);
+        const sheetEntries = createWorkingSheetEntries(workbook);
+        const state: EditorPanelState = {
+            activeSheetKey: "sheet:0",
+            selectedCell: { rowNumber: 1, columnNumber: 1 },
+        };
+
+        const result = resolveEditorSearchResult(
+            sheetEntries,
+            state,
+            {
+                query: "[alpha",
+                direction: "next",
+                options: {
+                    isRegexp: true,
+                    matchCase: false,
+                    wholeWord: false,
+                },
+                scope: "sheet",
+            }
+        );
+
+        assert.strictEqual(result.status, "invalid-pattern");
     });
 
     test("goto cell resolves sheet names case-insensitively and rejects out-of-range cells", () => {

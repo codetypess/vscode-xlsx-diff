@@ -1,11 +1,13 @@
-import { execFile } from "node:child_process";
+import { execFile as execFileCallback } from "node:child_process";
 import * as path from "node:path";
+import { promisify } from "node:util";
 import * as vscode from "vscode";
 import { formatI18nMessage, getRuntimeMessages } from "../i18n";
 import type {
     WorkbookDiffUris,
     ScmWorkbookResourceInfo,
     ScmWorkbookResourceProvider,
+    WorkbookResourceFact,
     WorkbookResourceDetail,
 } from "../scm/resource-info";
 
@@ -17,14 +19,16 @@ interface SvnUriQuery {
     };
 }
 
-type SvnGraphSource = "empty" | "svn";
+type SvnTreeSource = "empty" | "svn";
 
-interface SvnGraphUriDescriptor {
+interface SvnTreeUriDescriptor {
     label?: string;
-    source?: SvnGraphSource;
+    source?: SvnTreeSource;
     target?: string;
     revision?: string;
 }
+
+const execFile = promisify(execFileCallback);
 
 function parseSvnUriQuery(uri: vscode.Uri): SvnUriQuery | undefined {
     if (uri.scheme !== "svn" || !uri.query) {
@@ -52,15 +56,19 @@ function getSvnRef(query: SvnUriQuery): string | undefined {
     return undefined;
 }
 
-function parseSvnGraphUriDescriptor(uri: vscode.Uri): SvnGraphUriDescriptor | undefined {
-    if (uri.scheme !== "svn-graph") {
+function isSvnTreeScheme(scheme: string): scheme is "svn-tree" {
+    return scheme === "svn-tree";
+}
+
+function parseSvnTreeUriDescriptor(uri: vscode.Uri): SvnTreeUriDescriptor | undefined {
+    if (!isSvnTreeScheme(uri.scheme)) {
         return undefined;
     }
 
     const params = new URLSearchParams(uri.query);
     return {
         label: params.get("label") ?? undefined,
-        source: (params.get("source") as SvnGraphSource | null) ?? "svn",
+        source: (params.get("source") as SvnTreeSource | null) ?? "svn",
         target: params.get("target") ?? undefined,
         revision: params.get("revision") ?? undefined,
     };
@@ -78,8 +86,27 @@ function createEmptyWorkbookLabel(): string {
     return getRuntimeMessages().scm.emptyWorkbookLabel;
 }
 
-function createSvnGraphRef(revision: string): string {
+function createAuthorLabel(): string {
+    return getRuntimeMessages().scm.authorLabel;
+}
+
+function createSvnTreeRef(revision: string): string {
     return /^\d+$/.test(revision) ? `r${revision}` : revision;
+}
+
+function decodeXmlEntities(value: string): string {
+    return value
+        .replace(/&lt;/g, "<")
+        .replace(/&gt;/g, ">")
+        .replace(/&quot;/g, '"')
+        .replace(/&apos;/g, "'")
+        .replace(/&amp;/g, "&");
+}
+
+function extractSvnAuthor(xml: string): string | undefined {
+    const match = /<author>([\s\S]*?)<\/author>/.exec(xml);
+    const author = match?.[1]?.trim();
+    return author ? decodeXmlEntities(author) : undefined;
 }
 
 function normalizePathForComparison(resourcePath: string): string {
@@ -87,7 +114,7 @@ function normalizePathForComparison(resourcePath: string): string {
     return process.platform === "win32" ? normalizedPath.toLowerCase() : normalizedPath;
 }
 
-function getSvnGraphLabel(descriptor: SvnGraphUriDescriptor, uri: vscode.Uri): string {
+function getSvnTreeLabel(descriptor: SvnTreeUriDescriptor, uri: vscode.Uri): string {
     const label = descriptor.label ?? decodeURIComponent(uri.path);
     return label.startsWith("/") ? label.slice(1) : label;
 }
@@ -97,7 +124,7 @@ function stripWorkbookRefSuffix(label: string): string {
     return match?.[1] ?? label;
 }
 
-function getSvnGraphTargetPath(target: string | undefined): string | undefined {
+function getSvnTreeTargetPath(target: string | undefined): string | undefined {
     if (!target) {
         return undefined;
     }
@@ -129,9 +156,51 @@ function createComparisonPaths(
     return [...new Set(comparisonPaths)];
 }
 
+async function runSvn(args: string[], cwd: string | undefined): Promise<string | undefined> {
+    try {
+        const { stdout } = await execFile("svn", args, {
+            cwd,
+            maxBuffer: 16 * 1024 * 1024,
+        });
+        const trimmed = stdout.trim();
+        return trimmed.length > 0 ? trimmed : undefined;
+    } catch {
+        return undefined;
+    }
+}
+
+function getSvnTargetCwd(target: string): string | undefined {
+    return path.isAbsolute(target) ? path.dirname(target) : undefined;
+}
+
+async function resolveSvnAuthor(
+    target: string | undefined,
+    revision: string | undefined
+): Promise<string | undefined> {
+    if (!target || !revision) {
+        return undefined;
+    }
+
+    const infoXml = await runSvn(["info", "--xml", "-r", revision, target], getSvnTargetCwd(target));
+    return infoXml ? extractSvnAuthor(infoXml) : undefined;
+}
+
+function createSvnExtraFacts(author: string | undefined): WorkbookResourceFact[] | undefined {
+    if (!author) {
+        return undefined;
+    }
+
+    return [
+        {
+            label: createAuthorLabel(),
+            value: author,
+        },
+    ];
+}
+
 function runSvnCat(target: string, revision: string): Promise<Uint8Array> {
     return new Promise((resolve, reject) => {
-        execFile(
+        execFileCallback(
             "svn",
             ["cat", "-r", revision, target],
             {
@@ -188,16 +257,16 @@ export function getSvnWorkbookResourceInfo(
     };
 }
 
-export function getSvnGraphWorkbookResourceInfo(
+export function getSvnTreeWorkbookResourceInfo(
     uri: vscode.Uri
 ): ScmWorkbookResourceInfo | undefined {
-    const descriptor = parseSvnGraphUriDescriptor(uri);
+    const descriptor = parseSvnTreeUriDescriptor(uri);
     if (!descriptor) {
         return undefined;
     }
 
-    const displayPath = stripWorkbookRefSuffix(getSvnGraphLabel(descriptor, uri));
-    const targetPath = getSvnGraphTargetPath(descriptor.target);
+    const displayPath = stripWorkbookRefSuffix(getSvnTreeLabel(descriptor, uri));
+    const targetPath = getSvnTreeTargetPath(descriptor.target);
     const resourcePath =
         targetPath && path.extname(targetPath).toLowerCase() === ".xlsx" ? targetPath : displayPath;
 
@@ -209,14 +278,14 @@ export function getSvnGraphWorkbookResourceInfo(
     }
 
     return {
-        provider: "svn-graph",
+        provider: "svn-tree",
         uri,
         resourcePath,
         displayPath,
         comparisonPaths: createComparisonPaths(resourcePath, displayPath, targetPath),
         ref:
             descriptor.source === "svn" && descriptor.revision
-                ? createSvnGraphRef(descriptor.revision)
+                ? createSvnTreeRef(descriptor.revision)
                 : undefined,
     };
 }
@@ -233,26 +302,28 @@ export function getSvnWorkbookResourceTimeLabel(
 
 export function getSvnWorkbookResourceDetail(
     info: ScmWorkbookResourceInfo
-): WorkbookResourceDetail | undefined {
+): Promise<WorkbookResourceDetail | undefined> {
     if (info.provider !== "svn" || info.ref === undefined) {
-        return undefined;
+        return Promise.resolve(undefined);
     }
 
-    return {
+    const ref = info.ref;
+    return resolveSvnAuthor(info.resourcePath, ref).then((author) => ({
         label: createSourceLabel(),
-        value: createSvnRefLabel(info.ref),
-        titleValue: info.ref,
-    };
+        value: createSvnRefLabel(ref),
+        titleValue: ref,
+        extraFacts: createSvnExtraFacts(author),
+    }));
 }
 
-export function getSvnGraphWorkbookResourceTimeLabel(
+export function getSvnTreeWorkbookResourceTimeLabel(
     info: ScmWorkbookResourceInfo
 ): string | undefined {
-    if (info.provider !== "svn-graph") {
+    if (info.provider !== "svn-tree") {
         return undefined;
     }
 
-    const descriptor = parseSvnGraphUriDescriptor(info.uri);
+    const descriptor = parseSvnTreeUriDescriptor(info.uri);
     if (descriptor?.source === "empty") {
         return createEmptyWorkbookLabel();
     }
@@ -264,30 +335,32 @@ export function getSvnGraphWorkbookResourceTimeLabel(
     return createSvnRefLabel(info.ref);
 }
 
-export function getSvnGraphWorkbookResourceDetail(
+export function getSvnTreeWorkbookResourceDetail(
     info: ScmWorkbookResourceInfo
-): WorkbookResourceDetail | undefined {
-    if (info.provider !== "svn-graph") {
-        return undefined;
+): Promise<WorkbookResourceDetail | undefined> {
+    if (info.provider !== "svn-tree") {
+        return Promise.resolve(undefined);
     }
 
-    const descriptor = parseSvnGraphUriDescriptor(info.uri);
+    const descriptor = parseSvnTreeUriDescriptor(info.uri);
     if (descriptor?.source === "empty") {
-        return {
+        return Promise.resolve({
             label: createSourceLabel(),
             value: createEmptyWorkbookLabel(),
-        };
+        });
     }
 
     if (info.ref === undefined) {
-        return undefined;
+        return Promise.resolve(undefined);
     }
 
-    return {
+    const ref = info.ref;
+    return resolveSvnAuthor(descriptor?.target, descriptor?.revision).then((author) => ({
         label: createSourceLabel(),
-        value: createSvnRefLabel(info.ref),
-        titleValue: info.ref,
-    };
+        value: createSvnRefLabel(ref),
+        titleValue: ref,
+        extraFacts: createSvnExtraFacts(author),
+    }));
 }
 
 function normalizeSvnDiffUris(diffUris: WorkbookDiffUris): WorkbookDiffUris {
@@ -317,21 +390,21 @@ export const svnWorkbookResourceProvider: ScmWorkbookResourceProvider = {
     scheme: "svn",
     getResourceInfo: getSvnWorkbookResourceInfo,
     getResourceTimeLabel: getSvnWorkbookResourceTimeLabel,
-    getResourceDetail: async (info) => getSvnWorkbookResourceDetail(info),
+    getResourceDetail: getSvnWorkbookResourceDetail,
     normalizeDiffUris: normalizeSvnDiffUris,
 };
 
-export const svnGraphWorkbookResourceProvider: ScmWorkbookResourceProvider = {
-    scheme: "svn-graph",
-    getResourceInfo: getSvnGraphWorkbookResourceInfo,
-    getResourceTimeLabel: getSvnGraphWorkbookResourceTimeLabel,
-    getResourceDetail: async (info) => getSvnGraphWorkbookResourceDetail(info),
+export const svnTreeWorkbookResourceProvider: ScmWorkbookResourceProvider = {
+    scheme: "svn-tree",
+    getResourceInfo: getSvnTreeWorkbookResourceInfo,
+    getResourceTimeLabel: getSvnTreeWorkbookResourceTimeLabel,
+    getResourceDetail: getSvnTreeWorkbookResourceDetail,
     readWorkbookArchive: async (info) => {
-        if (info.provider !== "svn-graph") {
+        if (info.provider !== "svn-tree") {
             return undefined;
         }
 
-        const descriptor = parseSvnGraphUriDescriptor(info.uri);
+        const descriptor = parseSvnTreeUriDescriptor(info.uri);
         if (
             descriptor?.source !== "svn" ||
             !descriptor.target ||
@@ -343,10 +416,10 @@ export const svnGraphWorkbookResourceProvider: ScmWorkbookResourceProvider = {
         return runSvnCat(descriptor.target, descriptor.revision);
     },
     isEmptyWorkbook: (info) => {
-        if (info.provider !== "svn-graph") {
+        if (info.provider !== "svn-tree") {
             return false;
         }
 
-        return parseSvnGraphUriDescriptor(info.uri)?.source === "empty";
+        return parseSvnTreeUriDescriptor(info.uri)?.source === "empty";
     },
 };

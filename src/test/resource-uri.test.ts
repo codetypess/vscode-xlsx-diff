@@ -1,8 +1,13 @@
+import { execFile as execFileCallback } from "node:child_process";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { promisify } from "node:util";
 import * as assert from "assert";
 import * as vscode from "vscode";
 import { getGitWorkbookResourceInfo } from "../git/resource-info";
 import {
-    getSvnGraphWorkbookResourceInfo,
+    getSvnTreeWorkbookResourceInfo,
     getSvnWorkbookResourceInfo,
 } from "../svn/resource-info";
 import {
@@ -10,12 +15,15 @@ import {
     getScmWorkbookDiffUrisFromEditorUris,
     getScmWorkbookDiffUrisFromTabInput,
     getWorkbookDiffUrisFromTabInput,
+    readWorkbookResourceArchive,
     getWorkbookResourceDetail,
     getWorkbookResourcePathLabel,
     getWorkbookResourceTimeLabel,
     isEmptyWorkbookResourceUri,
     isWorkbookResourceUri,
 } from "../workbook/resource-uri";
+
+const execFile = promisify(execFileCallback);
 
 function createSvnShowUri(resourcePath = "/tmp/item.xlsx", ref: string | number = "HEAD") {
     return vscode.Uri.from({
@@ -31,7 +39,7 @@ function createSvnShowUri(resourcePath = "/tmp/item.xlsx", ref: string | number 
     });
 }
 
-function createSvnGraphUri(options: {
+function createSvnTreeUri(options: {
     label?: string;
     source?: "empty" | "svn";
     target?: string;
@@ -59,10 +67,41 @@ function createSvnGraphUri(options: {
     }
 
     return vscode.Uri.from({
-        scheme: "svn-graph",
+        scheme: "svn-tree",
         path: label.startsWith("/") ? label : `/${label}`,
         query: params.toString(),
     });
+}
+
+interface TempSvnWorkspace {
+    tempDirectory: string;
+    repositoryUrl: string;
+    workbookPath: string;
+}
+
+async function createTempSvnWorkspace(): Promise<TempSvnWorkspace> {
+    const tempDirectory = await mkdtemp(path.join(os.tmpdir(), "xlsx-diff-svn-"));
+    const repositoryPath = path.join(tempDirectory, "repo");
+    const repositoryUrl = `file://${repositoryPath}`;
+    const workingCopyPath = path.join(tempDirectory, "wc");
+    const workbookPath = path.join(workingCopyPath, "dir", "item.xlsx");
+
+    await execFile("svnadmin", ["create", repositoryPath]);
+    await execFile("svn", ["checkout", repositoryUrl, workingCopyPath]);
+    await mkdir(path.dirname(workbookPath), { recursive: true });
+    await writeFile(workbookPath, "placeholder workbook");
+    await execFile("svn", ["add", path.join(workingCopyPath, "dir")], {
+        cwd: workingCopyPath,
+    });
+    await execFile("svn", ["commit", workingCopyPath, "-m", "Add workbook", "--username", "alice"], {
+        cwd: tempDirectory,
+    });
+
+    return {
+        tempDirectory,
+        repositoryUrl,
+        workbookPath,
+    };
 }
 
 suite("Workbook resource URIs", () => {
@@ -98,6 +137,47 @@ suite("Workbook resource URIs", () => {
 
         assert.strictEqual(getWorkbookResourcePathLabel(gitUri), "/tmp/item.xlsx (HEAD)");
         assert.match(getWorkbookResourceTimeLabel(gitUri) ?? "", /HEAD$/);
+    });
+
+    test("includes git committer details for commit-backed workbook resources", async () => {
+        const tempDirectory = await mkdtemp(path.join(os.tmpdir(), "xlsx-diff-git-"));
+
+        try {
+            const workbookPath = path.join(tempDirectory, "item.xlsx");
+            await writeFile(workbookPath, "placeholder workbook");
+
+            await execFile("git", ["init"], { cwd: tempDirectory });
+            await execFile("git", ["config", "user.name", "Alice Example"], {
+                cwd: tempDirectory,
+            });
+            await execFile("git", ["config", "user.email", "alice@example.com"], {
+                cwd: tempDirectory,
+            });
+            await execFile("git", ["add", "item.xlsx"], { cwd: tempDirectory });
+            await execFile("git", ["commit", "-m", "Add workbook"], {
+                cwd: tempDirectory,
+            });
+
+            const gitUri = vscode.Uri.from({
+                scheme: "git",
+                path: workbookPath,
+                query: JSON.stringify({
+                    path: workbookPath,
+                    ref: "HEAD",
+                }),
+            });
+
+            const detail = await getWorkbookResourceDetail(gitUri);
+            assert.ok(["Commit", "提交"].includes(detail?.label ?? ""));
+            assert.match(detail?.value ?? "", /^[0-9a-f]{7,}$/);
+            assert.ok(["Committer", "提交者"].includes(detail?.extraFacts?.[0]?.label ?? ""));
+            assert.strictEqual(
+                detail?.extraFacts?.[0]?.value,
+                "Alice Example <alice@example.com>"
+            );
+        } finally {
+            await rm(tempDirectory, { recursive: true, force: true });
+        }
     });
 
     test("recognizes git virtual workbook resources with rewritten paths", () => {
@@ -148,6 +228,21 @@ suite("Workbook resource URIs", () => {
         assert.ok(["Source", "来源"].includes(detail?.label ?? ""));
     });
 
+    test("includes svn author details for working-copy-backed workbook resources", async () => {
+        const workspace = await createTempSvnWorkspace();
+
+        try {
+            const svnUri = createSvnShowUri(workspace.workbookPath, "BASE");
+
+            const detail = await getWorkbookResourceDetail(svnUri);
+            assert.match(detail?.value ?? "", /SVN .*BASE$/);
+            assert.ok(["Author", "提交者"].includes(detail?.extraFacts?.[0]?.label ?? ""));
+            assert.strictEqual(detail?.extraFacts?.[0]?.value, "alice");
+        } finally {
+            await rm(workspace.tempDirectory, { recursive: true, force: true });
+        }
+    });
+
     test("ignores unsupported svn virtual resources", () => {
         const svnPatchUri = vscode.Uri.from({
             scheme: "svn",
@@ -163,44 +258,89 @@ suite("Workbook resource URIs", () => {
         assert.strictEqual(isWorkbookResourceUri(svnPatchUri), false);
     });
 
-    test("recognizes svn-graph workbook resources from vscode diff content uris", async () => {
-        const svnGraphUri = createSvnGraphUri();
+    test("recognizes svn-tree workbook resources from vscode-svn-tree diff uris", async () => {
+        const svnTreeUri = createSvnTreeUri();
+        const fileUri = vscode.Uri.file("/tmp/item.xlsx");
 
-        const info = getSvnGraphWorkbookResourceInfo(svnGraphUri);
-        assert.strictEqual(info?.provider, "svn-graph");
-        assert.strictEqual(info?.uri, svnGraphUri);
+        const info = getSvnTreeWorkbookResourceInfo(svnTreeUri);
+        assert.strictEqual(info?.provider, "svn-tree");
+        assert.strictEqual(info?.uri, svnTreeUri);
         assert.strictEqual(info?.resourcePath, "/tmp/item.xlsx");
         assert.strictEqual(info?.displayPath, "repo/item.xlsx");
         assert.deepStrictEqual(info?.comparisonPaths, ["repo/item.xlsx"]);
         assert.strictEqual(info?.ref, "BASE");
-        assert.strictEqual(isWorkbookResourceUri(svnGraphUri), true);
-        assert.strictEqual(getWorkbookResourcePathLabel(svnGraphUri), "repo/item.xlsx (BASE)");
-        assert.match(getWorkbookResourceTimeLabel(svnGraphUri) ?? "", /SVN .*BASE$/);
+        assert.strictEqual(isWorkbookResourceUri(svnTreeUri), true);
+        assert.strictEqual(getWorkbookResourcePathLabel(svnTreeUri), "repo/item.xlsx (BASE)");
+        assert.match(getWorkbookResourceTimeLabel(svnTreeUri) ?? "", /SVN .*BASE$/);
 
-        const detail = await getWorkbookResourceDetail(svnGraphUri);
+        const detail = await getWorkbookResourceDetail(svnTreeUri);
         assert.match(detail?.value ?? "", /SVN .*BASE$/);
         assert.ok(["Source", "来源"].includes(detail?.label ?? ""));
+
+        const diffInput = new vscode.TabInputTextDiff(svnTreeUri, fileUri);
+        assert.deepStrictEqual(getScmWorkbookDiffUrisFromTabInput(diffInput), {
+            original: svnTreeUri,
+            modified: fileUri,
+        });
     });
 
-    test("recognizes svn-graph empty workbook resources", async () => {
-        const svnGraphUri = createSvnGraphUri({
+    test("includes svn-tree author details for revision-backed workbook resources", async function () {
+        this.timeout(10000);
+        const workspace = await createTempSvnWorkspace();
+
+        try {
+            const svnTreeUri = createSvnTreeUri({
+                label: "repo/item.xlsx (1)",
+                target: `${workspace.repositoryUrl}/dir/item.xlsx`,
+                revision: "1",
+            });
+
+            const detail = await getWorkbookResourceDetail(svnTreeUri);
+            assert.match(detail?.value ?? "", /SVN .*r1$/);
+            assert.ok(["Author", "提交者"].includes(detail?.extraFacts?.[0]?.label ?? ""));
+            assert.strictEqual(detail?.extraFacts?.[0]?.value, "alice");
+        } finally {
+            await rm(workspace.tempDirectory, { recursive: true, force: true });
+        }
+    });
+
+    test("reads svn-tree workbook archives for revision-backed resources", async function () {
+        this.timeout(10000);
+        const workspace = await createTempSvnWorkspace();
+
+        try {
+            const svnTreeUri = createSvnTreeUri({
+                label: "repo/item.xlsx (1)",
+                target: `${workspace.repositoryUrl}/dir/item.xlsx`,
+                revision: "1",
+            });
+
+            const archive = await readWorkbookResourceArchive(svnTreeUri);
+            assert.deepStrictEqual(Buffer.from(archive ?? []).toString("utf8"), "placeholder workbook");
+        } finally {
+            await rm(workspace.tempDirectory, { recursive: true, force: true });
+        }
+    });
+
+    test("recognizes svn-tree empty workbook resources", async () => {
+        const svnTreeUri = createSvnTreeUri({
             label: "repo/item.xlsx (deleted)",
             source: "empty",
             target: undefined,
             revision: undefined,
         });
 
-        const info = getSvnGraphWorkbookResourceInfo(svnGraphUri);
-        assert.strictEqual(info?.provider, "svn-graph");
+        const info = getSvnTreeWorkbookResourceInfo(svnTreeUri);
+        assert.strictEqual(info?.provider, "svn-tree");
         assert.strictEqual(info?.resourcePath, "repo/item.xlsx");
         assert.strictEqual(info?.displayPath, "repo/item.xlsx");
         assert.strictEqual(info?.ref, undefined);
-        assert.strictEqual(isWorkbookResourceUri(svnGraphUri), true);
-        assert.strictEqual(isEmptyWorkbookResourceUri(svnGraphUri), true);
-        assert.strictEqual(getWorkbookResourcePathLabel(svnGraphUri), "repo/item.xlsx");
-        assert.ok(["Empty workbook", "空工作簿"].includes(getWorkbookResourceTimeLabel(svnGraphUri) ?? ""));
+        assert.strictEqual(isWorkbookResourceUri(svnTreeUri), true);
+        assert.strictEqual(isEmptyWorkbookResourceUri(svnTreeUri), true);
+        assert.strictEqual(getWorkbookResourcePathLabel(svnTreeUri), "repo/item.xlsx");
+        assert.ok(["Empty workbook", "空工作簿"].includes(getWorkbookResourceTimeLabel(svnTreeUri) ?? ""));
 
-        const detail = await getWorkbookResourceDetail(svnGraphUri);
+        const detail = await getWorkbookResourceDetail(svnTreeUri);
         assert.ok(["Empty workbook", "空工作簿"].includes(detail?.value ?? ""));
     });
 
@@ -275,23 +415,23 @@ suite("Workbook resource URIs", () => {
         assert.strictEqual(diffUris?.modified.toString(), fileUri.toString());
     });
 
-    test("pairs svn-graph custom editor resources with local files", () => {
-        const svnGraphUri = createSvnGraphUri();
+    test("pairs svn-tree custom editor resources with local files", () => {
+        const svnTreeUri = createSvnTreeUri();
         const fileUri = vscode.Uri.file("/tmp/item.xlsx");
 
-        assert.deepStrictEqual(getScmWorkbookDiffUrisFromEditorUris(fileUri, svnGraphUri), {
-            original: svnGraphUri,
+        assert.deepStrictEqual(getScmWorkbookDiffUrisFromEditorUris(fileUri, svnTreeUri), {
+            original: svnTreeUri,
             modified: fileUri,
         });
     });
 
-    test("pairs svn-graph custom editor resources using shared display paths", () => {
-        const baseUri = createSvnGraphUri({
+    test("pairs svn-tree custom editor resources using shared display paths", () => {
+        const baseUri = createSvnTreeUri({
             label: "repo/item.xlsx (BASE)",
             target: "/tmp/item.xlsx",
             revision: "BASE",
         });
-        const headUri = createSvnGraphUri({
+        const headUri = createSvnTreeUri({
             label: "repo/item.xlsx (HEAD)",
             target: "https://svn.example.com/repos/project/trunk/repo/item.xlsx",
             revision: "HEAD",

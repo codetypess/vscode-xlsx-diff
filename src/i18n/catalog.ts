@@ -48,6 +48,8 @@ export interface RuntimeMessages {
     scm: {
         sourceLabel: string;
         commitLabel: string;
+        committerLabel: string;
+        authorLabel: string;
         indexLabel: string;
         stageLabel: string;
         indexBaseLabel: string;
@@ -96,6 +98,8 @@ export const RUNTIME_MESSAGES = {
         scm: {
             sourceLabel: "Source",
             commitLabel: "Commit",
+            committerLabel: "Committer",
+            authorLabel: "Author",
             indexLabel: "Index",
             stageLabel: "Stage {stage}",
             indexBaseLabel: "Index · base {commit}",
@@ -104,6 +108,14 @@ export const RUNTIME_MESSAGES = {
             emptyWorkbookLabel: "Empty workbook",
         },
         editorPanel: {
+            search: "Search",
+            searchFind: "Find",
+            searchReplace: "Replace",
+            searchReplaceComingSoon: "Coming soon",
+            searchScopeSheet: "Current sheet",
+            searchScopeSelection: "Selected range",
+            searchScopeSelectionDisabled: "Select multiple cells to enable",
+            searchClose: "Close",
             loading: "Loading XLSX editor...",
             reload: "Reload",
             undo: "Undo",
@@ -194,6 +206,8 @@ export const RUNTIME_MESSAGES = {
         scm: {
             sourceLabel: "来源",
             commitLabel: "提交",
+            committerLabel: "提交者",
+            authorLabel: "提交者",
             indexLabel: "暂存区",
             stageLabel: "阶段 {stage}",
             indexBaseLabel: "暂存区 · 基线 {commit}",
@@ -202,6 +216,14 @@ export const RUNTIME_MESSAGES = {
             emptyWorkbookLabel: "空工作簿",
         },
         editorPanel: {
+            search: "搜索",
+            searchFind: "查找",
+            searchReplace: "替换",
+            searchReplaceComingSoon: "即将推出",
+            searchScopeSheet: "当前工作表",
+            searchScopeSelection: "选定区域",
+            searchScopeSelectionDisabled: "请先选中多个单元格后再使用",
+            searchClose: "关闭",
             loading: "正在加载 XLSX 编辑器...",
             reload: "刷新",
             undo: "撤销",

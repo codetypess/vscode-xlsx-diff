@@ -40,7 +40,20 @@ body {
 }
 
 .app--editor {
+    position: relative;
     grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.app--editor > .toolbar--editor {
+    grid-row: 1;
+}
+
+.app--editor > .panes {
+    grid-row: 2;
+}
+
+.app--editor > .footer {
+    grid-row: 3;
 }
 
 .toolbar {
@@ -265,6 +278,307 @@ body {
     to {
         transform: rotate(360deg);
     }
+}
+
+.search-strip-shell {
+    position: absolute;
+    top: 66px;
+    right: 14px;
+    z-index: 24;
+    width: min(560px, calc(100% - 24px));
+    max-width: calc(100% - 24px);
+    cursor: grab;
+}
+
+.search-strip-shell:active {
+    cursor: grabbing;
+}
+
+.search-strip {
+    display: grid;
+    gap: 8px;
+    padding: 10px 12px;
+    border: 1px solid var(--vscode-panel-border);
+    border-radius: 12px;
+    background: var(
+        --vscode-editorWidget-background,
+        color-mix(in srgb, var(--vscode-editor-background) 94%, white 6%)
+    );
+    box-shadow: 0 14px 32px color-mix(in srgb, black 24%, transparent 76%);
+}
+
+.search-strip__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.search-strip__header-tools {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+}
+
+.search-strip__tabs {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: nowrap;
+    min-width: 0;
+}
+
+.search-strip__tab {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-width: 72px;
+    padding: 5px 10px;
+    border: 1px solid var(--vscode-button-border, transparent);
+    border-radius: 6px;
+    background: var(
+        --vscode-button-secondaryBackground,
+        color-mix(in srgb, var(--vscode-editor-background) 92%, white 8%)
+    );
+    color: var(--vscode-button-secondaryForeground, var(--vscode-editor-foreground));
+    font: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.search-strip__tab-icon {
+    font-size: 13px;
+    line-height: 1;
+}
+
+.search-strip__tab.is-active {
+    border-color: var(--vscode-button-border, transparent);
+    background: var(--vscode-button-background);
+    color: var(--vscode-button-foreground);
+}
+
+.search-strip__tab:hover:enabled {
+    background: var(
+        --vscode-button-secondaryHoverBackground,
+        color-mix(in srgb, var(--vscode-focusBorder) 14%, transparent 86%)
+    );
+}
+
+.search-strip__tab.is-active:hover:enabled {
+    background: var(
+        --vscode-button-hoverBackground,
+        color-mix(in srgb, var(--vscode-button-background) 88%, white 12%)
+    );
+}
+
+.search-strip__tab:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.search-strip__soon {
+    display: inline-flex;
+    align-items: center;
+    min-height: 24px;
+    padding: 0 8px;
+    border-radius: 999px;
+    background: color-mix(
+        in srgb,
+        var(--vscode-editorInfo-foreground, #3794ff) 14%,
+        transparent 86%
+    );
+    color: var(--vscode-editorInfo-foreground, #3794ff);
+    font-size: 11px;
+    font-weight: 600;
+}
+
+.search-strip__row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.search-strip__row--primary {
+    align-items: stretch;
+}
+
+.search-strip__row--meta {
+    align-items: center;
+}
+
+.search-strip__input-wrap {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1 1 260px;
+    min-height: 34px;
+    min-width: 220px;
+    padding: 0 8px 0 10px;
+    border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
+    border-radius: 10px;
+    background: var(--vscode-input-background, var(--vscode-editor-background));
+    color: var(--vscode-input-foreground, var(--vscode-editor-foreground));
+}
+
+.search-strip__input-wrap:focus-within {
+    border-color: var(--vscode-focusBorder);
+    box-shadow: inset 0 0 0 1px var(--vscode-focusBorder);
+}
+
+.search-strip__input-wrap.is-invalid {
+    border-color: var(--vscode-inputValidation-errorBorder, var(--vscode-errorForeground));
+    box-shadow: inset 0 0 0 1px
+        var(--vscode-inputValidation-errorBorder, var(--vscode-errorForeground));
+}
+
+.search-strip__input-icon {
+    color: var(--vscode-descriptionForeground);
+    font-size: 14px;
+}
+
+.search-strip__input {
+    width: 100%;
+    min-width: 0;
+    padding: 7px 0;
+    border: 0;
+    outline: none;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+}
+
+.search-strip__input::placeholder {
+    color: var(--vscode-input-placeholderForeground, var(--vscode-descriptionForeground));
+}
+
+.search-strip__input-tools {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding-left: 8px;
+    border-left: 1px solid color-mix(in srgb, var(--vscode-panel-border) 78%, transparent 22%);
+}
+
+.search-strip__icon-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border: 1px solid var(--vscode-button-border, transparent);
+    border-radius: 4px;
+    background: transparent;
+    color: var(--vscode-descriptionForeground);
+    font: inherit;
+    cursor: pointer;
+}
+
+.search-strip__icon-toggle:hover {
+    background: var(
+        --vscode-toolbar-hoverBackground,
+        color-mix(in srgb, var(--vscode-focusBorder) 10%, transparent 90%)
+    );
+    color: var(--vscode-editor-foreground);
+}
+
+.search-strip__icon-toggle.is-active {
+    border-color: var(--vscode-focusBorder);
+    background: var(
+        --vscode-toolbar-activeBackground,
+        color-mix(in srgb, var(--vscode-focusBorder) 16%, transparent 84%)
+    );
+    color: var(--vscode-button-foreground, var(--vscode-editor-foreground));
+}
+
+.search-strip__icon-toggle .codicon {
+    font-size: 14px;
+    line-height: 1;
+}
+
+.search-strip__actions {
+    display: inline-flex;
+    gap: 6px;
+    flex: 0 0 auto;
+}
+
+.search-strip__actions .toolbar__button {
+    min-width: 32px;
+    min-height: 32px;
+    padding: 0 6px;
+    justify-content: center;
+}
+
+.search-strip__scope-group {
+    display: inline-flex;
+    gap: 4px;
+    padding: 2px;
+    border: 1px solid var(--vscode-panel-border);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--vscode-editor-background) 90%, white 10%);
+}
+
+.search-strip__scope-button {
+    padding: 4px 9px;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--vscode-editor-foreground);
+    font: inherit;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.search-strip__scope-button.is-active {
+    background: var(--vscode-button-background);
+    color: var(--vscode-button-foreground);
+}
+
+.search-strip__scope-button:disabled {
+    opacity: 0.45;
+    cursor: default;
+}
+
+.search-strip__range,
+.search-strip__hint {
+    display: inline-flex;
+    align-items: center;
+    min-height: 28px;
+    padding: 0 9px;
+    border-radius: 999px;
+    font-size: 11px;
+}
+
+.search-strip__range {
+    background: color-mix(
+        in srgb,
+        var(--vscode-editorInfo-foreground, #3794ff) 10%,
+        var(--vscode-editor-background) 90%
+    );
+    color: var(--vscode-editorInfo-foreground, #3794ff);
+}
+
+.search-strip__hint {
+    color: var(--vscode-descriptionForeground);
+    background: color-mix(in srgb, var(--vscode-editor-background) 92%, white 8%);
+}
+
+.search-strip__feedback {
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground);
+}
+
+.search-strip__feedback--warn {
+    color: var(--vscode-editorWarning-foreground, #cca700);
+}
+
+.search-strip__feedback--error {
+    color: var(--vscode-inputValidation-errorForeground, var(--vscode-errorForeground));
 }
 
 .summary {
@@ -1107,5 +1421,26 @@ body {
     .toolbar__field--goto {
         min-width: 0;
         flex: 1 1 220px;
+    }
+
+    .search-strip-shell {
+        top: 84px;
+        right: 8px;
+        width: calc(100% - 16px);
+        max-width: calc(100% - 16px);
+    }
+
+    .search-strip {
+        padding: 10px;
+    }
+
+    .search-strip__header {
+        align-items: flex-start;
+        flex-wrap: wrap;
+    }
+
+    .search-strip__header-tools,
+    .search-strip__actions {
+        margin-left: 0;
     }
 }

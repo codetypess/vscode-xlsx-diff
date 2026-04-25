@@ -32,6 +32,20 @@ export function hasExpandedSelectionRange(range: SelectionRange | null): boolean
     );
 }
 
+export function isCellWithinSelectionRange(
+    range: SelectionRange | null,
+    rowNumber: number,
+    columnNumber: number
+): boolean {
+    return Boolean(
+        range &&
+            rowNumber >= range.startRow &&
+            rowNumber <= range.endRow &&
+            columnNumber >= range.startColumn &&
+            columnNumber <= range.endColumn
+    );
+}
+
 export function createRowSelectionRange(
     rowNumber: number,
     columnCount: number

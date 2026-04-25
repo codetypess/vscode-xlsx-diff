@@ -4,6 +4,7 @@ import { promisify } from "node:util";
 import * as vscode from "vscode";
 import { formatI18nMessage, getRuntimeMessages } from "../i18n";
 import type {
+    WorkbookResourceFact,
     ScmWorkbookResourceInfo,
     ScmWorkbookResourceProvider,
     WorkbookResourceDetail,
@@ -12,6 +13,11 @@ import type {
 interface GitUriQuery {
     path?: string;
     ref?: string;
+}
+
+interface GitCommitMetadata {
+    shortCommit?: string;
+    committer?: string;
 }
 
 const execFile = promisify(execFileCallback);
@@ -55,11 +61,54 @@ async function hasStagedChanges(repositoryRoot: string, resourcePath: string): P
     return Boolean(changedFiles);
 }
 
-async function resolveShortCommit(
+function formatGitCommitter(name: string | undefined, email: string | undefined): string | undefined {
+    const trimmedName = name?.trim();
+    const trimmedEmail = email?.trim();
+    if (!trimmedName && !trimmedEmail) {
+        return undefined;
+    }
+
+    if (!trimmedName) {
+        return trimmedEmail;
+    }
+
+    return trimmedEmail ? `${trimmedName} <${trimmedEmail}>` : trimmedName;
+}
+
+async function resolveGitCommitMetadata(
     repositoryRoot: string,
     ref: string
-): Promise<string | undefined> {
-    return runGit(repositoryRoot, ["rev-parse", "--short", ref]);
+): Promise<GitCommitMetadata | undefined> {
+    const output = await runGit(repositoryRoot, [
+        "show",
+        "-s",
+        "--format=%h%x00%cn%x00%ce",
+        ref,
+    ]);
+    if (!output) {
+        return undefined;
+    }
+
+    const [shortCommit, committerName, committerEmail] = output.split("\u0000");
+    const metadata: GitCommitMetadata = {
+        shortCommit: shortCommit?.trim() || undefined,
+        committer: formatGitCommitter(committerName, committerEmail),
+    };
+
+    return metadata.shortCommit || metadata.committer ? metadata : undefined;
+}
+
+function createGitExtraFacts(committer: string | undefined): WorkbookResourceFact[] | undefined {
+    if (!committer) {
+        return undefined;
+    }
+
+    return [
+        {
+            label: getRuntimeMessages().scm.committerLabel,
+            value: committer,
+        },
+    ];
 }
 
 function createGitResourcePresentation(
@@ -67,9 +116,11 @@ function createGitResourcePresentation(
     options: {
         resolvedCommit?: string;
         hasStagedChanges?: boolean;
+        committer?: string;
     } = {}
 ): WorkbookResourceDetail {
     const { scm } = getRuntimeMessages();
+    const extraFacts = createGitExtraFacts(options.committer);
 
     if (ref === "") {
         return { label: scm.sourceLabel, value: scm.indexLabel };
@@ -92,6 +143,7 @@ function createGitResourcePresentation(
                       })
                     : scm.indexLabel,
                 titleValue: options.resolvedCommit,
+                extraFacts,
             };
         }
 
@@ -99,6 +151,7 @@ function createGitResourcePresentation(
             label: scm.commitLabel,
             value: options.resolvedCommit ?? "HEAD",
             titleValue: options.resolvedCommit,
+            extraFacts,
         };
     }
 
@@ -107,12 +160,14 @@ function createGitResourcePresentation(
             label: scm.commitLabel,
             value: options.resolvedCommit,
             titleValue: options.resolvedCommit,
+            extraFacts,
         };
     }
 
     return {
         label: scm.sourceLabel,
         value: formatI18nMessage(scm.gitRefLabel, { ref }),
+        extraFacts,
     };
 }
 
@@ -166,13 +221,14 @@ export async function getGitWorkbookResourceDetail(
     }
 
     if (info.ref === "~") {
-        const [resolvedCommit, stagedChanges] = await Promise.all([
-            resolveShortCommit(repositoryRoot, "HEAD"),
+        const [commitMetadata, stagedChanges] = await Promise.all([
+            resolveGitCommitMetadata(repositoryRoot, "HEAD"),
             hasStagedChanges(repositoryRoot, info.resourcePath),
         ]);
         return createGitResourcePresentation(info.ref, {
-            resolvedCommit,
+            resolvedCommit: commitMetadata?.shortCommit,
             hasStagedChanges: stagedChanges,
+            committer: commitMetadata?.committer,
         });
     }
 
@@ -180,8 +236,11 @@ export async function getGitWorkbookResourceDetail(
         return createGitResourcePresentation(info.ref);
     }
 
-    const resolvedCommit = await resolveShortCommit(repositoryRoot, info.ref);
-    return createGitResourcePresentation(info.ref, { resolvedCommit });
+    const commitMetadata = await resolveGitCommitMetadata(repositoryRoot, info.ref);
+    return createGitResourcePresentation(info.ref, {
+        resolvedCommit: commitMetadata?.shortCommit,
+        committer: commitMetadata?.committer,
+    });
 }
 
 export const gitWorkbookResourceProvider: ScmWorkbookResourceProvider = {

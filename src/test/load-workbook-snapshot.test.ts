@@ -2,22 +2,22 @@ import * as assert from "assert";
 import * as vscode from "vscode";
 import { loadWorkbookSnapshot } from "../core/fastxlsx/load-workbook-snapshot";
 
-function createSvnGraphEmptyUri(label = "repo/item.xlsx (deleted)") {
+function createSvnTreeEmptyUri(label = "repo/item.xlsx (deleted)") {
     const params = new URLSearchParams({
         label,
         source: "empty",
     });
 
     return vscode.Uri.from({
-        scheme: "svn-graph",
+        scheme: "svn-tree",
         path: label.startsWith("/") ? label : `/${label}`,
         query: params.toString(),
     });
 }
 
 suite("Load workbook snapshot", () => {
-    test("creates empty snapshots for svn-graph empty workbook resources", async () => {
-        const uri = createSvnGraphEmptyUri();
+    test("creates empty snapshots for svn-tree empty workbook resources", async () => {
+        const uri = createSvnTreeEmptyUri();
 
         const snapshot = await loadWorkbookSnapshot(uri);
 

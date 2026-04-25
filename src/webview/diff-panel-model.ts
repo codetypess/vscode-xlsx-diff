@@ -28,6 +28,36 @@ function getWorkbookTitle(workbook: WorkbookSnapshot): string {
         : workbook.fileName;
 }
 
+function getWorkbookDetailFacts(
+    workbook: WorkbookSnapshot
+): DiffPanelFileView["detailFacts"] {
+    return (
+        workbook.detailFacts?.map((fact) => ({
+            label: fact.label,
+            value: fact.value,
+            title: fact.titleValue,
+        })) ??
+        (workbook.detailLabel && workbook.detailValue
+            ? [
+                  {
+                      label: workbook.detailLabel,
+                      value: workbook.detailValue,
+                      title: workbook.titleDetail,
+                  },
+              ]
+            : [])
+    );
+}
+
+function getFileViewTitle(workbook: WorkbookSnapshot, detailFacts: DiffPanelFileView["detailFacts"]): string {
+    const primaryDetail = detailFacts[0];
+    if (!primaryDetail) {
+        return getWorkbookTitle(workbook);
+    }
+
+    return `${workbook.fileName} (${primaryDetail.value})`;
+}
+
 function formatFileSize(bytes: number): string {
     if (bytes < 1024) {
         return `${bytes} B`;
@@ -100,12 +130,13 @@ function mergeDiffTone(current: CellDiffStatus, next: CellDiffStatus): CellDiffS
 }
 
 function createFileView(workbook: WorkbookSnapshot): DiffPanelFileView {
+    const detailFacts = getWorkbookDetailFacts(workbook);
+
     return {
-        title: getWorkbookTitle(workbook),
+        title: getFileViewTitle(workbook, detailFacts),
         path: workbook.filePath,
         sizeLabel: formatFileSize(workbook.fileSize),
-        detailLabel: workbook.detailLabel,
-        detailValue: workbook.detailValue,
+        detailFacts: detailFacts.slice(1),
         modifiedLabel: formatModifiedTime(workbook.modifiedTime),
         isReadonly: workbook.isReadonly ?? false,
     };

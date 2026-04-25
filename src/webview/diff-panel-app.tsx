@@ -2,6 +2,7 @@ import * as React from "react";
 import { createRoot } from "react-dom/client";
 import type { CellDiffStatus } from "../core/model/types";
 import { RUNTIME_MESSAGES } from "../i18n/catalog";
+import { getDiffRowHeaderWidth } from "./diff-grid-layout";
 import { getSelectionPreviewInlineDiff } from "./selection-preview-diff";
 import type {
     DiffPanelRenderModel,
@@ -359,21 +360,16 @@ function createColumnWindow(
 
     const totalWidth = sheet.columnCount * COLUMN_WIDTH;
     const effectiveViewportWidth = Math.max(viewportWidth, COLUMN_WIDTH);
-    const startColumnIndex = Math.max(
-        0,
-        Math.floor(scrollLeft / COLUMN_WIDTH) - COLUMN_OVERSCAN
-    );
+    const startColumnIndex = Math.max(0, Math.floor(scrollLeft / COLUMN_WIDTH) - COLUMN_OVERSCAN);
     const visibleColumnCount =
         Math.ceil(effectiveViewportWidth / COLUMN_WIDTH) + COLUMN_OVERSCAN * 2;
     const endColumnIndex = Math.min(sheet.columnCount, startColumnIndex + visibleColumnCount);
 
     return {
-        columns: sheet.columns
-            .slice(startColumnIndex, endColumnIndex)
-            .map((label, index) => ({
-                label,
-                columnNumber: startColumnIndex + index + 1,
-            })),
+        columns: sheet.columns.slice(startColumnIndex, endColumnIndex).map((label, index) => ({
+            label,
+            columnNumber: startColumnIndex + index + 1,
+        })),
         leadingSpacerWidth: startColumnIndex * COLUMN_WIDTH,
         trailingSpacerWidth: Math.max(0, totalWidth - endColumnIndex * COLUMN_WIDTH),
         totalWidth,
@@ -511,8 +507,7 @@ function getSelectionPreview(
         editingCell.columnNumber === selection.columnNumber
             ? editingCell.value
             : (pendingEdit?.value ?? modelDisplay.value);
-    const address =
-        sourceRowNumber === null ? STRINGS.none : `${columnLabel}${sourceRowNumber}`;
+    const address = sourceRowNumber === null ? STRINGS.none : `${columnLabel}${sourceRowNumber}`;
 
     return {
         address,
@@ -746,14 +741,14 @@ function PaneMeta({ file }: { file: DiffPanelRenderModel["leftFile"] }): React.J
                     <span>
                         {STRINGS.size}: {file.sizeLabel}
                     </span>
-                    {file.detailLabel && file.detailValue ? (
-                        <span>
-                            {file.detailLabel}: {file.detailValue}
-                        </span>
-                    ) : null}
                     <span>
                         {STRINGS.modified}: {file.modifiedLabel}
                     </span>
+                    {file.detailFacts.map((fact) => (
+                        <span key={`${fact.label}:${fact.value}`} title={fact.title ?? fact.value}>
+                            {fact.label}: {fact.value}
+                        </span>
+                    ))}
                 </div>
             </div>
         </div>
@@ -772,7 +767,9 @@ function PaneScrollbar({
     onScroll: (event: React.UIEvent<HTMLDivElement>) => void;
 }): React.JSX.Element {
     return (
-        <div className={classNames(["diff-scrollbarRow", !enabled && "diff-scrollbarRow--inactive"])}>
+        <div
+            className={classNames(["diff-scrollbarRow", !enabled && "diff-scrollbarRow--inactive"])}
+        >
             <div className="diff-scrollbarSpacer" />
             <div
                 ref={enabled ? scrollbarRef : undefined}
@@ -1753,9 +1750,12 @@ function App(): React.JSX.Element {
         activeSheet && activeSheet.diffCells.length > 0
             ? `${activeDiffIndex + 1}/${activeSheet.diffCells.length}`
             : STRINGS.none;
+    const shellStyle = {
+        "--diff-row-header-width": `${getDiffRowHeaderWidth(activeSheet?.rowCount ?? 0)}px`,
+    } as React.CSSProperties;
 
     return (
-        <div className="diff-shell">
+        <div className="diff-shell" style={shellStyle}>
             <header className="diff-toolbarBar">
                 <div className="diff-toolbarGroup">
                     <div className="diff-chipGroup">

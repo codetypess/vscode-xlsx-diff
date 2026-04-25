@@ -5,11 +5,41 @@ import type {
     WorkbookEditState,
 } from "../core/fastxlsx/write-cell-value";
 import type { EditorPanelState, SheetSnapshot } from "../core/model/types";
+import type { SelectionRange } from "./editor-selection-range";
 
 export interface SearchOptions {
     isRegexp: boolean;
     matchCase: boolean;
     wholeWord: boolean;
+}
+
+export type EditorSearchDirection = "next" | "prev";
+export type EditorSearchScope = "sheet" | "selection";
+export type EditorSearchStatus = "matched" | "no-match" | "invalid-pattern";
+
+export interface EditorSearchMatch {
+    sheetKey: string;
+    rowNumber: number;
+    columnNumber: number;
+}
+
+export interface EditorSearchRequest {
+    query: string;
+    direction: EditorSearchDirection;
+    options: SearchOptions;
+    scope: EditorSearchScope;
+    selectionRange?: SelectionRange;
+}
+
+export interface EditorSearchResult {
+    status: EditorSearchStatus;
+    match?: EditorSearchMatch;
+}
+
+export interface EditorSearchResultMessage extends EditorSearchResult {
+    type: "searchResult";
+    scope: EditorSearchScope;
+    message?: string;
 }
 
 export type EditorWebviewMessage =
@@ -22,12 +52,7 @@ export type EditorWebviewMessage =
     | { type: "deleteRow"; rowNumber: number }
     | { type: "insertColumn"; columnNumber: number }
     | { type: "deleteColumn"; columnNumber: number }
-    | {
-          type: "search";
-          query: string;
-          direction: "next" | "prev";
-          options: SearchOptions;
-      }
+    | ({ type: "search" } & EditorSearchRequest)
     | { type: "gotoCell"; reference: string }
     | { type: "selectCell"; rowNumber: number; columnNumber: number }
     | {
@@ -48,6 +73,14 @@ export interface XlsxEditorPanelController {
 }
 
 export interface EditorPanelStrings {
+    search: string;
+    searchFind: string;
+    searchReplace: string;
+    searchReplaceComingSoon: string;
+    searchScopeSheet: string;
+    searchScopeSelection: string;
+    searchScopeSelectionDisabled: string;
+    searchClose: string;
     loading: string;
     reload: string;
     save: string;
@@ -122,10 +155,4 @@ export interface EditorPendingEdit {
     rowNumber: number;
     columnNumber: number;
     value: string;
-}
-
-export interface EditorSearchMatch {
-    sheetKey: string;
-    rowNumber: number;
-    columnNumber: number;
 }
