@@ -3,6 +3,7 @@
     --diff-row-header-width: 56px;
     --diff-column-width: 120px;
     --diff-divider-width: 2px;
+    --diff-viewport-scrollbar-width: 0px;
     --diff-header-bg: var(
         --vscode-sideBarSectionHeader-background,
         color-mix(in srgb, var(--vscode-editor-background) 88%, white 12%)
@@ -322,6 +323,13 @@ select {
 .diff-pairRow {
     display: grid;
     grid-template-columns: minmax(0, 1fr) var(--diff-divider-width) minmax(0, 1fr);
+}
+
+.diff-paneMetaRow,
+.diff-gridHeaderRow,
+.diff-gridScrollbarRow,
+.diff-selectionPreviewRow {
+    padding-inline-end: var(--diff-viewport-scrollbar-width);
 }
 
 .diff-pane {

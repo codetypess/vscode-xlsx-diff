@@ -1062,6 +1062,7 @@ function App(): React.JSX.Element {
     const [activeDiffIndex, setActiveDiffIndex] = React.useState(0);
     const [scrollTop, setScrollTop] = React.useState(0);
     const [viewportHeight, setViewportHeight] = React.useState(480);
+    const [viewportScrollbarWidth, setViewportScrollbarWidth] = React.useState(0);
     const [horizontalScrollLeft, setHorizontalScrollLeft] = React.useState(0);
     const [leftHeaderViewportWidth, setLeftHeaderViewportWidth] = React.useState(0);
     const [rightHeaderViewportWidth, setRightHeaderViewportWidth] = React.useState(0);
@@ -1122,28 +1123,6 @@ function App(): React.JSX.Element {
 
         return () => {
             window.removeEventListener("message", handleMessage);
-        };
-    }, []);
-
-    React.useEffect(() => {
-        const element = viewportRef.current;
-        if (!element) {
-            return;
-        }
-
-        const updateHeight = () => {
-            setViewportHeight(element.clientHeight);
-        };
-
-        updateHeight();
-
-        const observer = new ResizeObserver(() => {
-            updateHeight();
-        });
-        observer.observe(element);
-
-        return () => {
-            observer.disconnect();
         };
     }, []);
 
@@ -1214,6 +1193,9 @@ function App(): React.JSX.Element {
     const offsetY = startIndex * ROW_HEIGHT;
     const totalHeight = totalRowCount * ROW_HEIGHT;
     const viewportContentHeight = Math.max(totalHeight, viewportHeight);
+    const hasGridViewport = Boolean(
+        activeSheet && totalRowCount > 0 && activeSheet.columnCount > 0
+    );
     const columnTrackWidth = columnWindow.totalWidth;
     const leftHasHorizontalOverflow =
         leftHeaderViewportWidth > 0 && columnTrackWidth > leftHeaderViewportWidth;
@@ -1235,6 +1217,33 @@ function App(): React.JSX.Element {
             row: runtime?.rowByNumber.get(rowNumber) ?? null,
         });
     }
+
+    React.useEffect(() => {
+        const element = viewportRef.current;
+        if (!element) {
+            setViewportHeight(480);
+            setViewportScrollbarWidth(0);
+            return;
+        }
+
+        const updateViewportMetrics = () => {
+            setViewportHeight(element.clientHeight);
+            // Windows classic scrollbars consume layout width, so rows outside the
+            // scrolling viewport need the same gutter to keep dividers aligned.
+            setViewportScrollbarWidth(Math.max(0, element.offsetWidth - element.clientWidth));
+        };
+
+        updateViewportMetrics();
+
+        const observer = new ResizeObserver(() => {
+            updateViewportMetrics();
+        });
+        observer.observe(element);
+
+        return () => {
+            observer.disconnect();
+        };
+    }, [activeSheetViewKey, hasGridViewport]);
 
     React.useEffect(() => {
         if (!activeSheet || !activeSheetViewKey) {
@@ -1752,6 +1761,7 @@ function App(): React.JSX.Element {
             : STRINGS.none;
     const shellStyle = {
         "--diff-row-header-width": `${getDiffRowHeaderWidth(activeSheet?.rowCount ?? 0)}px`,
+        "--diff-viewport-scrollbar-width": `${viewportScrollbarWidth}px`,
     } as React.CSSProperties;
 
     return (
