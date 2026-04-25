@@ -6,19 +6,33 @@ import {
     getScmWorkbookResourceInfo,
     getScmWorkbookResourceTimeLabel,
     hasScmWorkbookResourceProvider,
+    isEmptyScmWorkbook,
     normalizeScmWorkbookDiffUris,
+    readScmWorkbookArchive,
     type WorkbookResourceDetail,
 } from "../scm/resource-info";
 
 export { describeGitResourceRef } from "../git/resource-info";
 
-function getUriPathForExtension(uri: vscode.Uri): string {
+function getUriDisplayPath(uri: vscode.Uri): string {
     const scmInfo = getScmWorkbookResourceInfo(uri);
     if (scmInfo) {
-        return scmInfo.resourcePath;
+        return scmInfo.displayPath ?? scmInfo.resourcePath;
     }
 
     return uri.scheme === "file" ? uri.fsPath : decodeURIComponent(uri.path);
+}
+
+function getUriComparisonPaths(uri: vscode.Uri): string[] {
+    const scmInfo = getScmWorkbookResourceInfo(uri);
+    if (scmInfo) {
+        return [
+            scmInfo.resourcePath,
+            ...(scmInfo.comparisonPaths ?? []),
+        ];
+    }
+
+    return [uri.scheme === "file" ? uri.fsPath : decodeURIComponent(uri.path)];
 }
 
 export function isWorkbookResourceUri(uri: vscode.Uri | undefined): uri is vscode.Uri {
@@ -31,7 +45,7 @@ export function isWorkbookResourceUri(uri: vscode.Uri | undefined): uri is vscod
         return false;
     }
 
-    const resourcePath = scmInfo?.resourcePath ?? getUriPathForExtension(uri);
+    const resourcePath = scmInfo?.displayPath ?? scmInfo?.resourcePath ?? getUriDisplayPath(uri);
     const normalizedPath = resourcePath.toLowerCase().endsWith(".git")
         ? resourcePath.slice(0, -".git".length)
         : resourcePath;
@@ -39,11 +53,11 @@ export function isWorkbookResourceUri(uri: vscode.Uri | undefined): uri is vscod
 }
 
 export function getWorkbookResourceName(uri: vscode.Uri): string {
-    return path.basename(getUriPathForExtension(uri));
+    return path.basename(getUriDisplayPath(uri));
 }
 
 export function getWorkbookResourcePathLabel(uri: vscode.Uri): string {
-    const resourcePath = getUriPathForExtension(uri);
+    const resourcePath = getUriDisplayPath(uri);
     const scmInfo = getScmWorkbookResourceInfo(uri);
     return scmInfo?.ref ? `${resourcePath} (${scmInfo.ref})` : resourcePath;
 }
@@ -73,6 +87,22 @@ export async function getWorkbookResourceDetail(
     }
 
     return getScmWorkbookResourceDetail(scmInfo);
+}
+
+export function isEmptyWorkbookResourceUri(uri: vscode.Uri): boolean {
+    const scmInfo = getScmWorkbookResourceInfo(uri);
+    return scmInfo ? isEmptyScmWorkbook(scmInfo) : false;
+}
+
+export async function readWorkbookResourceArchive(
+    uri: vscode.Uri
+): Promise<Uint8Array | undefined> {
+    const scmInfo = getScmWorkbookResourceInfo(uri);
+    if (!scmInfo) {
+        return undefined;
+    }
+
+    return readScmWorkbookArchive(scmInfo);
 }
 
 export function isWorkbookResourceReadOnly(uri: vscode.Uri): boolean {
@@ -117,12 +147,16 @@ function normalizeResourcePathForComparison(resourcePath: string): string {
     return process.platform === "win32" ? normalizedPath.toLowerCase() : normalizedPath;
 }
 
-function getWorkbookResourcePathKey(uri: vscode.Uri): string | undefined {
+function getWorkbookResourceComparisonSet(uri: vscode.Uri): Set<string> | undefined {
     if (!isWorkbookResourceUri(uri)) {
         return undefined;
     }
 
-    return normalizeResourcePathForComparison(getUriPathForExtension(uri));
+    return new Set(
+        getUriComparisonPaths(uri).map((resourcePath) =>
+            normalizeResourcePathForComparison(resourcePath)
+        )
+    );
 }
 
 function getScmWorkbookResourceRef(uri: vscode.Uri): string | undefined {
@@ -137,9 +171,14 @@ export function getScmWorkbookDiffUrisFromEditorUris(
         return undefined;
     }
 
-    const firstPathKey = getWorkbookResourcePathKey(firstUri);
-    const secondPathKey = getWorkbookResourcePathKey(secondUri);
-    if (!firstPathKey || firstPathKey !== secondPathKey) {
+    const firstPathSet = getWorkbookResourceComparisonSet(firstUri);
+    const secondPathSet = getWorkbookResourceComparisonSet(secondUri);
+    if (!firstPathSet || !secondPathSet) {
+        return undefined;
+    }
+
+    const hasSharedPath = [...firstPathSet].some((resourcePath) => secondPathSet.has(resourcePath));
+    if (!hasSharedPath) {
         return undefined;
     }
 

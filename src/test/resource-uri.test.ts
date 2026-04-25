@@ -1,7 +1,10 @@
 import * as assert from "assert";
 import * as vscode from "vscode";
 import { getGitWorkbookResourceInfo } from "../git/resource-info";
-import { getSvnWorkbookResourceInfo } from "../svn/resource-info";
+import {
+    getSvnGraphWorkbookResourceInfo,
+    getSvnWorkbookResourceInfo,
+} from "../svn/resource-info";
 import {
     describeGitResourceRef,
     getScmWorkbookDiffUrisFromEditorUris,
@@ -10,6 +13,7 @@ import {
     getWorkbookResourceDetail,
     getWorkbookResourcePathLabel,
     getWorkbookResourceTimeLabel,
+    isEmptyWorkbookResourceUri,
     isWorkbookResourceUri,
 } from "../workbook/resource-uri";
 
@@ -24,6 +28,40 @@ function createSvnShowUri(resourcePath = "/tmp/item.xlsx", ref: string | number 
                 ref,
             },
         }),
+    });
+}
+
+function createSvnGraphUri(options: {
+    label?: string;
+    source?: "empty" | "svn";
+    target?: string;
+    revision?: string;
+} = {}) {
+    const label = options.label ?? "repo/item.xlsx (BASE)";
+    const source = options.source ?? "svn";
+    const target =
+        Object.prototype.hasOwnProperty.call(options, "target") ? options.target : "/tmp/item.xlsx";
+    const revision =
+        Object.prototype.hasOwnProperty.call(options, "revision")
+            ? options.revision
+            : "BASE";
+    const params = new URLSearchParams({
+        label,
+        source,
+    });
+
+    if (target) {
+        params.set("target", target);
+    }
+
+    if (revision) {
+        params.set("revision", revision);
+    }
+
+    return vscode.Uri.from({
+        scheme: "svn-graph",
+        path: label.startsWith("/") ? label : `/${label}`,
+        query: params.toString(),
     });
 }
 
@@ -125,6 +163,47 @@ suite("Workbook resource URIs", () => {
         assert.strictEqual(isWorkbookResourceUri(svnPatchUri), false);
     });
 
+    test("recognizes svn-graph workbook resources from vscode diff content uris", async () => {
+        const svnGraphUri = createSvnGraphUri();
+
+        const info = getSvnGraphWorkbookResourceInfo(svnGraphUri);
+        assert.strictEqual(info?.provider, "svn-graph");
+        assert.strictEqual(info?.uri, svnGraphUri);
+        assert.strictEqual(info?.resourcePath, "/tmp/item.xlsx");
+        assert.strictEqual(info?.displayPath, "repo/item.xlsx");
+        assert.deepStrictEqual(info?.comparisonPaths, ["repo/item.xlsx"]);
+        assert.strictEqual(info?.ref, "BASE");
+        assert.strictEqual(isWorkbookResourceUri(svnGraphUri), true);
+        assert.strictEqual(getWorkbookResourcePathLabel(svnGraphUri), "repo/item.xlsx (BASE)");
+        assert.match(getWorkbookResourceTimeLabel(svnGraphUri) ?? "", /SVN .*BASE$/);
+
+        const detail = await getWorkbookResourceDetail(svnGraphUri);
+        assert.match(detail?.value ?? "", /SVN .*BASE$/);
+        assert.ok(["Source", "来源"].includes(detail?.label ?? ""));
+    });
+
+    test("recognizes svn-graph empty workbook resources", async () => {
+        const svnGraphUri = createSvnGraphUri({
+            label: "repo/item.xlsx (deleted)",
+            source: "empty",
+            target: undefined,
+            revision: undefined,
+        });
+
+        const info = getSvnGraphWorkbookResourceInfo(svnGraphUri);
+        assert.strictEqual(info?.provider, "svn-graph");
+        assert.strictEqual(info?.resourcePath, "repo/item.xlsx");
+        assert.strictEqual(info?.displayPath, "repo/item.xlsx");
+        assert.strictEqual(info?.ref, undefined);
+        assert.strictEqual(isWorkbookResourceUri(svnGraphUri), true);
+        assert.strictEqual(isEmptyWorkbookResourceUri(svnGraphUri), true);
+        assert.strictEqual(getWorkbookResourcePathLabel(svnGraphUri), "repo/item.xlsx");
+        assert.ok(["Empty workbook", "空工作簿"].includes(getWorkbookResourceTimeLabel(svnGraphUri) ?? ""));
+
+        const detail = await getWorkbookResourceDetail(svnGraphUri);
+        assert.ok(["Empty workbook", "空工作簿"].includes(detail?.value ?? ""));
+    });
+
     test("filters scm workbook diffs to non-file originals", () => {
         const scmInput = new vscode.TabInputTextDiff(
             vscode.Uri.from({
@@ -194,6 +273,34 @@ suite("Workbook resource URIs", () => {
         const diffUris = getScmWorkbookDiffUrisFromEditorUris(fileUri, svnUri);
         assert.strictEqual(getSvnWorkbookResourceInfo(diffUris?.original ?? fileUri)?.ref, "BASE");
         assert.strictEqual(diffUris?.modified.toString(), fileUri.toString());
+    });
+
+    test("pairs svn-graph custom editor resources with local files", () => {
+        const svnGraphUri = createSvnGraphUri();
+        const fileUri = vscode.Uri.file("/tmp/item.xlsx");
+
+        assert.deepStrictEqual(getScmWorkbookDiffUrisFromEditorUris(fileUri, svnGraphUri), {
+            original: svnGraphUri,
+            modified: fileUri,
+        });
+    });
+
+    test("pairs svn-graph custom editor resources using shared display paths", () => {
+        const baseUri = createSvnGraphUri({
+            label: "repo/item.xlsx (BASE)",
+            target: "/tmp/item.xlsx",
+            revision: "BASE",
+        });
+        const headUri = createSvnGraphUri({
+            label: "repo/item.xlsx (HEAD)",
+            target: "https://svn.example.com/repos/project/trunk/repo/item.xlsx",
+            revision: "HEAD",
+        });
+
+        assert.deepStrictEqual(getScmWorkbookDiffUrisFromEditorUris(baseUri, headUri), {
+            original: baseUri,
+            modified: headUri,
+        });
     });
 
     test("pairs scm custom editor resources for git index diffs", () => {

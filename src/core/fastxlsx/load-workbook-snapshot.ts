@@ -15,7 +15,9 @@ import {
     getWorkbookResourceName,
     getWorkbookResourcePathLabel,
     getWorkbookResourceTimeLabel,
+    isEmptyWorkbookResourceUri,
     isWorkbookResourceReadOnly,
+    readWorkbookResourceArchive,
 } from "../../workbook/resource-uri";
 
 interface SheetReader {
@@ -120,6 +122,13 @@ function createWorkbookSnapshot(
     };
 }
 
+function createEmptyWorkbookSnapshot(metadata: WorkbookSnapshotMetadata): WorkbookSnapshot {
+    return {
+        ...metadata,
+        sheets: [],
+    };
+}
+
 export async function loadWorkbookSnapshot(
     filePathOrUri: string | vscode.Uri
 ): Promise<WorkbookSnapshot> {
@@ -153,8 +162,6 @@ export async function loadWorkbookSnapshot(
         });
     }
 
-    const archiveData = await vscode.workspace.fs.readFile(filePathOrUri);
-    const workbook = Workbook.fromUint8Array(archiveData);
     const resourceName = getWorkbookResourceName(filePathOrUri);
     const resourcePath = getWorkbookResourcePathLabel(filePathOrUri);
     const resourceDetail = await getWorkbookResourceDetail(filePathOrUri);
@@ -164,16 +171,37 @@ export async function loadWorkbookSnapshot(
     const resourceStats = resourceFilePath
         ? await stat(resourceFilePath).catch(() => undefined)
         : undefined;
+    const modifiedTimeLabel =
+        resourceStats
+            ? undefined
+            : (getWorkbookResourceTimeLabel(filePathOrUri) ??
+              `${filePathOrUri.scheme.toUpperCase()} resource`);
+
+    if (isEmptyWorkbookResourceUri(filePathOrUri)) {
+        return createEmptyWorkbookSnapshot({
+            filePath: resourcePath,
+            fileName: resourceName,
+            fileSize: 0,
+            modifiedTime: new Date(0).toISOString(),
+            modifiedTimeLabel,
+            detailLabel: resourceDetail?.label,
+            detailValue: resourceDetail?.value,
+            titleDetail: resourceDetail?.titleValue,
+            isReadonly: isWorkbookResourceReadOnly(filePathOrUri),
+        });
+    }
+
+    const archiveData =
+        (await readWorkbookResourceArchive(filePathOrUri)) ??
+        (await vscode.workspace.fs.readFile(filePathOrUri));
+    const workbook = Workbook.fromUint8Array(archiveData);
 
     return createWorkbookSnapshot(workbook, {
         filePath: resourcePath,
         fileName: resourceName,
         fileSize: archiveData.byteLength,
         modifiedTime: resourceStats?.mtime.toISOString() ?? new Date().toISOString(),
-        modifiedTimeLabel: resourceStats
-            ? undefined
-            : (getWorkbookResourceTimeLabel(filePathOrUri) ??
-              `${filePathOrUri.scheme.toUpperCase()} resource`),
+        modifiedTimeLabel,
         detailLabel: resourceDetail?.label,
         detailValue: resourceDetail?.value,
         titleDetail: resourceDetail?.titleValue,
