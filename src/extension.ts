@@ -10,8 +10,6 @@ import {
 import { affectsDisplayLanguage } from "./display-language";
 import { XlsxDiffUriHandler } from "./git/uri-handler";
 import { registerScmWorkbookDiffInterceptor } from "./scm/scm-diff-interceptor";
-import { XlsxDiffPanel } from "./webview/diff-panel";
-import { XlsxEditorPanel } from "./webview/editor-panel";
 import { XlsxCustomEditorProvider } from "./webview/xlsx-custom-editor-provider";
 
 export function activate(context: vscode.ExtensionContext) {
@@ -25,8 +23,12 @@ export function activate(context: vscode.ExtensionContext) {
             }
 
             void Promise.all([
-                XlsxDiffPanel.refreshAll(),
-                XlsxEditorPanel.refreshAll(),
+                import("./webview/diff-panel").then(({ XlsxDiffPanel }) =>
+                    XlsxDiffPanel.refreshAll()
+                ),
+                import("./webview/editor-panel").then(({ XlsxEditorPanel }) =>
+                    XlsxEditorPanel.refreshAll()
+                ),
             ]);
         }),
         vscode.commands.registerCommand(COMMAND_COMPARE_TWO_FILES, async () => {

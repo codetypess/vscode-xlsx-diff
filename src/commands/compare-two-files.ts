@@ -1,6 +1,5 @@
 import * as vscode from "vscode";
 import { getRuntimeMessages } from "../i18n";
-import { XlsxDiffPanel } from "../webview/diff-panel";
 import { pickWorkbook } from "./workbook-picker";
 
 export async function compareTwoFiles(extensionUri: vscode.Uri): Promise<void> {
@@ -15,5 +14,6 @@ export async function compareTwoFiles(extensionUri: vscode.Uri): Promise<void> {
         return;
     }
 
+    const { XlsxDiffPanel } = await import("../webview/diff-panel");
     await XlsxDiffPanel.create(extensionUri, leftUri, rightUri);
 }

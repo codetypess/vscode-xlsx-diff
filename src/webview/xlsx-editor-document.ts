@@ -4,8 +4,16 @@ import {
     type SheetEdit,
     type SheetViewEdit,
     type WorkbookEditState,
-    writeWorkbookEditsToDestination,
 } from "../core/fastxlsx/write-cell-value";
+
+async function writePendingWorkbookEditsToDestination(
+    sourceUri: vscode.Uri,
+    destinationUri: vscode.Uri,
+    edits: WorkbookEditState
+): Promise<void> {
+    const { writeWorkbookEditsToDestination } = await import("../core/fastxlsx/write-cell-value");
+    await writeWorkbookEditsToDestination(sourceUri, destinationUri, edits);
+}
 
 function getCellEditKey(edit: CellEdit): string {
     return `${edit.sheetName}:${edit.rowNumber}:${edit.columnNumber}`;
@@ -217,7 +225,7 @@ export class XlsxEditorDocument implements vscode.CustomDocument {
     }
 
     public async saveTo(destination: vscode.Uri): Promise<void> {
-        await writeWorkbookEditsToDestination(
+        await writePendingWorkbookEditsToDestination(
             this.getReadUri(),
             destination,
             this.getPendingState()

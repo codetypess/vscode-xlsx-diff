@@ -1,6 +1,5 @@
 import * as vscode from "vscode";
 import { getRuntimeMessages } from "../i18n";
-import { XlsxDiffPanel } from "../webview/diff-panel";
 import { getActiveWorkbookUri, getWorkbookUriFromCommandArg, pickWorkbook } from "./workbook-picker";
 
 export async function compareActiveWith(
@@ -20,5 +19,6 @@ export async function compareActiveWith(
         return;
     }
 
+    const { XlsxDiffPanel } = await import("../webview/diff-panel");
     await XlsxDiffPanel.create(extensionUri, leftUri, rightUri);
 }

@@ -1,7 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as vscode from "vscode";
-import { XlsxDiffPanel } from "../webview/diff-panel";
 
 function toErrorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
@@ -40,6 +39,7 @@ export class XlsxDiffUriHandler implements vscode.UriHandler {
                 ensureWorkbookFile(rightPath, "Right workbook"),
             ]);
 
+            const { XlsxDiffPanel } = await import("../webview/diff-panel");
             await XlsxDiffPanel.create(this.extensionUri, leftUri, rightUri);
         } catch (error) {
             const errorMessage = toErrorMessage(error);

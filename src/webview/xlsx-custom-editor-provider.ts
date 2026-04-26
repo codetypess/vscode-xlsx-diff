@@ -4,8 +4,11 @@ import { type WorkbookEditState } from "../core/fastxlsx/write-cell-value";
 import { rememberRecentWorkbookResourceUri } from "../scm/recent-workbook-resource-context";
 import { withWorkbookSaveProgress } from "../workbook/save-progress";
 import { readEditorBackupState, writeEditorBackupState } from "./editor-backup-state";
-import { XlsxEditorPanel } from "./editor-panel";
 import { XlsxEditorDocument } from "./xlsx-editor-document";
+
+async function getXlsxEditorPanelModule(): Promise<typeof import("./editor-panel")> {
+    return import("./editor-panel");
+}
 
 export class XlsxCustomEditorProvider
     implements vscode.CustomEditorProvider<XlsxEditorDocument>, vscode.Disposable
@@ -60,6 +63,7 @@ export class XlsxCustomEditorProvider
         webviewPanel: vscode.WebviewPanel,
         _token: vscode.CancellationToken
     ): Promise<void> {
+        const { XlsxEditorPanel } = await getXlsxEditorPanelModule();
         await XlsxEditorPanel.resolveCustomEditor(this.extensionUri, document, webviewPanel, {
             onPendingStateChanged: async (state: WorkbookEditState) => {
                 if (!document.replacePendingState(state)) {
@@ -123,12 +127,14 @@ export class XlsxCustomEditorProvider
 
     private async revertDocument(document: XlsxEditorDocument): Promise<void> {
         document.markReverted();
+        const { XlsxEditorPanel } = await getXlsxEditorPanelModule();
         await XlsxEditorPanel.refreshDocument(document, {
             clearPendingEdits: true,
         });
     }
 
     private async saveDocument(document: XlsxEditorDocument): Promise<void> {
+        const { XlsxEditorPanel } = await getXlsxEditorPanelModule();
         await XlsxEditorPanel.beginDocumentSave(document);
 
         try {

@@ -1,3 +1,4 @@
+import { rm } from "node:fs/promises";
 import { context, type BuildResult, type Plugin, type PluginBuild } from "esbuild";
 
 const production = process.argv.includes("--production");
@@ -23,15 +24,21 @@ const esbuildProblemMatcherPlugin: Plugin = {
 };
 
 async function main() {
+    await rm("dist", { recursive: true, force: true });
+
     const extensionCtx = await context({
         entryPoints: ["src/extension.ts"],
+        outbase: "src",
         bundle: true,
         format: "esm",
         minify: production,
         sourcemap: !production,
         sourcesContent: false,
         platform: "node",
-        outfile: "dist/extension.js",
+        splitting: true,
+        outdir: "dist",
+        entryNames: "[name]",
+        chunkNames: "chunks/[name]-[hash]",
         external: ["vscode"],
         logLevel: "silent",
         plugins: [esbuildProblemMatcherPlugin],

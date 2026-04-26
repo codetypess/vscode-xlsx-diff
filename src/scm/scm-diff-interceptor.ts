@@ -5,7 +5,6 @@ import {
 } from "../constants";
 import { resolveUnknownGitWorkbookDiff } from "../git/scm-diff-fallback";
 import { resolveUnknownSvnWorkbookDiff } from "../svn/scm-diff-fallback";
-import { XlsxDiffPanel } from "../webview/diff-panel";
 import {
     getScmWorkbookDiffUrisFromEditorUris,
     getScmWorkbookDiffUrisFromTabInput,
@@ -103,6 +102,16 @@ function getCustomWorkbookEditorTabs(): CustomWorkbookEditorTab[] {
             .map((tab) => getCustomWorkbookEditorTab(tab))
             .filter((tab): tab is CustomWorkbookEditorTab => Boolean(tab))
     );
+}
+
+async function createXlsxDiffPanel(
+    extensionUri: vscode.Uri,
+    original: vscode.Uri,
+    modified: vscode.Uri,
+    viewColumn: vscode.ViewColumn
+): Promise<void> {
+    const { XlsxDiffPanel } = await import("../webview/diff-panel");
+    await XlsxDiffPanel.create(extensionUri, original, modified, viewColumn);
 }
 
 async function closePreviewWorkbookTabs(resourceUri: vscode.Uri): Promise<void> {
@@ -223,7 +232,7 @@ export function registerScmWorkbookDiffInterceptor(extensionUri: vscode.Uri): vs
             log(
                 `open diff panel original=${describeUri(diffUris.original)} modified=${describeUri(diffUris.modified)} viewColumn=${viewColumn} tabsToClose=${tabsToClose.length}`
             );
-            const openPanelPromise = XlsxDiffPanel.create(
+            const openPanelPromise = createXlsxDiffPanel(
                 extensionUri,
                 diffUris.original,
                 diffUris.modified,
