@@ -73,8 +73,8 @@ function clampSelectedCell(
     }
 
     return {
-        rowNumber: Math.min(Math.max(selectedCell.rowNumber, 1), sheet.rowCount),
-        columnNumber: Math.min(Math.max(selectedCell.columnNumber, 1), sheet.columnCount),
+        rowNumber: Math.max(selectedCell.rowNumber, 1),
+        columnNumber: Math.max(selectedCell.columnNumber, 1),
     };
 }
 

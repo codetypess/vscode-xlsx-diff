@@ -15,8 +15,8 @@ import {
     clampEditorScrollPosition,
     createEditorColumnWindow,
     createEditorRowWindow,
+    getEditorDisplayGridDimensions,
     getEditorContentSize,
-    getEditorRowHeaderWidth,
     getFrozenEditorCounts,
     getVisibleFrozenEditorCounts,
 } from "./editor-virtual-grid";
@@ -361,7 +361,12 @@ function getVirtualViewportState(currentModel: EditorRenderModel | null): Virtua
     const viewportWidth = pane?.clientWidth ?? DEFAULT_EDITOR_VIEWPORT_WIDTH;
     const scrollTop = pane?.scrollTop ?? 0;
     const scrollLeft = pane?.scrollLeft ?? 0;
-    const rowHeaderWidth = getEditorRowHeaderWidth(currentModel.activeSheet.rowCount);
+    const displayGrid = getEditorDisplayGridDimensions({
+        rowCount: currentModel.activeSheet.rowCount,
+        columnCount: currentModel.activeSheet.columnCount,
+        viewportHeight,
+        viewportWidth,
+    });
     const { rowCount: frozenRowCount, columnCount: frozenColumnCount } = getFrozenEditorCounts({
         rowCount: currentModel.activeSheet.rowCount,
         columnCount: currentModel.activeSheet.columnCount,
@@ -373,20 +378,20 @@ function getVirtualViewportState(currentModel: EditorRenderModel | null): Virtua
             frozenColumnCount,
             viewportHeight,
             viewportWidth,
-            rowHeaderWidth,
+            rowHeaderWidth: displayGrid.rowHeaderWidth,
         });
     const rowWindow = createEditorRowWindow({
-        totalRows: currentModel.activeSheet.rowCount,
+        totalRows: displayGrid.rowCount,
         frozenRowCount,
         scrollTop,
         viewportHeight,
     });
     const columnWindow = createEditorColumnWindow({
-        totalColumns: currentModel.activeSheet.columnCount,
+        totalColumns: displayGrid.columnCount,
         frozenColumnCount,
         scrollLeft,
         viewportWidth,
-        rowHeaderWidth,
+        rowHeaderWidth: displayGrid.rowHeaderWidth,
     });
 
     return {
@@ -394,7 +399,7 @@ function getVirtualViewportState(currentModel: EditorRenderModel | null): Virtua
         scrollLeft,
         viewportHeight,
         viewportWidth,
-        rowHeaderWidth,
+        rowHeaderWidth: displayGrid.rowHeaderWidth,
         frozenRowCount,
         frozenColumnCount,
         frozenRowNumbers: createSequentialNumbers(visibleFrozenRowCount),
@@ -1006,21 +1011,26 @@ function revealSelectedCell(): void {
         return;
     }
 
-    const rowHeaderWidth = getEditorRowHeaderWidth(model.activeSheet.rowCount);
+    const displayGrid = getEditorDisplayGridDimensions({
+        rowCount: model.activeSheet.rowCount,
+        columnCount: model.activeSheet.columnCount,
+        viewportHeight: pane.clientHeight,
+        viewportWidth: pane.clientWidth,
+    });
     const { rowCount: frozenRowCount, columnCount: frozenColumnCount } = getFrozenEditorCounts({
         rowCount: model.activeSheet.rowCount,
         columnCount: model.activeSheet.columnCount,
         freezePane: model.activeSheet.freezePane,
     });
     const contentSize = getEditorContentSize({
-        rowCount: model.activeSheet.rowCount,
-        columnCount: model.activeSheet.columnCount,
-        rowHeaderWidth,
+        rowCount: displayGrid.rowCount,
+        columnCount: displayGrid.columnCount,
+        rowHeaderWidth: displayGrid.rowHeaderWidth,
     });
     const stickyTop =
         EDITOR_VIRTUAL_HEADER_HEIGHT + frozenRowCount * EDITOR_VIRTUAL_ROW_HEIGHT;
     const stickyLeft =
-        rowHeaderWidth + frozenColumnCount * EDITOR_VIRTUAL_COLUMN_WIDTH;
+        displayGrid.rowHeaderWidth + frozenColumnCount * EDITOR_VIRTUAL_COLUMN_WIDTH;
     let nextTop = pane.scrollTop;
     let nextLeft = pane.scrollLeft;
 
@@ -1041,7 +1051,7 @@ function revealSelectedCell(): void {
 
     if (selectedCell.columnNumber > frozenColumnCount) {
         const cellLeft =
-            rowHeaderWidth +
+            displayGrid.rowHeaderWidth +
             (selectedCell.columnNumber - 1) * EDITOR_VIRTUAL_COLUMN_WIDTH;
         const cellRight = cellLeft + EDITOR_VIRTUAL_COLUMN_WIDTH;
         const visibleLeft = pane.scrollLeft + stickyLeft;
@@ -3355,7 +3365,12 @@ function createEditorVirtualGridMetrics(
     const viewportWidth = element?.clientWidth ?? DEFAULT_EDITOR_VIEWPORT_WIDTH;
     const scrollTop = element?.scrollTop ?? fallbackScrollState?.top ?? 0;
     const scrollLeft = element?.scrollLeft ?? fallbackScrollState?.left ?? 0;
-    const rowHeaderWidth = getEditorRowHeaderWidth(currentModel.activeSheet.rowCount);
+    const displayGrid = getEditorDisplayGridDimensions({
+        rowCount: currentModel.activeSheet.rowCount,
+        columnCount: currentModel.activeSheet.columnCount,
+        viewportHeight,
+        viewportWidth,
+    });
     const { rowCount: frozenRowCount, columnCount: frozenColumnCount } = getFrozenEditorCounts({
         rowCount: currentModel.activeSheet.rowCount,
         columnCount: currentModel.activeSheet.columnCount,
@@ -3369,25 +3384,25 @@ function createEditorVirtualGridMetrics(
         frozenColumnCount,
         viewportHeight,
         viewportWidth,
-        rowHeaderWidth,
+        rowHeaderWidth: displayGrid.rowHeaderWidth,
     });
     const rowWindow = createEditorRowWindow({
-        totalRows: currentModel.activeSheet.rowCount,
+        totalRows: displayGrid.rowCount,
         frozenRowCount,
         scrollTop,
         viewportHeight,
     });
     const columnWindow = createEditorColumnWindow({
-        totalColumns: currentModel.activeSheet.columnCount,
+        totalColumns: displayGrid.columnCount,
         frozenColumnCount,
         scrollLeft,
         viewportWidth,
-        rowHeaderWidth,
+        rowHeaderWidth: displayGrid.rowHeaderWidth,
     });
     const contentSize = getEditorContentSize({
-        rowCount: currentModel.activeSheet.rowCount,
-        columnCount: currentModel.activeSheet.columnCount,
-        rowHeaderWidth,
+        rowCount: displayGrid.rowCount,
+        columnCount: displayGrid.columnCount,
+        rowHeaderWidth: displayGrid.rowHeaderWidth,
     });
 
     return {
@@ -3395,7 +3410,7 @@ function createEditorVirtualGridMetrics(
         scrollLeft,
         viewportHeight,
         viewportWidth,
-        rowHeaderWidth,
+        rowHeaderWidth: displayGrid.rowHeaderWidth,
         frozenRowCount,
         frozenColumnCount,
         rowNumbers: rowWindow.rowNumbers,
@@ -3407,7 +3422,7 @@ function createEditorVirtualGridMetrics(
         stickyTopHeight:
             EDITOR_VIRTUAL_HEADER_HEIGHT + frozenRowCount * EDITOR_VIRTUAL_ROW_HEIGHT,
         stickyLeftWidth:
-            rowHeaderWidth + frozenColumnCount * EDITOR_VIRTUAL_COLUMN_WIDTH,
+            displayGrid.rowHeaderWidth + frozenColumnCount * EDITOR_VIRTUAL_COLUMN_WIDTH,
     };
 }
 
@@ -3452,11 +3467,16 @@ function useEditorVirtualGrid(
             return;
         }
 
-        const rowHeaderWidth = getEditorRowHeaderWidth(currentModel.activeSheet.rowCount);
-        const contentSize = getEditorContentSize({
+        const displayGrid = getEditorDisplayGridDimensions({
             rowCount: currentModel.activeSheet.rowCount,
             columnCount: currentModel.activeSheet.columnCount,
-            rowHeaderWidth,
+            viewportHeight: element.clientHeight,
+            viewportWidth: element.clientWidth,
+        });
+        const contentSize = getEditorContentSize({
+            rowCount: displayGrid.rowCount,
+            columnCount: displayGrid.columnCount,
+            rowHeaderWidth: displayGrid.rowHeaderWidth,
         });
         const nextTop = clampEditorScrollPosition(
             initialScrollState?.top ?? element.scrollTop,

@@ -18,6 +18,7 @@ import {
     captureStructuralSnapshot,
     createCommittedWorkbookState,
     createPendingWorkbookEditState,
+    createWorkingWorkbook,
     restorePendingWorkbookState,
     createWorkingSheetEntries,
     mapPendingCellEditsToWebview,
@@ -628,8 +629,35 @@ suite("Editor panel state helpers", () => {
         assert.strictEqual(committedWorkbook.sheets[0]!.cells["2:2"]!.styleId, 7);
         assert.strictEqual(committedWorkbook.sheets[1]!.cells["4:3"]!.displayValue, "tail");
         assert.strictEqual(committedWorkbook.sheets[1]!.cells["4:3"]!.address, "C4");
+        assert.strictEqual(committedWorkbook.sheets[1]!.rowCount, 4);
+        assert.strictEqual(committedWorkbook.sheets[1]!.columnCount, 3);
         assert.strictEqual(committedState.sheetEntries[0]!.sheet.cells["2:2"]!.displayValue, "after");
         assert.strictEqual(sheetEntries[0]!.sheet.cells["2:2"]!.displayValue, "before");
+    });
+
+    test("expands sheet bounds for pending and committed edits beyond the used range", () => {
+        const workbook = createWorkbook("editor.xlsx", [
+            createSheet("Sheet1", [createCell(1, 1, "head")], { rowCount: 5, columnCount: 3 }),
+        ]);
+        const sheetEntries = createWorkingSheetEntries(workbook);
+        const pendingCellEdits = [
+            {
+                sheetName: "Sheet1",
+                rowNumber: 12,
+                columnNumber: 8,
+                value: "tail",
+            },
+        ];
+
+        const workingWorkbook = createWorkingWorkbook(workbook, sheetEntries, pendingCellEdits);
+        const committedState = createCommittedWorkbookState(workbook, sheetEntries, pendingCellEdits);
+
+        assert.strictEqual(workingWorkbook.sheets[0]!.rowCount, 12);
+        assert.strictEqual(workingWorkbook.sheets[0]!.columnCount, 8);
+        assert.strictEqual(committedState.workbook.sheets[0]!.rowCount, 12);
+        assert.strictEqual(committedState.workbook.sheets[0]!.columnCount, 8);
+        assert.strictEqual(committedState.workbook.sheets[0]!.cells["12:8"]!.displayValue, "tail");
+        assert.strictEqual(committedState.workbook.sheets[0]!.cells["12:8"]!.address, "H12");
     });
 
     test("restores working state from pending workbook edits", () => {

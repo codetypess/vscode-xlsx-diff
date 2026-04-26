@@ -108,13 +108,50 @@ export function createWorkingSheetEntries(workbook: WorkbookSnapshot): WorkingSh
     }));
 }
 
+function expandSheetBoundsForCellEdit(
+    sheet: WorkbookSnapshot["sheets"][number],
+    edit: CellEdit
+): WorkbookSnapshot["sheets"][number] {
+    const nextRowCount = Math.max(sheet.rowCount, edit.rowNumber);
+    const nextColumnCount = Math.max(sheet.columnCount, edit.columnNumber);
+    if (nextRowCount === sheet.rowCount && nextColumnCount === sheet.columnCount) {
+        return sheet;
+    }
+
+    return {
+        ...sheet,
+        rowCount: nextRowCount,
+        columnCount: nextColumnCount,
+        signature: createPendingSheetSignature(
+            sheet.name,
+            nextRowCount,
+            nextColumnCount,
+            Object.keys(sheet.cells).length
+        ),
+    };
+}
+
 export function createWorkingWorkbook(
     workbook: WorkbookSnapshot,
-    sheetEntries: WorkingSheetEntry[]
+    sheetEntries: WorkingSheetEntry[],
+    pendingCellEdits: CellEdit[] = []
 ): WorkbookSnapshot {
+    const sheetsByName = new Map(
+        sheetEntries.map((entry) => [entry.sheet.name, entry.sheet] as const)
+    );
+
+    for (const edit of pendingCellEdits) {
+        const sheet = sheetsByName.get(edit.sheetName);
+        if (!sheet) {
+            continue;
+        }
+
+        sheetsByName.set(edit.sheetName, expandSheetBoundsForCellEdit(sheet, edit));
+    }
+
     return {
         ...workbook,
-        sheets: sheetEntries.map((entry) => entry.sheet),
+        sheets: sheetEntries.map((entry) => sheetsByName.get(entry.sheet.name) ?? entry.sheet),
     };
 }
 
@@ -311,8 +348,12 @@ export function createCommittedWorkbookState(
         const entry = committedEntries[entryIndex]!;
         const key = createCellKey(edit.rowNumber, edit.columnNumber);
         const currentCell = entry.sheet.cells[key];
+        const nextRowCount = Math.max(entry.sheet.rowCount, edit.rowNumber);
+        const nextColumnCount = Math.max(entry.sheet.columnCount, edit.columnNumber);
         entry.sheet = {
             ...entry.sheet,
+            rowCount: nextRowCount,
+            columnCount: nextColumnCount,
             cells: {
                 ...entry.sheet.cells,
                 [key]: {
@@ -325,6 +366,12 @@ export function createCommittedWorkbookState(
                     styleId: currentCell?.styleId ?? null,
                 },
             },
+            signature: createPendingSheetSignature(
+                entry.sheet.name,
+                nextRowCount,
+                nextColumnCount,
+                Object.keys(entry.sheet.cells).length + (currentCell ? 0 : 1)
+            ),
         };
     }
 

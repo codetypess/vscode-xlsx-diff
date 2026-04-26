@@ -9,6 +9,7 @@ import {
     clampEditorScrollPosition,
     createEditorColumnWindow,
     createEditorRowWindow,
+    getEditorDisplayGridDimensions,
     getEditorContentSize,
     getEditorRowHeaderWidth,
     getEditorScrollPositionForCell,
@@ -99,6 +100,22 @@ suite("Editor virtual grid helpers", () => {
             {
                 rowCount: 20,
                 columnCount: 7,
+            }
+        );
+    });
+
+    test("pads displayed rows and columns to fill the viewport", () => {
+        assert.deepStrictEqual(
+            getEditorDisplayGridDimensions({
+                rowCount: 5,
+                columnCount: 3,
+                viewportHeight: 600,
+                viewportWidth: 960,
+            }),
+            {
+                rowCount: 21,
+                columnCount: 8,
+                rowHeaderWidth: 56,
             }
         );
     });

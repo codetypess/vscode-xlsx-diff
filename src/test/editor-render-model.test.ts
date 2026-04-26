@@ -233,4 +233,28 @@ suite("Editor render model", () => {
             activePane: "bottomRight",
         });
     });
+
+    test("preserves selections beyond the current used range", () => {
+        const workbook = createWorkbook({}, [
+            createSheet("Sheet1", [createCell(1, 1, "head")], 5, 3),
+        ]);
+
+        const selectedState = setSelectedEditorCell(
+            workbook,
+            createInitialEditorPanelState(workbook),
+            12,
+            8
+        );
+        const renderModel = createEditorRenderModel(workbook, selectedState);
+
+        assert.deepStrictEqual(renderModel.selection, {
+            rowNumber: 12,
+            columnNumber: 8,
+            key: "12:8",
+            address: "H12",
+            value: "",
+            formula: null,
+            isPresent: false,
+        });
+    });
 });

@@ -646,7 +646,11 @@ export class XlsxEditorPanel {
             return null;
         }
 
-        return createWorkingWorkbook(this.workbook, this.workingSheetEntries);
+        return createWorkingWorkbook(
+            this.workbook,
+            this.workingSheetEntries,
+            this.pendingCellEdits
+        );
     }
 
     private async commitSavedState(): Promise<void> {

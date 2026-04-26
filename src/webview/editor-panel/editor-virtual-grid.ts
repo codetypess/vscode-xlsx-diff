@@ -14,6 +14,55 @@ export function getEditorRowHeaderWidth(totalRows: number): number {
     return Math.max(56, digits * 9 + 24);
 }
 
+export function getMinimumVisibleEditorRowCount(viewportHeight: number): number {
+    return Math.max(
+        1,
+        Math.ceil(
+            Math.max(0, viewportHeight - EDITOR_VIRTUAL_HEADER_HEIGHT) / EDITOR_VIRTUAL_ROW_HEIGHT
+        )
+    );
+}
+
+export function getMinimumVisibleEditorColumnCount({
+    viewportWidth,
+    rowHeaderWidth,
+}: {
+    viewportWidth: number;
+    rowHeaderWidth: number;
+}): number {
+    return Math.max(
+        1,
+        Math.ceil(Math.max(0, viewportWidth - rowHeaderWidth) / EDITOR_VIRTUAL_COLUMN_WIDTH)
+    );
+}
+
+export function getEditorDisplayGridDimensions({
+    rowCount,
+    columnCount,
+    viewportHeight,
+    viewportWidth,
+}: {
+    rowCount: number;
+    columnCount: number;
+    viewportHeight: number;
+    viewportWidth: number;
+}): { rowCount: number; columnCount: number; rowHeaderWidth: number } {
+    const displayRowCount = Math.max(rowCount, getMinimumVisibleEditorRowCount(viewportHeight));
+    const rowHeaderWidth = getEditorRowHeaderWidth(displayRowCount);
+
+    return {
+        rowCount: displayRowCount,
+        columnCount: Math.max(
+            columnCount,
+            getMinimumVisibleEditorColumnCount({
+                viewportWidth,
+                rowHeaderWidth,
+            })
+        ),
+        rowHeaderWidth,
+    };
+}
+
 export function getFrozenEditorCounts({
     rowCount,
     columnCount,
