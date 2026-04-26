@@ -153,6 +153,10 @@ export const RUNTIME_MESSAGES = {
             noRowsAvailable: "No rows available in this view.",
             localChangesBlockedReload:
                 "The workbook changed on disk. Save or discard your pending edits before reloading.",
+            externalChangesSavePrompt:
+                "The workbook changed on disk while you still have pending edits. Reload to discard your changes, or save anyway to apply them to the latest file.",
+            externalChangesSaveAnyway: "Save Anyway",
+            externalChangesReload: "Reload",
             displayLanguageRefreshBlocked:
                 "Pending edits are open. Display language changes will apply after you save or reload the editor.",
             noSearchMatches: "No matching cells were found.",
@@ -269,6 +273,10 @@ export const RUNTIME_MESSAGES = {
             noRowsAvailable: "当前视图没有可显示的行。",
             localChangesBlockedReload:
                 "工作簿文件已在磁盘上变化。请先保存或放弃当前未保存修改，再刷新。",
+            externalChangesSavePrompt:
+                "工作簿文件已在磁盘上变化，但当前仍有未保存修改。你可以选择刷新以放弃本地修改，或仍然保存并把本地修改应用到最新文件。",
+            externalChangesSaveAnyway: "仍然保存",
+            externalChangesReload: "刷新",
             displayLanguageRefreshBlocked: "当前有未保存修改，语言变更将在保存或手动刷新后生效。",
             noSearchMatches: "没有找到匹配的单元格。",
             invalidCellReference:

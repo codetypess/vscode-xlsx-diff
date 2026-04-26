@@ -116,6 +116,9 @@ export interface EditorPanelStrings {
     noCellSelected: string;
     noRowsAvailable: string;
     localChangesBlockedReload: string;
+    externalChangesSavePrompt: string;
+    externalChangesSaveAnyway: string;
+    externalChangesReload: string;
     displayLanguageRefreshBlocked: string;
     noSearchMatches: string;
     invalidCellReference: string;

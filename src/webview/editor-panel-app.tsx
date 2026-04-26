@@ -50,6 +50,7 @@ import {
     type PendingHistoryChange as PendingEditChange,
     type PendingHistoryEntry as HistoryEntry,
 } from "./editor-pending-history";
+import { stabilizeIncomingRenderModel } from "./editor-render-stabilizer";
 import { getFreezePaneCountsForCell, hasLockedView } from "./view-lock";
 
 interface VsCodeApi {
@@ -104,6 +105,7 @@ type IncomingMessage =
           silent?: boolean;
           clearPendingEdits?: boolean;
           preservePendingHistory?: boolean;
+          reuseActiveSheetData?: boolean;
           useModelSelection?: boolean;
           replacePendingEdits?: Array<{
               sheetKey: string;
@@ -252,43 +254,6 @@ let searchScope: EditorSearchScope = "sheet";
 let searchFeedback: EditorSearchResultMessage | null = null;
 let searchPanelPosition: SearchPanelPosition | null = null;
 let searchSelectionRange: CellRange | null = null;
-
-function stabilizeIncomingRenderModel(
-    previousModel: EditorRenderModel | null,
-    nextModel: EditorRenderModel,
-    {
-        canReuseActiveSheetData,
-    }: {
-        canReuseActiveSheetData: boolean;
-    }
-): EditorRenderModel {
-    if (
-        !canReuseActiveSheetData ||
-        !previousModel ||
-        previousModel.activeSheet.key !== nextModel.activeSheet.key ||
-        previousModel.activeSheet.rowCount !== nextModel.activeSheet.rowCount ||
-        previousModel.activeSheet.columnCount !== nextModel.activeSheet.columnCount
-    ) {
-        return nextModel;
-    }
-
-    const reusedActiveSheetColumns =
-        previousModel.activeSheet.columns.length === nextModel.activeSheet.columns.length &&
-        previousModel.activeSheet.columns.every(
-            (label, index) => label === nextModel.activeSheet.columns[index]
-        );
-
-    return {
-        ...nextModel,
-        activeSheet: {
-            ...nextModel.activeSheet,
-            cells: previousModel.activeSheet.cells,
-            columns: reusedActiveSheetColumns
-                ? previousModel.activeSheet.columns
-                : nextModel.activeSheet.columns,
-        },
-    };
-}
 
 interface VirtualViewportState {
     scrollTop: number;
@@ -4358,10 +4323,8 @@ window.addEventListener("message", (event: MessageEvent<IncomingMessage>) => {
     }
 
     if (message.type === "render") {
-        const canReuseActiveSheetData =
-            Boolean(message.clearPendingEdits) && pendingEdits.size === 0;
         model = stabilizeIncomingRenderModel(model, message.payload, {
-            canReuseActiveSheetData,
+            canReuseActiveSheetData: Boolean(message.reuseActiveSheetData),
         });
         isSaving = false;
 

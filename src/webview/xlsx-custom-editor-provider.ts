@@ -16,6 +16,7 @@ export class XlsxCustomEditorProvider
     private readonly onDidChangeCustomDocumentEmitter = new vscode.EventEmitter<
         vscode.CustomDocumentContentChangeEvent<XlsxEditorDocument>
     >();
+    private readonly inFlightSaves = new WeakMap<XlsxEditorDocument, Promise<void>>();
 
     public static register(context: vscode.ExtensionContext): vscode.Disposable {
         const provider = new XlsxCustomEditorProvider(context.extensionUri);
@@ -134,7 +135,25 @@ export class XlsxCustomEditorProvider
     }
 
     private async saveDocument(document: XlsxEditorDocument): Promise<void> {
+        const inFlightSave = this.inFlightSaves.get(document);
+        if (inFlightSave) {
+            return inFlightSave;
+        }
+
+        const savePromise = this.runSaveDocument(document).finally(() => {
+            this.inFlightSaves.delete(document);
+        });
+        this.inFlightSaves.set(document, savePromise);
+        return savePromise;
+    }
+
+    private async runSaveDocument(document: XlsxEditorDocument): Promise<void> {
         const { XlsxEditorPanel } = await getXlsxEditorPanelModule();
+        const confirmed = await XlsxEditorPanel.confirmDocumentSave(document);
+        if (!confirmed) {
+            return;
+        }
+
         await XlsxEditorPanel.beginDocumentSave(document);
 
         try {

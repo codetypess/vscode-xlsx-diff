@@ -71,6 +71,11 @@ function getWebviewStrings(): EditorPanelStrings {
 
 export class XlsxEditorPanel {
     private static readonly panels = new Map<number, XlsxEditorPanel>();
+    private static readonly confirmedSaveBypassDocuments = new WeakSet<XlsxEditorDocument>();
+    private static readonly pendingSaveConfirmations = new WeakMap<
+        XlsxEditorDocument,
+        Promise<boolean>
+    >();
     private static nextPanelId = 1;
     private static readonly LOCAL_SAVE_AUTO_REFRESH_DELAY_MS = 3000;
     private static readonly LOCAL_SAVE_IGNORED_REFRESH_EVENTS = 4;
@@ -99,6 +104,7 @@ export class XlsxEditorPanel {
     private ignoredAutoRefreshUntil = 0;
     private isSavingDocument = false;
     private hasWarnedPendingExternalChange = false;
+    private hasPendingExternalWorkbookChange = false;
     private pendingCellEdits: CellEdit[] = [];
     private pendingSheetEdits: SheetEdit[] = [];
     private pendingViewEdits: SheetViewEdit[] = [];
@@ -186,7 +192,47 @@ export class XlsxEditorPanel {
         );
     }
 
+    public static async confirmDocumentSave(document: XlsxEditorDocument): Promise<boolean> {
+        if (XlsxEditorPanel.confirmedSaveBypassDocuments.has(document)) {
+            return true;
+        }
+
+        const pendingConfirmation = XlsxEditorPanel.pendingSaveConfirmations.get(document);
+        if (pendingConfirmation) {
+            return pendingConfirmation;
+        }
+
+        const matchingPanels = [...XlsxEditorPanel.panels.values()].filter(
+            (panel) => panel.document === document
+        );
+        if (matchingPanels.length === 0) {
+            return true;
+        }
+
+        const panelNeedingConfirmation =
+            matchingPanels.find((panel) => panel.hasPendingExternalWorkbookChange) ??
+            matchingPanels[0]!;
+        const confirmationPromise = (async () => {
+            try {
+                return await panelNeedingConfirmation.confirmSaveIfNeeded();
+            } finally {
+                XlsxEditorPanel.pendingSaveConfirmations.delete(document);
+            }
+        })();
+        XlsxEditorPanel.pendingSaveConfirmations.set(document, confirmationPromise);
+        return confirmationPromise;
+    }
+
+    private static allowNextConfirmedSave(document: XlsxEditorDocument): void {
+        XlsxEditorPanel.confirmedSaveBypassDocuments.add(document);
+    }
+
+    private static clearConfirmedSaveBypass(document: XlsxEditorDocument): void {
+        XlsxEditorPanel.confirmedSaveBypassDocuments.delete(document);
+    }
+
     public static async commitDocumentSave(document: XlsxEditorDocument): Promise<void> {
+        XlsxEditorPanel.clearConfirmedSaveBypass(document);
         await Promise.all(
             [...XlsxEditorPanel.panels.values()]
                 .filter((panel) => panel.document === document)
@@ -195,6 +241,7 @@ export class XlsxEditorPanel {
     }
 
     public static async failDocumentSave(document: XlsxEditorDocument): Promise<void> {
+        XlsxEditorPanel.clearConfirmedSaveBypass(document);
         await Promise.all(
             [...XlsxEditorPanel.panels.values()]
                 .filter((panel) => panel.document === document)
@@ -269,6 +316,7 @@ export class XlsxEditorPanel {
         }
 
         if (this.document.hasPendingEdits()) {
+            this.hasPendingExternalWorkbookChange = true;
             if (!this.hasWarnedPendingExternalChange) {
                 this.hasWarnedPendingExternalChange = true;
                 void vscode.window.showWarningMessage(
@@ -519,6 +567,10 @@ export class XlsxEditorPanel {
                 case "pendingEditStateChanged":
                     if (!message.hasPendingEdits) {
                         this.hasWarnedPendingExternalChange = false;
+                        if (this.hasPendingExternalWorkbookChange) {
+                            this.hasPendingExternalWorkbookChange = false;
+                            await this.enqueueReload({ clearPendingEdits: true });
+                        }
                     }
                     return;
                 case "setPendingEdits": {
@@ -547,11 +599,15 @@ export class XlsxEditorPanel {
                     await this.controller.onPendingStateChanged(this.createPendingState());
                     if (cellEdits.length === 0 && !this.document.hasPendingEdits()) {
                         this.hasWarnedPendingExternalChange = false;
+                        if (this.hasPendingExternalWorkbookChange) {
+                            this.hasPendingExternalWorkbookChange = false;
+                            await this.enqueueReload({ clearPendingEdits: true });
+                        }
                     }
                     return;
                 }
                 case "requestSave":
-                    await this.controller.onRequestSave();
+                    await this.requestDocumentSave();
                     return;
                 case "undoSheetEdit":
                     await this.undoStructuralEdit();
@@ -622,6 +678,7 @@ export class XlsxEditorPanel {
         this.sheetUndoStack.length = 0;
         this.sheetRedoStack.length = 0;
         this.hasWarnedPendingExternalChange = false;
+        this.hasPendingExternalWorkbookChange = false;
 
         const nextActiveEntry =
             (activeSheetName
@@ -645,9 +702,58 @@ export class XlsxEditorPanel {
         });
     }
 
+    private async confirmSaveIfNeeded(): Promise<boolean> {
+        if (!this.hasPendingExternalWorkbookChange || !this.document.hasPendingEdits()) {
+            return true;
+        }
+
+        const strings = getWebviewStrings();
+        const saveAnywayAction = strings.externalChangesSaveAnyway;
+        const reloadAction = strings.externalChangesReload;
+        const choice = await vscode.window.showWarningMessage(
+            strings.externalChangesSavePrompt,
+            { modal: true },
+            saveAnywayAction,
+            reloadAction
+        );
+
+        if (choice === saveAnywayAction) {
+            return true;
+        }
+
+        if (choice === reloadAction) {
+            await this.controller.onRequestRevert();
+        }
+
+        return false;
+    }
+
+    private async requestDocumentSave(): Promise<void> {
+        const shouldSave = await XlsxEditorPanel.confirmDocumentSave(this.document);
+        if (!shouldSave) {
+            if (this.document.hasPendingEdits()) {
+                await this.render(undefined, {
+                    silent: true,
+                    useModelSelection: true,
+                    replacePendingEdits: this.pendingCellEdits,
+                });
+            }
+            return;
+        }
+
+        XlsxEditorPanel.allowNextConfirmedSave(this.document);
+        await this.controller.onRequestSave();
+    }
+
     private async handleDocumentSave(): Promise<void> {
         this.isSavingDocument = false;
         this.noteLocalSaveCompletion();
+        if (this.hasPendingExternalWorkbookChange) {
+            this.hasPendingExternalWorkbookChange = false;
+            await this.enqueueReload({ silent: true, clearPendingEdits: true });
+            return;
+        }
+
         await this.commitSavedState();
     }
 
@@ -685,10 +791,8 @@ export class XlsxEditorPanel {
     }
 
     private noteLocalSaveCompletion(): void {
-        this.suppressAutoRefreshUntil = Math.max(
-            this.suppressAutoRefreshUntil,
-            Date.now() + XlsxEditorPanel.LOCAL_SAVE_AUTO_REFRESH_DELAY_MS
-        );
+        this.suppressAutoRefreshUntil =
+            Date.now() + XlsxEditorPanel.LOCAL_SAVE_AUTO_REFRESH_DELAY_MS;
         this.ignoredAutoRefreshTriggerCount = Math.max(
             this.ignoredAutoRefreshTriggerCount,
             XlsxEditorPanel.LOCAL_SAVE_IGNORED_REFRESH_EVENTS
@@ -968,6 +1072,10 @@ export class XlsxEditorPanel {
             !this.document.hasPendingEdits()
         ) {
             this.hasWarnedPendingExternalChange = false;
+            if (this.hasPendingExternalWorkbookChange) {
+                this.hasPendingExternalWorkbookChange = false;
+                await this.enqueueReload({ clearPendingEdits: true });
+            }
         }
     }
 
@@ -1383,6 +1491,7 @@ export class XlsxEditorPanel {
 
         if (clearPendingEdits) {
             this.hasWarnedPendingExternalChange = false;
+            this.hasPendingExternalWorkbookChange = false;
         }
         this.panel.title = renderModel.title;
         await this.render(renderModel, {
@@ -1402,6 +1511,7 @@ export class XlsxEditorPanel {
             silent = false,
             clearPendingEdits = false,
             preservePendingHistory = false,
+            reuseActiveSheetData = false,
             useModelSelection = true,
             replacePendingEdits,
             resetPendingHistory = false,
@@ -1409,6 +1519,7 @@ export class XlsxEditorPanel {
             silent?: boolean;
             clearPendingEdits?: boolean;
             preservePendingHistory?: boolean;
+            reuseActiveSheetData?: boolean;
             useModelSelection?: boolean;
             replacePendingEdits?: CellEdit[];
             resetPendingHistory?: boolean;
@@ -1445,6 +1556,7 @@ export class XlsxEditorPanel {
             silent,
             clearPendingEdits,
             preservePendingHistory,
+            reuseActiveSheetData,
             useModelSelection,
             replacePendingEdits:
                 replacePendingEdits !== undefined
