@@ -60,7 +60,12 @@ export class XlsxDiffPanel {
     private isWebviewReady = false;
     private hasPendingRender = false;
     private isReloading = false;
-    private hasQueuedReload = false;
+    private queuedReloadOptions:
+        | {
+              silent: boolean;
+              clearPendingEdits: boolean;
+          }
+        | undefined;
     private autoRefreshTimer: ReturnType<typeof setTimeout> | undefined;
     private suppressAutoRefreshUntil = 0;
 
@@ -241,7 +246,12 @@ export class XlsxDiffPanel {
         clearPendingEdits = false,
     }: { silent?: boolean; clearPendingEdits?: boolean } = {}): Promise<void> {
         if (this.isReloading) {
-            this.hasQueuedReload = true;
+            const queuedReloadOptions = this.queuedReloadOptions;
+            this.queuedReloadOptions = {
+                silent: (queuedReloadOptions?.silent ?? true) && silent,
+                clearPendingEdits:
+                    (queuedReloadOptions?.clearPendingEdits ?? false) || clearPendingEdits,
+            };
             return;
         }
 
@@ -255,9 +265,10 @@ export class XlsxDiffPanel {
         } finally {
             this.isReloading = false;
 
-            if (this.hasQueuedReload) {
-                this.hasQueuedReload = false;
-                await this.enqueueReload({ silent: true });
+            const queuedReloadOptions = this.queuedReloadOptions;
+            if (queuedReloadOptions) {
+                this.queuedReloadOptions = undefined;
+                await this.enqueueReload(queuedReloadOptions);
             }
         }
 
