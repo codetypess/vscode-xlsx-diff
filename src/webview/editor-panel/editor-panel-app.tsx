@@ -23,8 +23,8 @@ import {
     shouldUseLocalSimpleSelectionUpdate,
 } from "./editor-selection-render";
 import {
-    createColumnSelectionRange,
-    createRowSelectionRange,
+    createColumnSelectionSpanRange,
+    createRowSelectionSpanRange,
     createSelectionRange,
     hasExpandedSelectionRange,
     type SelectionRange as CellRange,
@@ -184,10 +184,22 @@ type ContextMenuState =
           y: number;
       };
 
-interface SelectionDragState {
-    anchorCell: CellPosition;
-    pointerId: number;
-}
+type SelectionDragState =
+    | {
+          kind: "cell";
+          anchorCell: CellPosition;
+          pointerId: number;
+      }
+    | {
+          kind: "row";
+          anchorRowNumber: number;
+          pointerId: number;
+      }
+    | {
+          kind: "column";
+          anchorColumnNumber: number;
+          pointerId: number;
+      };
 
 interface SearchPanelPosition {
     left: number;
@@ -240,6 +252,8 @@ let contextMenu: ContextMenuState | null = null;
 let selectionDragState: SelectionDragState | null = null;
 let searchPanelDragState: SearchPanelDragState | null = null;
 let suppressNextCellClick = false;
+let suppressNextRowHeaderClick = false;
+let suppressNextColumnHeaderClick = false;
 
 const WHEEL_DELTA_LINE_MODE = 1;
 const WHEEL_DELTA_PAGE_MODE = 2;
@@ -457,6 +471,26 @@ function isTextInputTarget(target: EventTarget | null): boolean {
 
 function clearBrowserTextSelection(): void {
     globalThis.getSelection?.()?.removeAllRanges();
+}
+
+function clearSuppressedSelectionClicks(): void {
+    suppressNextCellClick = false;
+    suppressNextRowHeaderClick = false;
+    suppressNextColumnHeaderClick = false;
+}
+
+function scheduleSuppressedSelectionClickReset(): void {
+    if (
+        !suppressNextCellClick &&
+        !suppressNextRowHeaderClick &&
+        !suppressNextColumnHeaderClick
+    ) {
+        return;
+    }
+
+    globalThis.setTimeout(() => {
+        clearSuppressedSelectionClicks();
+    }, 0);
 }
 
 function getCellTooltip(address: string, value: string, formula: string | null): string {
@@ -912,12 +946,37 @@ function getCellPositionFromElement(element: Element | null): CellPosition | nul
     return { rowNumber, columnNumber };
 }
 
+function getRowNumberFromElement(element: Element | null): number | null {
+    const target =
+        element?.closest<HTMLElement>('[data-role="grid-row-header"]') ??
+        element?.closest<HTMLElement>('[data-role="grid-cell"]');
+    if (!target) {
+        return null;
+    }
+
+    const rowNumber = Number(target.dataset.rowNumber);
+    return Number.isInteger(rowNumber) ? rowNumber : null;
+}
+
+function getColumnNumberFromElement(element: Element | null): number | null {
+    const target =
+        element?.closest<HTMLElement>('[data-role="grid-column-header"]') ??
+        element?.closest<HTMLElement>('[data-role="grid-cell"]');
+    if (!target) {
+        return null;
+    }
+
+    const columnNumber = Number(target.dataset.columnNumber);
+    return Number.isInteger(columnNumber) ? columnNumber : null;
+}
+
 function startSelectionDrag(pointerId: number, anchorCell: CellPosition): void {
     selectionDragState = {
+        kind: "cell",
         anchorCell,
         pointerId,
     };
-    suppressNextCellClick = false;
+    clearSuppressedSelectionClicks();
 }
 
 function stopSelectionDrag(pointerId?: number): void {
@@ -935,8 +994,8 @@ function stopSelectionDrag(pointerId?: number): void {
     }
 }
 
-function updateSelectionDrag(targetCell: CellPosition): void {
-    if (!selectionDragState) {
+function updateCellSelectionDrag(targetCell: CellPosition): void {
+    if (!selectionDragState || selectionDragState.kind !== "cell") {
         return;
     }
 
@@ -1165,13 +1224,158 @@ function getPreferredSelectionColumnNumber(): number {
     );
 }
 
-function selectEntireRow(rowNumber: number): void {
+function setRowSelectionLocal(
+    rowNumber: number,
+    {
+        anchorRowNumber = rowNumber,
+        reveal = false,
+        syncHost = true,
+        forceRender = false,
+    }: {
+        anchorRowNumber?: number;
+        reveal?: boolean;
+        syncHost?: boolean;
+        forceRender?: boolean;
+    } = {}
+): void {
     if (!model) {
         return;
     }
 
-    const selectionRange = createRowSelectionRange(rowNumber, model.activeSheet.columnCount);
+    const selectionRange = createRowSelectionSpanRange(
+        anchorRowNumber,
+        rowNumber,
+        model.activeSheet.columnCount
+    );
     if (!selectionRange) {
+        return;
+    }
+
+    const columnNumber = getPreferredSelectionColumnNumber();
+    setSelectedCellLocal(
+        {
+            rowNumber,
+            columnNumber,
+        },
+        {
+            reveal,
+            syncHost,
+            anchorCell: {
+                rowNumber: anchorRowNumber,
+                columnNumber,
+            },
+            selectionRange,
+            forceRender,
+        }
+    );
+}
+
+function setColumnSelectionLocal(
+    columnNumber: number,
+    {
+        anchorColumnNumber = columnNumber,
+        reveal = false,
+        syncHost = true,
+        forceRender = false,
+    }: {
+        anchorColumnNumber?: number;
+        reveal?: boolean;
+        syncHost?: boolean;
+        forceRender?: boolean;
+    } = {}
+): void {
+    if (!model) {
+        return;
+    }
+
+    const selectionRange = createColumnSelectionSpanRange(
+        anchorColumnNumber,
+        columnNumber,
+        model.activeSheet.rowCount
+    );
+    if (!selectionRange) {
+        return;
+    }
+
+    const rowNumber = getPreferredSelectionRowNumber();
+    setSelectedCellLocal(
+        {
+            rowNumber,
+            columnNumber,
+        },
+        {
+            reveal,
+            syncHost,
+            anchorCell: {
+                rowNumber,
+                columnNumber: anchorColumnNumber,
+            },
+            selectionRange,
+            forceRender,
+        }
+    );
+}
+
+function startRowSelectionDrag(pointerId: number, anchorRowNumber: number): void {
+    selectionDragState = {
+        kind: "row",
+        anchorRowNumber,
+        pointerId,
+    };
+    clearSuppressedSelectionClicks();
+    setRowSelectionLocal(anchorRowNumber, {
+        anchorRowNumber,
+        syncHost: false,
+    });
+}
+
+function updateRowSelectionDrag(targetRowNumber: number): void {
+    if (!selectionDragState || selectionDragState.kind !== "row") {
+        return;
+    }
+
+    if (selectedCell?.rowNumber === targetRowNumber) {
+        return;
+    }
+
+    suppressNextRowHeaderClick = true;
+    setRowSelectionLocal(targetRowNumber, {
+        anchorRowNumber: selectionDragState.anchorRowNumber,
+        syncHost: false,
+    });
+}
+
+function startColumnSelectionDrag(pointerId: number, anchorColumnNumber: number): void {
+    selectionDragState = {
+        kind: "column",
+        anchorColumnNumber,
+        pointerId,
+    };
+    clearSuppressedSelectionClicks();
+    setColumnSelectionLocal(anchorColumnNumber, {
+        anchorColumnNumber,
+        syncHost: false,
+    });
+}
+
+function updateColumnSelectionDrag(targetColumnNumber: number): void {
+    if (!selectionDragState || selectionDragState.kind !== "column") {
+        return;
+    }
+
+    if (selectedCell?.columnNumber === targetColumnNumber) {
+        return;
+    }
+
+    suppressNextColumnHeaderClick = true;
+    setColumnSelectionLocal(targetColumnNumber, {
+        anchorColumnNumber: selectionDragState.anchorColumnNumber,
+        syncHost: false,
+    });
+}
+
+function selectEntireRow(rowNumber: number): void {
+    if (!model) {
         return;
     }
 
@@ -1180,17 +1384,7 @@ function selectEntireRow(rowNumber: number): void {
         finishEdit({ mode: "commit", refresh: false });
     }
 
-    setSelectedCellLocal(
-        {
-            rowNumber,
-            columnNumber: getPreferredSelectionColumnNumber(),
-        },
-        {
-            syncHost: true,
-            selectionRange,
-            forceRender,
-        }
-    );
+    setRowSelectionLocal(rowNumber, { syncHost: true, forceRender });
 }
 
 function selectEntireColumn(columnNumber: number): void {
@@ -1198,27 +1392,12 @@ function selectEntireColumn(columnNumber: number): void {
         return;
     }
 
-    const selectionRange = createColumnSelectionRange(columnNumber, model.activeSheet.rowCount);
-    if (!selectionRange) {
-        return;
-    }
-
     const forceRender = Boolean(editingCell);
     if (forceRender) {
         finishEdit({ mode: "commit", refresh: false });
     }
 
-    setSelectedCellLocal(
-        {
-            rowNumber: getPreferredSelectionRowNumber(),
-            columnNumber,
-        },
-        {
-            syncHost: true,
-            selectionRange,
-            forceRender,
-        }
-    );
+    setColumnSelectionLocal(columnNumber, { syncHost: true, forceRender });
 }
 
 function syncSelectedCellToHost(): void {
@@ -3249,6 +3428,34 @@ function isActiveHighlightColumn(activeColumnNumber: number | null, columnNumber
     return activeColumnNumber === columnNumber;
 }
 
+function isRowHeaderWithinSelectionRange(
+    selectionRange: CellRange | null,
+    rowNumber: number,
+    columnCount: number
+): boolean {
+    return Boolean(
+        selectionRange &&
+            selectionRange.startColumn === 1 &&
+            selectionRange.endColumn === columnCount &&
+            rowNumber >= selectionRange.startRow &&
+            rowNumber <= selectionRange.endRow
+    );
+}
+
+function isColumnHeaderWithinSelectionRange(
+    selectionRange: CellRange | null,
+    columnNumber: number,
+    rowCount: number
+): boolean {
+    return Boolean(
+        selectionRange &&
+            selectionRange.startRow === 1 &&
+            selectionRange.endRow === rowCount &&
+            columnNumber >= selectionRange.startColumn &&
+            columnNumber <= selectionRange.endColumn
+    );
+}
+
 function isCellWithinSelectionRange(
     selectionRange: CellRange | null,
     rowNumber: number,
@@ -3563,6 +3770,8 @@ const EditorColumnHeaderCell = React.memo(
         columnNumber,
         hasPending,
         activeColumnNumber,
+        selectionRange,
+        rowCount,
         top,
         left,
     }: {
@@ -3570,10 +3779,14 @@ const EditorColumnHeaderCell = React.memo(
         columnNumber: number;
         hasPending: boolean;
         activeColumnNumber: number | null;
+        selectionRange: CellRange | null;
+        rowCount: number;
         top: number;
         left: number;
     }): React.ReactElement {
-        const isActiveColumn = isActiveHighlightColumn(activeColumnNumber, columnNumber);
+        const isActiveColumn =
+            isActiveHighlightColumn(activeColumnNumber, columnNumber) ||
+            isColumnHeaderWithinSelectionRange(selectionRange, columnNumber, rowCount);
 
         return (
             <div
@@ -3593,7 +3806,21 @@ const EditorColumnHeaderCell = React.memo(
                     width: EDITOR_VIRTUAL_COLUMN_WIDTH,
                     height: EDITOR_VIRTUAL_HEADER_HEIGHT,
                 })}
-                onClick={() => {
+                onPointerDown={(event) => {
+                    if (event.button !== 0) {
+                        return;
+                    }
+
+                    closeContextMenu({ refresh: false });
+                    startColumnSelectionDrag(event.pointerId, columnNumber);
+                }}
+                onClick={(event) => {
+                    if (suppressNextColumnHeaderClick) {
+                        suppressNextColumnHeaderClick = false;
+                        event.preventDefault();
+                        return;
+                    }
+
                     closeContextMenu({ refresh: false });
                     selectEntireColumn(columnNumber);
                 }}
@@ -3615,6 +3842,8 @@ const EditorColumnHeaderCell = React.memo(
         previous.columnNumber === next.columnNumber &&
         previous.hasPending === next.hasPending &&
         previous.activeColumnNumber === next.activeColumnNumber &&
+        previous.rowCount === next.rowCount &&
+        areSelectionRangesEqual(previous.selectionRange, next.selectionRange) &&
         previous.top === next.top &&
         previous.left === next.left
 );
@@ -3624,16 +3853,22 @@ const EditorRowHeaderCell = React.memo(
         rowNumber,
         hasPending,
         activeRowNumber,
+        selectionRange,
+        columnCount,
         top,
         rowHeaderWidth,
     }: {
         rowNumber: number;
         hasPending: boolean;
         activeRowNumber: number | null;
+        selectionRange: CellRange | null;
+        columnCount: number;
         top: number;
         rowHeaderWidth: number;
     }): React.ReactElement {
-        const isActiveRow = isActiveHighlightRow(activeRowNumber, rowNumber);
+        const isActiveRow =
+            isActiveHighlightRow(activeRowNumber, rowNumber) ||
+            isRowHeaderWithinSelectionRange(selectionRange, rowNumber, columnCount);
 
         return (
             <div
@@ -3652,7 +3887,21 @@ const EditorRowHeaderCell = React.memo(
                     width: rowHeaderWidth,
                     height: EDITOR_VIRTUAL_ROW_HEIGHT,
                 })}
-                onClick={() => {
+                onPointerDown={(event) => {
+                    if (event.button !== 0) {
+                        return;
+                    }
+
+                    closeContextMenu({ refresh: false });
+                    startRowSelectionDrag(event.pointerId, rowNumber);
+                }}
+                onClick={(event) => {
+                    if (suppressNextRowHeaderClick) {
+                        suppressNextRowHeaderClick = false;
+                        event.preventDefault();
+                        return;
+                    }
+
                     closeContextMenu({ refresh: false });
                     selectEntireRow(rowNumber);
                 }}
@@ -3673,6 +3922,8 @@ const EditorRowHeaderCell = React.memo(
         previous.rowNumber === next.rowNumber &&
         previous.hasPending === next.hasPending &&
         previous.activeRowNumber === next.activeRowNumber &&
+        previous.columnCount === next.columnCount &&
+        areSelectionRangesEqual(previous.selectionRange, next.selectionRange) &&
         previous.top === next.top &&
         previous.rowHeaderWidth === next.rowHeaderWidth
 );
@@ -3896,6 +4147,8 @@ function EditorVirtualGrid({
                 columnNumber={columnNumber}
                 hasPending={pendingSummary.columns.has(columnNumber)}
                 activeColumnNumber={activeColumnNumber}
+                selectionRange={selectionRange}
+                rowCount={currentModel.activeSheet.rowCount}
                 top={0}
                 left={getEditorGridLeft(metrics.rowHeaderWidth, columnNumber)}
             />
@@ -3913,6 +4166,8 @@ function EditorVirtualGrid({
                 columnNumber={columnNumber}
                 hasPending={pendingSummary.columns.has(columnNumber)}
                 activeColumnNumber={activeColumnNumber}
+                selectionRange={selectionRange}
+                rowCount={currentModel.activeSheet.rowCount}
                 top={0}
                 left={getEditorGridLeft(metrics.rowHeaderWidth, columnNumber)}
             />
@@ -3926,6 +4181,8 @@ function EditorVirtualGrid({
                 rowNumber={rowNumber}
                 hasPending={pendingSummary.rows.has(rowNumber)}
                 activeRowNumber={activeRowNumber}
+                selectionRange={selectionRange}
+                columnCount={currentModel.activeSheet.columnCount}
                 top={getEditorGridTop(rowNumber)}
                 rowHeaderWidth={metrics.rowHeaderWidth}
             />
@@ -3947,6 +4204,8 @@ function EditorVirtualGrid({
                 rowNumber={rowNumber}
                 hasPending={pendingSummary.rows.has(rowNumber)}
                 activeRowNumber={activeRowNumber}
+                selectionRange={selectionRange}
+                columnCount={currentModel.activeSheet.columnCount}
                 top={getEditorGridTop(rowNumber)}
                 rowHeaderWidth={metrics.rowHeaderWidth}
             />
@@ -4833,24 +5092,49 @@ document.addEventListener("pointermove", (event: PointerEvent) => {
         return;
     }
 
-    const targetCell = getCellPositionFromElement(
-        document.elementFromPoint(event.clientX, event.clientY)
-    );
-    if (!targetCell) {
+    const targetElement = document.elementFromPoint(event.clientX, event.clientY);
+    if (!targetElement) {
         return;
     }
 
-    updateSelectionDrag(targetCell);
+    if (selectionDragState.kind === "cell") {
+        const targetCell = getCellPositionFromElement(targetElement);
+        if (!targetCell) {
+            return;
+        }
+
+        updateCellSelectionDrag(targetCell);
+        return;
+    }
+
+    if (selectionDragState.kind === "row") {
+        const targetRowNumber = getRowNumberFromElement(targetElement);
+        if (targetRowNumber === null) {
+            return;
+        }
+
+        updateRowSelectionDrag(targetRowNumber);
+        return;
+    }
+
+    const targetColumnNumber = getColumnNumberFromElement(targetElement);
+    if (targetColumnNumber === null) {
+        return;
+    }
+
+    updateColumnSelectionDrag(targetColumnNumber);
 });
 
 document.addEventListener("pointerup", (event: PointerEvent) => {
     stopSearchPanelDrag(event.pointerId);
     stopSelectionDrag(event.pointerId);
+    scheduleSuppressedSelectionClickReset();
 });
 
 document.addEventListener("pointercancel", (event: PointerEvent) => {
     stopSearchPanelDrag(event.pointerId);
     stopSelectionDrag(event.pointerId);
+    scheduleSuppressedSelectionClickReset();
 });
 
 document.addEventListener("paste", (event: ClipboardEvent) => {

@@ -3,7 +3,9 @@
 
 import * as assert from "assert";
 import {
+    createColumnSelectionSpanRange,
     createColumnSelectionRange,
+    createRowSelectionSpanRange,
     createRowSelectionRange,
     createSelectionRange,
     hasExpandedSelectionRange,
@@ -64,5 +66,25 @@ suite("Editor selection range helpers", () => {
             endColumn: 4,
         });
         assert.strictEqual(createColumnSelectionRange(4, 0), null);
+    });
+
+    test("creates multi-row header drag ranges", () => {
+        assert.deepStrictEqual(createRowSelectionSpanRange(8, 3, 12), {
+            startRow: 3,
+            endRow: 8,
+            startColumn: 1,
+            endColumn: 12,
+        });
+        assert.strictEqual(createRowSelectionSpanRange(0, 3, 12), null);
+    });
+
+    test("creates multi-column header drag ranges", () => {
+        assert.deepStrictEqual(createColumnSelectionSpanRange(9, 4, 128), {
+            startRow: 1,
+            endRow: 128,
+            startColumn: 4,
+            endColumn: 9,
+        });
+        assert.strictEqual(createColumnSelectionSpanRange(9, 4, 0), null);
     });
 });

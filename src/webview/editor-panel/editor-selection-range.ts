@@ -66,6 +66,31 @@ export function createRowSelectionRange(
     };
 }
 
+export function createRowSelectionSpanRange(
+    anchorRowNumber: number,
+    targetRowNumber: number,
+    columnCount: number
+): SelectionRange | null {
+    if (
+        !Number.isInteger(anchorRowNumber) ||
+        !Number.isInteger(targetRowNumber) ||
+        !Number.isInteger(columnCount)
+    ) {
+        return null;
+    }
+
+    if (anchorRowNumber < 1 || targetRowNumber < 1 || columnCount < 1) {
+        return null;
+    }
+
+    return {
+        startRow: Math.min(anchorRowNumber, targetRowNumber),
+        endRow: Math.max(anchorRowNumber, targetRowNumber),
+        startColumn: 1,
+        endColumn: columnCount,
+    };
+}
+
 export function createColumnSelectionRange(
     columnNumber: number,
     rowCount: number
@@ -83,5 +108,30 @@ export function createColumnSelectionRange(
         endRow: rowCount,
         startColumn: columnNumber,
         endColumn: columnNumber,
+    };
+}
+
+export function createColumnSelectionSpanRange(
+    anchorColumnNumber: number,
+    targetColumnNumber: number,
+    rowCount: number
+): SelectionRange | null {
+    if (
+        !Number.isInteger(anchorColumnNumber) ||
+        !Number.isInteger(targetColumnNumber) ||
+        !Number.isInteger(rowCount)
+    ) {
+        return null;
+    }
+
+    if (anchorColumnNumber < 1 || targetColumnNumber < 1 || rowCount < 1) {
+        return null;
+    }
+
+    return {
+        startRow: 1,
+        endRow: rowCount,
+        startColumn: Math.min(anchorColumnNumber, targetColumnNumber),
+        endColumn: Math.max(anchorColumnNumber, targetColumnNumber),
     };
 }
