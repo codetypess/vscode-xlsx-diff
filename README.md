@@ -72,7 +72,7 @@ Git support works with VS Code's built-in Git extension. SVN support works with 
 5. Press **⌘S** / **Ctrl+S** or click **Save** to write all staged edits to disk.
 6. Press **Escape** to cancel without saving.
 
-> Formula cells stay read-only. Session undo / redo only affects staged edits that have not been saved yet.
+> Formula cells stay read-only. Cell edit undo / redo remains available after save during the current editor session. Structural edit history still resets on save.
 
 ---
 

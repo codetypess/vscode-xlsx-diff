@@ -640,6 +640,7 @@ export class XlsxEditorPanel {
         await this.render(undefined, {
             silent: true,
             clearPendingEdits: true,
+            preservePendingHistory: true,
             useModelSelection: true,
         });
     }
@@ -1400,12 +1401,14 @@ export class XlsxEditorPanel {
         {
             silent = false,
             clearPendingEdits = false,
+            preservePendingHistory = false,
             useModelSelection = true,
             replacePendingEdits,
             resetPendingHistory = false,
         }: {
             silent?: boolean;
             clearPendingEdits?: boolean;
+            preservePendingHistory?: boolean;
             useModelSelection?: boolean;
             replacePendingEdits?: CellEdit[];
             resetPendingHistory?: boolean;
@@ -1441,6 +1444,7 @@ export class XlsxEditorPanel {
             payload,
             silent,
             clearPendingEdits,
+            preservePendingHistory,
             useModelSelection,
             replacePendingEdits:
                 replacePendingEdits !== undefined

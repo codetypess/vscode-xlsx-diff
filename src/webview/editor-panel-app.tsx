@@ -45,6 +45,11 @@ import type {
     EditorSearchScope,
     SearchOptions,
 } from "./editor-panel-types";
+import {
+    rebasePendingHistory,
+    type PendingHistoryChange as PendingEditChange,
+    type PendingHistoryEntry as HistoryEntry,
+} from "./editor-pending-history";
 import { getFreezePaneCountsForCell, hasLockedView } from "./view-lock";
 
 interface VsCodeApi {
@@ -98,6 +103,7 @@ type IncomingMessage =
           payload: EditorRenderModel;
           silent?: boolean;
           clearPendingEdits?: boolean;
+          preservePendingHistory?: boolean;
           useModelSelection?: boolean;
           replacePendingEdits?: Array<{
               sheetKey: string;
@@ -130,17 +136,6 @@ interface EditingCell extends CellPosition {
 interface PendingEdit extends CellPosition {
     sheetKey: string;
     value: string;
-}
-
-interface PendingEditChange extends CellPosition {
-    sheetKey: string;
-    modelValue: string;
-    beforeValue: string;
-    afterValue: string;
-}
-
-interface HistoryEntry {
-    changes: PendingEditChange[];
 }
 
 interface PendingSelection extends CellPosition {
@@ -4371,9 +4366,22 @@ window.addEventListener("message", (event: MessageEvent<IncomingMessage>) => {
         isSaving = false;
 
         if (message.clearPendingEdits) {
+            const pendingEditsBeforeClear = Array.from(pendingEdits.values());
             pendingEdits.clear();
-            undoStack.length = 0;
-            redoStack.length = 0;
+            if (message.preservePendingHistory) {
+                const rebasedHistory = rebasePendingHistory(
+                    undoStack,
+                    redoStack,
+                    pendingEditsBeforeClear
+                );
+                undoStack.length = 0;
+                undoStack.push(...rebasedHistory.undoStack);
+                redoStack.length = 0;
+                redoStack.push(...rebasedHistory.redoStack);
+            } else {
+                undoStack.length = 0;
+                redoStack.length = 0;
+            }
             editingCell = null;
             selectionAnchorCell = selectedCell;
             lastPendingNotification = null;
