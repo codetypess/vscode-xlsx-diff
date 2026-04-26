@@ -1378,12 +1378,12 @@ body {
 
 .tab--overflowTrigger {
     flex: 0 0 auto;
-    max-width: none;
-    min-width: 0;
-    gap: 8px;
+    justify-content: center;
+    width: 32px;
+    height: 28px;
+    padding: 0;
     top: 0;
     align-self: center;
-    padding: 6px 8px;
     border: 1px solid transparent;
     border-radius: 6px;
     background: transparent;
@@ -1411,16 +1411,19 @@ body {
 }
 
 .tabs__overflowCount {
+    position: absolute;
+    top: -3px;
+    right: -3px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    min-width: 18px;
-    height: 18px;
-    padding: 0 5px;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
     border-radius: 999px;
     background: color-mix(in srgb, var(--vscode-focusBorder) 18%, transparent 82%);
     color: inherit;
-    font-size: 11px;
+    font-size: 10px;
     font-weight: 600;
     line-height: 1;
 }
@@ -1476,7 +1479,7 @@ body {
 .tabs__measureTab,
 .tabs__measureOverflow {
     flex: 0 0 auto;
-    max-width: none;
+    max-width: 144px;
     min-width: 0;
 }
 

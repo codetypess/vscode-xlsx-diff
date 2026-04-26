@@ -240,7 +240,8 @@ const DEFAULT_EDITOR_VIEWPORT_HEIGHT = 480;
 const DEFAULT_EDITOR_VIEWPORT_WIDTH = 960;
 const SHEET_TAB_ITEM_GAP = 1;
 const SHEET_TAB_ESTIMATED_WIDTH = 120;
-const SHEET_TAB_OVERFLOW_TRIGGER_WIDTH = 72;
+const SHEET_TAB_VISIBLE_MAX_WIDTH = 144;
+const SHEET_TAB_OVERFLOW_TRIGGER_WIDTH = 32;
 const DEFAULT_SEARCH_OPTIONS: SearchOptions = {
     isRegexp: false,
     matchCase: false,
@@ -3843,14 +3844,13 @@ function areSheetTabWidthsEqual(
 function getMaxVisibleSheetTabs(
     tabs: readonly EditorSheetTabView[],
     containerWidth: number,
-    overflowTriggerWidth: number,
     measuredTabWidths: Record<string, number>
 ): number {
     return getMaxVisibleSheetTabsForWidth(tabs, {
         containerWidth,
         getTabWidth: (tab) => measuredTabWidths[tab.key] ?? SHEET_TAB_ESTIMATED_WIDTH,
         itemGap: SHEET_TAB_ITEM_GAP,
-        overflowTriggerWidth,
+        overflowTriggerWidth: SHEET_TAB_OVERFLOW_TRIGGER_WIDTH,
     });
 }
 
@@ -3905,17 +3905,9 @@ function Tabs({
     const measureRef = React.useRef<HTMLDivElement | null>(null);
     const [isOverflowOpen, setIsOverflowOpen] = React.useState(false);
     const [measuredTabWidths, setMeasuredTabWidths] = React.useState<Record<string, number>>({});
-    const [overflowTriggerWidth, setOverflowTriggerWidth] = React.useState(
-        SHEET_TAB_OVERFLOW_TRIGGER_WIDTH
-    );
     const viewportWidth = useObservedElementWidth(viewportRef);
     const pendingSheetKeySignature = Array.from(pendingSummary.sheetKeys).sort().join("\0");
-    const maxVisibleTabs = getMaxVisibleSheetTabs(
-        currentModel.sheets,
-        viewportWidth,
-        overflowTriggerWidth,
-        measuredTabWidths
-    );
+    const maxVisibleTabs = getMaxVisibleSheetTabs(currentModel.sheets, viewportWidth, measuredTabWidths);
     const tabLayout = partitionSheetTabs(currentModel.sheets, maxVisibleTabs);
 
     React.useLayoutEffect(() => {
@@ -3931,30 +3923,21 @@ function Tabs({
                 continue;
             }
 
-            nextMeasuredTabWidths[sheetKey] = Math.ceil(element.getBoundingClientRect().width);
+            nextMeasuredTabWidths[sheetKey] = Math.min(
+                SHEET_TAB_VISIBLE_MAX_WIDTH,
+                Math.ceil(element.getBoundingClientRect().width)
+            );
         }
-
-        const triggerElement = measureRoot.querySelector<HTMLElement>(
-            '[data-role="sheet-tab-overflow-trigger-measure"]'
-        );
-        const nextOverflowTriggerWidth = triggerElement
-            ? Math.ceil(triggerElement.getBoundingClientRect().width)
-            : SHEET_TAB_OVERFLOW_TRIGGER_WIDTH;
 
         setMeasuredTabWidths((currentWidths) =>
             areSheetTabWidthsEqual(currentWidths, nextMeasuredTabWidths)
                 ? currentWidths
                 : nextMeasuredTabWidths
         );
-        setOverflowTriggerWidth((currentWidth) =>
-            currentWidth === nextOverflowTriggerWidth ? currentWidth : nextOverflowTriggerWidth
-        );
     }, [
         currentModel.sheets,
         currentModel.activeSheet.key,
         pendingSheetKeySignature,
-        viewportWidth,
-        tabLayout.overflowTabs.length,
     ]);
 
     React.useEffect(() => {
@@ -4137,18 +4120,6 @@ function Tabs({
                         </button>
                     );
                 })}
-                <button
-                    aria-label={STRINGS.moreSheets}
-                    className="tab tab--overflowTrigger tabs__measureOverflow"
-                    data-role="sheet-tab-overflow-trigger-measure"
-                    tabIndex={-1}
-                    type="button"
-                >
-                    <span className="codicon codicon-more tab__icon" aria-hidden />
-                    <span className="tabs__overflowCount" aria-hidden>
-                        {Math.max(1, tabLayout.overflowTabs.length)}
-                    </span>
-                </button>
             </div>
         </div>
     );
