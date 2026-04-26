@@ -45,6 +45,7 @@ import type {
     EditorSearchScope,
     SearchOptions,
 } from "./editor-panel-types";
+import { resolveEditorReplaceResultInSheet } from "./editor-panel-logic";
 import {
     rebasePendingHistory,
     type PendingHistoryChange as PendingEditChange,
@@ -150,6 +151,14 @@ interface PendingSummary {
     columns: Set<number>;
 }
 
+type SearchPanelMode = "find" | "replace";
+type SearchPanelFeedbackStatus = EditorSearchResultMessage["status"] | "replaced" | "no-change";
+
+interface SearchPanelFeedback {
+    status: SearchPanelFeedbackStatus;
+    message?: string;
+}
+
 interface ScrollState {
     top: number;
     left: number;
@@ -248,10 +257,12 @@ const DEFAULT_SEARCH_OPTIONS: SearchOptions = {
 };
 
 let isSearchPanelOpen = false;
+let searchMode: SearchPanelMode = "find";
 let searchQuery = "";
+let replaceValue = "";
 let searchOptions: SearchOptions = { ...DEFAULT_SEARCH_OPTIONS };
 let searchScope: EditorSearchScope = "sheet";
-let searchFeedback: EditorSearchResultMessage | null = null;
+let searchFeedback: SearchPanelFeedback | null = null;
 let searchPanelPosition: SearchPanelPosition | null = null;
 let searchSelectionRange: CellRange | null = null;
 
@@ -2018,16 +2029,43 @@ function focusSearchInput(): void {
     input.select();
 }
 
-function openSearchPanel(): void {
+function focusReplaceInput(): void {
+    const input = document.querySelector<HTMLInputElement>('[data-role="replace-input"]');
+    if (!input) {
+        return;
+    }
+
+    input.focus();
+    input.select();
+}
+
+function openSearchPanel(mode: SearchPanelMode = "find"): void {
+    let shouldRender = false;
+
     if (!isSearchPanelOpen) {
+        const currentSelectionRange = getExpandedSelectionRange();
         isSearchPanelOpen = true;
-        searchScope = "sheet";
-        searchSelectionRange = getExpandedSelectionRange();
+        searchScope = currentSelectionRange ? "selection" : "sheet";
+        searchSelectionRange = currentSelectionRange;
         searchFeedback = null;
+        shouldRender = true;
+    }
+
+    if (searchMode !== mode) {
+        searchMode = mode;
+        shouldRender = true;
+    }
+
+    if (shouldRender) {
         renderApp({ commitEditing: false });
     }
 
     requestAnimationFrame(() => {
+        if (mode === "replace" && searchQuery.trim().length > 0) {
+            focusReplaceInput();
+            return;
+        }
+
         focusSearchInput();
     });
 }
@@ -2053,6 +2091,34 @@ function updateSearchQuery(value: string): void {
     searchQuery = value;
     searchFeedback = null;
     renderApp({ commitEditing: false });
+}
+
+function updateReplaceValue(value: string): void {
+    if (replaceValue === value && !searchFeedback) {
+        return;
+    }
+
+    replaceValue = value;
+    searchFeedback = null;
+    renderApp({ commitEditing: false });
+}
+
+function setSearchMode(mode: SearchPanelMode): void {
+    if (searchMode === mode) {
+        return;
+    }
+
+    searchMode = mode;
+    searchFeedback = null;
+    renderApp({ commitEditing: false });
+    requestAnimationFrame(() => {
+        if (mode === "replace" && searchQuery.trim().length > 0) {
+            focusReplaceInput();
+            return;
+        }
+
+        focusSearchInput();
+    });
 }
 
 function updateSearchScope(scope: EditorSearchScope): void {
@@ -2091,6 +2157,58 @@ function getEffectiveSearchScope(): EditorSearchScope {
         : "sheet";
 }
 
+function getActiveSearchSelectionRange(scope: EditorSearchScope): CellRange | null {
+    return scope === "selection" ? (searchSelectionRange ?? getExpandedSelectionRange()) : null;
+}
+
+function getActiveSheetPendingEdits(): Array<{
+    rowNumber: number;
+    columnNumber: number;
+    value: string;
+}> {
+    if (!model) {
+        return [];
+    }
+
+    return Array.from(pendingEdits.values())
+        .filter((edit) => edit.sheetKey === model!.activeSheet.key)
+        .map((edit) => ({
+            rowNumber: edit.rowNumber,
+            columnNumber: edit.columnNumber,
+            value: edit.value,
+        }));
+}
+
+function revealSearchPanelMatch(
+    match: { rowNumber: number; columnNumber: number },
+    scope: EditorSearchScope,
+    { syncHost = true }: { syncHost?: boolean } = {}
+): void {
+    const preservedSelectionRange = getActiveSearchSelectionRange(scope);
+    const fallbackAnchor = {
+        rowNumber: match.rowNumber,
+        columnNumber: match.columnNumber,
+    };
+
+    setSelectedCellLocal(
+        {
+            rowNumber: match.rowNumber,
+            columnNumber: match.columnNumber,
+        },
+        {
+            reveal: true,
+            syncHost,
+            anchorCell:
+                scope === "selection"
+                    ? (selectionAnchorCell ?? selectedCell ?? fallbackAnchor)
+                    : undefined,
+            selectionRange: preservedSelectionRange ?? undefined,
+            clearSearchFeedback: false,
+            forceRender: true,
+        }
+    );
+}
+
 function submitSearch(direction: "next" | "prev"): void {
     const normalizedQuery = searchQuery.trim();
     if (!normalizedQuery) {
@@ -2099,10 +2217,7 @@ function submitSearch(direction: "next" | "prev"): void {
     }
 
     const effectiveScope = getEffectiveSearchScope();
-    const selectionRange =
-        effectiveScope === "selection"
-            ? (searchSelectionRange ?? getExpandedSelectionRange())
-            : null;
+    const selectionRange = getActiveSearchSelectionRange(effectiveScope);
 
     searchFeedback = null;
     renderApp({ commitEditing: false });
@@ -2143,49 +2258,118 @@ function getSearchMatchFeedbackMessage(
     return `${locationMessage} ${summaryMessage}`;
 }
 
-function handleSearchResult(message: EditorSearchResultMessage): void {
-    if (message.status !== "matched" || !message.match) {
-        searchFeedback = message;
+function submitReplace(mode: "single" | "all"): void {
+    const normalizedQuery = searchQuery.trim();
+    if (!normalizedQuery) {
+        focusSearchInput();
+        return;
+    }
+
+    if (!model || !model.canEdit) {
+        return;
+    }
+
+    const effectiveScope = getEffectiveSearchScope();
+    const selectionRange = getActiveSearchSelectionRange(effectiveScope);
+    const result = resolveEditorReplaceResultInSheet(
+        {
+            key: model.activeSheet.key,
+            rowCount: model.activeSheet.rowCount,
+            columnCount: model.activeSheet.columnCount,
+            cells: model.activeSheet.cells,
+        },
+        selectedCell,
+        {
+            query: normalizedQuery,
+            replacement: replaceValue,
+            options: searchOptions,
+            scope: effectiveScope,
+            selectionRange: selectionRange ?? undefined,
+            pendingEdits: getActiveSheetPendingEdits(),
+            mode,
+        }
+    );
+
+    if (result.status === "invalid-pattern") {
+        searchFeedback = {
+            status: "invalid-pattern",
+            message: STRINGS.invalidSearchPattern,
+        };
         renderApp({ commitEditing: false, sync: true });
         return;
     }
 
-    const preservedSelectionRange =
-        message.scope === "selection"
-            ? (searchSelectionRange ?? getExpandedSelectionRange())
-            : null;
-    const fallbackAnchor = {
-        rowNumber: message.match.rowNumber,
-        columnNumber: message.match.columnNumber,
+    if (result.status === "no-match") {
+        searchFeedback = {
+            status: "no-match",
+            message: STRINGS.replaceNoEditableMatches,
+        };
+        renderApp({ commitEditing: false, sync: true });
+        return;
+    }
+
+    if (result.status === "no-change") {
+        searchFeedback = {
+            status: "no-change",
+            message: STRINGS.replaceNoChanges,
+        };
+
+        if (result.match) {
+            revealSearchPanelMatch(result.match, effectiveScope);
+            return;
+        }
+
+        renderApp({ commitEditing: false, sync: true });
+        return;
+    }
+
+    const activeSheetKey = model.activeSheet.key;
+    const changes = (result.changes ?? []).map((change) => ({
+        sheetKey: activeSheetKey,
+        rowNumber: change.rowNumber,
+        columnNumber: change.columnNumber,
+        modelValue: getCellModelValue(change.rowNumber, change.columnNumber),
+        beforeValue: change.beforeValue,
+        afterValue: change.afterValue,
+    }));
+
+    applyEditChanges(changes, { refresh: false });
+    searchFeedback = {
+        status: "replaced",
+        message: formatI18nMessage(STRINGS.replaceCount, {
+            count: result.replacedCellCount ?? changes.length,
+        }),
     };
 
+    if (result.match) {
+        revealSearchPanelMatch(result.nextMatch ?? result.match, effectiveScope);
+        return;
+    }
+
+    renderApp({ commitEditing: false, sync: true });
+}
+
+function handleSearchResult(message: EditorSearchResultMessage): void {
+    if (message.status !== "matched" || !message.match) {
+        searchFeedback = {
+            status: message.status,
+            message: message.message,
+        };
+        renderApp({ commitEditing: false, sync: true });
+        return;
+    }
+
     searchFeedback = {
-        ...message,
+        status: "matched",
         message: getSearchMatchFeedbackMessage(
             message.match,
             message.scope,
-            preservedSelectionRange,
+            getActiveSearchSelectionRange(message.scope),
             message.matchCount,
             message.matchIndex
         ),
     };
-    setSelectedCellLocal(
-        {
-            rowNumber: message.match.rowNumber,
-            columnNumber: message.match.columnNumber,
-        },
-        {
-            reveal: true,
-            syncHost: false,
-            anchorCell:
-                message.scope === "selection"
-                    ? (selectionAnchorCell ?? selectedCell ?? fallbackAnchor)
-                    : undefined,
-            selectionRange: preservedSelectionRange ?? undefined,
-            clearSearchFeedback: false,
-            forceRender: true,
-        }
-    );
+    revealSearchPanelMatch(message.match, message.scope, { syncHost: false });
 }
 
 function getPositionInputValue(): string {
@@ -2417,15 +2601,17 @@ function SearchPanel({
             : currentSelectionRange;
     const isSelectionScopeAvailable = Boolean(currentSelectionRange);
     const effectiveScope = getEffectiveSearchScope();
+    const isReplaceMode = searchMode === "replace";
     const isQueryEmpty = searchQuery.trim().length === 0;
     const hasSearchableGrid =
         currentModel.activeSheet.rowCount > 0 && currentModel.activeSheet.columnCount > 0;
+    const canReplace = !isQueryEmpty && hasSearchableGrid && currentModel.canEdit;
     const feedbackToneClass =
-        searchFeedback?.status === "matched"
+        searchFeedback?.status === "matched" || searchFeedback?.status === "replaced"
             ? "search-strip__feedback--success"
             : searchFeedback?.status === "invalid-pattern"
             ? "search-strip__feedback--error"
-            : searchFeedback?.status === "no-match"
+            : searchFeedback?.status === "no-match" || searchFeedback?.status === "no-change"
               ? "search-strip__feedback--warn"
               : undefined;
     const panelStyle: React.CSSProperties | undefined = searchPanelPosition
@@ -2456,30 +2642,33 @@ function SearchPanel({
                 <div className="search-strip__header">
                     <div className="search-strip__tabs" role="tablist" aria-label={STRINGS.search}>
                         <button
-                            aria-selected={true}
-                            className="search-strip__tab is-active"
+                            aria-selected={!isReplaceMode}
+                            className={classNames([
+                                "search-strip__tab",
+                                !isReplaceMode && "is-active",
+                            ])}
                             role="tab"
-                            tabIndex={0}
+                            tabIndex={!isReplaceMode ? 0 : -1}
                             type="button"
+                            onClick={() => setSearchMode("find")}
                         >
                             <span className="codicon codicon-search search-strip__tab-icon" aria-hidden />
                             <span>{STRINGS.searchFind}</span>
                         </button>
                         <button
-                            aria-selected={false}
-                            className="search-strip__tab"
-                            disabled={true}
+                            aria-selected={isReplaceMode}
+                            className={classNames([
+                                "search-strip__tab",
+                                isReplaceMode && "is-active",
+                            ])}
                             role="tab"
-                            tabIndex={-1}
-                            title={STRINGS.searchReplaceComingSoon}
+                            tabIndex={isReplaceMode ? 0 : -1}
                             type="button"
+                            onClick={() => setSearchMode("replace")}
                         >
                             <span className="codicon codicon-replace search-strip__tab-icon" aria-hidden />
                             <span>{STRINGS.searchReplace}</span>
                         </button>
-                    </div>
-                    <div className="search-strip__header-tools">
-                        <span className="search-strip__soon">{STRINGS.searchReplaceComingSoon}</span>
                     </div>
                 </div>
                 <div className="search-strip__row search-strip__row--primary">
@@ -2585,6 +2774,58 @@ function SearchPanel({
                         />
                     </div>
                 </div>
+                {isReplaceMode ? (
+                    <div className="search-strip__row search-strip__row--replace">
+                        <div className="search-strip__input-wrap">
+                            <span
+                                className="codicon codicon-replace search-strip__input-icon"
+                                aria-hidden
+                            />
+                            <input
+                                aria-label={STRINGS.searchReplace}
+                                className="search-strip__input"
+                                data-role="replace-input"
+                                placeholder={STRINGS.replacePlaceholder}
+                                type="text"
+                                value={replaceValue}
+                                onChange={(event) => {
+                                    updateReplaceValue(event.currentTarget.value);
+                                }}
+                                onKeyDown={(event) => {
+                                    if (event.key === "Enter") {
+                                        event.preventDefault();
+                                        submitReplace(
+                                            event.ctrlKey || event.metaKey ? "all" : "single"
+                                        );
+                                        return;
+                                    }
+
+                                    if (event.key === "Escape") {
+                                        event.preventDefault();
+                                        event.stopPropagation();
+                                        closeSearchPanel();
+                                    }
+                                }}
+                            />
+                        </div>
+                        <div className="search-strip__replace-actions">
+                            <ToolbarButton
+                                actionLabel={STRINGS.searchReplace}
+                                disabled={!canReplace}
+                                icon="codicon-replace"
+                                iconOnly={true}
+                                onClick={() => submitReplace("single")}
+                            />
+                            <ToolbarButton
+                                actionLabel={STRINGS.replaceAll}
+                                disabled={!canReplace}
+                                icon="codicon-replace-all"
+                                iconOnly={true}
+                                onClick={() => submitReplace("all")}
+                            />
+                        </div>
+                    </div>
+                ) : null}
                 <div className="search-strip__row search-strip__row--meta">
                     <div className="search-strip__scope-group">
                         <button
@@ -2850,7 +3091,7 @@ function EditorToolbar({ currentModel }: { currentModel: EditorRenderModel }): R
                     icon="codicon-search"
                     iconOnly={true}
                     isActive={isSearchPanelOpen}
-                    onClick={openSearchPanel}
+                    onClick={() => openSearchPanel("find")}
                 />
                 <ToolbarButton
                     actionLabel={STRINGS.undo}
@@ -3471,6 +3712,13 @@ const EditorVirtualCell = React.memo(function EditorVirtualCell({
     const editable = Boolean(currentModel.canEdit && !cell.formula);
     const isPrimarySelection = isSelectionFocusCell(currentSelection, rowNumber, columnNumber);
     const isSelected = isCellWithinSelectionRange(selectionRange, rowNumber, columnNumber);
+    const isSearchFocusedSelection =
+        searchFeedback?.status === "matched" ||
+        searchFeedback?.status === "replaced" ||
+        searchFeedback?.status === "no-change";
+    const showPrimarySelectionFrame =
+        isPrimarySelection &&
+        (!hasExpandedSelectionRange(selectionRange) || isSearchFocusedSelection);
     const isActiveRow = isActiveHighlightRow(activeRowNumber, rowNumber);
     const isActiveColumn = isActiveHighlightColumn(activeColumnNumber, columnNumber);
     const isEditing =
@@ -3484,7 +3732,7 @@ const EditorVirtualCell = React.memo(function EditorVirtualCell({
                 "editor-grid__item",
                 "grid__cell",
                 isSelected && "grid__cell--selected-range",
-                isPrimarySelection && "grid__cell--selected",
+                showPrimarySelectionFrame && "grid__cell--selected",
                 isActiveRow && "grid__cell--active-row",
                 isActiveColumn && "grid__cell--active-column",
                 !editable && "grid__cell--locked",
@@ -4301,7 +4549,9 @@ window.addEventListener("message", (event: MessageEvent<IncomingMessage>) => {
     if (message.type === "loading") {
         stopSearchPanelDrag();
         isSearchPanelOpen = false;
+        searchMode = "find";
         searchQuery = "";
+        replaceValue = "";
         searchOptions = { ...DEFAULT_SEARCH_OPTIONS };
         searchScope = "sheet";
         searchSelectionRange = null;
@@ -4400,7 +4650,18 @@ document.addEventListener("keydown", (event: KeyboardEvent) => {
         event.key.toLowerCase() === "f"
     ) {
         event.preventDefault();
-        openSearchPanel();
+        openSearchPanel("find");
+        return;
+    }
+
+    if (
+        !editingCell &&
+        (event.ctrlKey || event.metaKey) &&
+        !event.altKey &&
+        event.key.toLowerCase() === "h"
+    ) {
+        event.preventDefault();
+        openSearchPanel("replace");
         return;
     }
 

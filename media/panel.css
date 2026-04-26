@@ -410,6 +410,15 @@ body {
     align-items: center;
 }
 
+.search-strip__row--replace {
+    align-items: stretch;
+    flex-wrap: nowrap;
+}
+
+.search-strip__row--replace .search-strip__input-wrap {
+    min-width: 0;
+}
+
 .search-strip__input-wrap {
     display: inline-flex;
     align-items: center;
@@ -510,6 +519,20 @@ body {
     min-width: 30px;
     min-height: 30px;
     padding: 0 5px;
+    justify-content: center;
+}
+
+.search-strip__replace-actions {
+    display: inline-flex;
+    align-items: stretch;
+    gap: 5px;
+    flex: 0 0 auto;
+}
+
+.search-strip__replace-actions .toolbar__button {
+    min-width: 32px;
+    min-height: 32px;
+    padding: 0 6px;
     justify-content: center;
 }
 
@@ -1597,5 +1620,14 @@ body {
     .search-strip__header-tools,
     .search-strip__actions {
         margin-left: 0;
+    }
+
+    .search-strip__replace-actions {
+        width: 100%;
+        flex-wrap: wrap;
+    }
+
+    .search-strip__row--replace {
+        flex-wrap: wrap;
     }
 }

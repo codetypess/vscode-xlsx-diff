@@ -8,6 +8,7 @@ import {
     findEditorSearchMatch,
     getInsertEditorSheetIndex,
     getNewEditorSheetName,
+    resolveEditorReplaceResultInSheet,
     resolveEditorSearchResult,
     resolveEditorCellReference,
     validateEditorSheetName,
@@ -257,6 +258,194 @@ suite("Editor panel logic", () => {
             },
             matchCount: 3,
             matchIndex: 3,
+        });
+    });
+
+    test("replace updates the current editable match and advances to the next one", () => {
+        const workbook = createWorkbook("editor.xlsx", [
+            createSheet("Sheet1", [
+                createCell(1, 1, "alpha"),
+                createCell(2, 1, "alpha"),
+            ]),
+        ]);
+        const sheetEntries = createWorkingSheetEntries(workbook);
+        const activeSheetEntry = sheetEntries[0]!;
+
+        const result = resolveEditorReplaceResultInSheet(
+            {
+                key: activeSheetEntry.key,
+                rowCount: activeSheetEntry.sheet.rowCount,
+                columnCount: activeSheetEntry.sheet.columnCount,
+                cells: activeSheetEntry.sheet.cells,
+            },
+            { rowNumber: 1, columnNumber: 1 },
+            {
+                query: "alpha",
+                replacement: "gamma",
+                options: {
+                    isRegexp: false,
+                    matchCase: false,
+                    wholeWord: false,
+                },
+                mode: "single",
+            }
+        );
+
+        assert.deepStrictEqual(result, {
+            status: "replaced",
+            changes: [
+                {
+                    rowNumber: 1,
+                    columnNumber: 1,
+                    beforeValue: "alpha",
+                    afterValue: "gamma",
+                },
+            ],
+            replacedCellCount: 1,
+            match: {
+                sheetKey: "sheet:0",
+                rowNumber: 1,
+                columnNumber: 1,
+            },
+            nextMatch: {
+                sheetKey: "sheet:0",
+                rowNumber: 2,
+                columnNumber: 1,
+            },
+        });
+    });
+
+    test("replace all respects selection scope and pending edits", () => {
+        const workbook = createWorkbook("editor.xlsx", [
+            createSheet("Sheet1", [
+                createCell(1, 1, "alpha"),
+                createCell(2, 1, "beta"),
+                createCell(3, 1, "alpha"),
+            ]),
+        ]);
+        const sheetEntries = createWorkingSheetEntries(workbook);
+        const activeSheetEntry = sheetEntries[0]!;
+
+        const result = resolveEditorReplaceResultInSheet(
+            {
+                key: activeSheetEntry.key,
+                rowCount: activeSheetEntry.sheet.rowCount,
+                columnCount: activeSheetEntry.sheet.columnCount,
+                cells: activeSheetEntry.sheet.cells,
+            },
+            { rowNumber: 2, columnNumber: 1 },
+            {
+                query: "alpha",
+                replacement: "gamma",
+                options: {
+                    isRegexp: false,
+                    matchCase: false,
+                    wholeWord: false,
+                },
+                scope: "selection",
+                selectionRange: {
+                    startRow: 2,
+                    endRow: 3,
+                    startColumn: 1,
+                    endColumn: 1,
+                },
+                pendingEdits: [
+                    {
+                        rowNumber: 2,
+                        columnNumber: 1,
+                        value: "alpha",
+                    },
+                ],
+                mode: "all",
+            }
+        );
+
+        assert.deepStrictEqual(result, {
+            status: "replaced",
+            changes: [
+                {
+                    rowNumber: 2,
+                    columnNumber: 1,
+                    beforeValue: "alpha",
+                    afterValue: "gamma",
+                },
+                {
+                    rowNumber: 3,
+                    columnNumber: 1,
+                    beforeValue: "alpha",
+                    afterValue: "gamma",
+                },
+            ],
+            replacedCellCount: 2,
+            match: {
+                sheetKey: "sheet:0",
+                rowNumber: 2,
+                columnNumber: 1,
+            },
+        });
+    });
+
+    test("replace skips formula cells because they are not editable", () => {
+        const workbook = createWorkbook("editor.xlsx", [
+            createSheet("Sheet1", [createCell(1, 1, "alpha", '=LOWER("ALPHA")')]),
+        ]);
+        const sheetEntries = createWorkingSheetEntries(workbook);
+        const activeSheetEntry = sheetEntries[0]!;
+
+        const result = resolveEditorReplaceResultInSheet(
+            {
+                key: activeSheetEntry.key,
+                rowCount: activeSheetEntry.sheet.rowCount,
+                columnCount: activeSheetEntry.sheet.columnCount,
+                cells: activeSheetEntry.sheet.cells,
+            },
+            { rowNumber: 1, columnNumber: 1 },
+            {
+                query: "alpha",
+                replacement: "gamma",
+                options: {
+                    isRegexp: false,
+                    matchCase: false,
+                    wholeWord: false,
+                },
+                mode: "all",
+            }
+        );
+
+        assert.deepStrictEqual(result, {
+            status: "no-match",
+        });
+    });
+
+    test("replace reports no-change when the replacement keeps the same values", () => {
+        const workbook = createWorkbook("editor.xlsx", [
+            createSheet("Sheet1", [createCell(1, 1, "alpha")]),
+        ]);
+        const sheetEntries = createWorkingSheetEntries(workbook);
+        const activeSheetEntry = sheetEntries[0]!;
+
+        const result = resolveEditorReplaceResultInSheet(
+            {
+                key: activeSheetEntry.key,
+                rowCount: activeSheetEntry.sheet.rowCount,
+                columnCount: activeSheetEntry.sheet.columnCount,
+                cells: activeSheetEntry.sheet.cells,
+            },
+            { rowNumber: 1, columnNumber: 1 },
+            {
+                query: "alpha",
+                replacement: "alpha",
+                options: {
+                    isRegexp: false,
+                    matchCase: false,
+                    wholeWord: false,
+                },
+                mode: "all",
+            }
+        );
+
+        assert.deepStrictEqual(result, {
+            status: "no-change",
         });
     });
 

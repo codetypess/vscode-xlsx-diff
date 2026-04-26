@@ -105,8 +105,10 @@ export interface EditorPanelStrings {
     undo: string;
     redo: string;
     searchPlaceholder: string;
+    replacePlaceholder: string;
     findPrev: string;
     findNext: string;
+    replaceAll: string;
     gotoPlaceholder: string;
     goto: string;
     cancelInput: string;
@@ -126,6 +128,9 @@ export interface EditorPanelStrings {
     searchMatchFound: string;
     searchMatchFoundInSelection: string;
     searchMatchSummary: string;
+    replaceCount: string;
+    replaceNoEditableMatches: string;
+    replaceNoChanges: string;
     searchRegex: string;
     searchMatchCase: string;
     searchWholeWord: string;
