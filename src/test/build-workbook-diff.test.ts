@@ -41,6 +41,33 @@ function createSheet(name: string, rowValues: string[]): SheetSnapshot {
     };
 }
 
+function createGridSheet(name: string, rows: string[][]): SheetSnapshot {
+    const cells: Record<string, CellSnapshot> = {};
+    let columnCount = 0;
+
+    rows.forEach((row, rowIndex) => {
+        columnCount = Math.max(columnCount, row.length);
+        row.forEach((value, columnIndex) => {
+            if (!value) {
+                return;
+            }
+
+            const cell = createCell(rowIndex + 1, columnIndex + 1, value);
+            cells[cell.key] = cell;
+        });
+    });
+
+    return {
+        name,
+        rowCount: rows.length,
+        columnCount,
+        mergedRanges: [],
+        freezePane: null,
+        cells,
+        signature: `${name}:${rows.map((row) => row.join("|")).join("/")}`,
+    };
+}
+
 function createWorkbook(fileName: string, sheets: SheetSnapshot[]): WorkbookSnapshot {
     return {
         filePath: `/tmp/${fileName}`,
@@ -120,6 +147,46 @@ suite("Workbook diff row alignment", () => {
             [
                 [2, 1],
                 [3, 1],
+            ]
+        );
+    });
+
+    test("aligns columns after a right-side column insertion", () => {
+        const diff = buildWorkbookDiff(
+            createWorkbook("left.xlsx", [
+                createGridSheet("Sheet1", [
+                    ["ID", "Name", "Score"],
+                    ["1", "Alice", "90"],
+                ]),
+            ]),
+            createWorkbook("right.xlsx", [
+                createGridSheet("Sheet1", [
+                    ["ID", "Status", "Name", "Score"],
+                    ["1", "New", "Alice", "90"],
+                ]),
+            ])
+        );
+        const sheet = diff.sheets[0]!;
+
+        assert.deepStrictEqual(
+            sheet.alignedColumns.map((column) => [
+                column.columnNumber,
+                column.leftColumnNumber,
+                column.rightColumnNumber,
+            ]),
+            [
+                [1, 1, 1],
+                [2, null, 2],
+                [3, 2, 3],
+                [4, 3, 4],
+            ]
+        );
+        assert.deepStrictEqual(sheet.diffRows, [1, 2]);
+        assert.deepStrictEqual(
+            sheet.diffCells.map((cell) => [cell.rowNumber, cell.columnNumber]),
+            [
+                [1, 2],
+                [2, 2],
             ]
         );
     });

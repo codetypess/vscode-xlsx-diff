@@ -48,6 +48,7 @@ interface CellSelection {
     columnNumber: number;
     side: Side;
     sourceRowNumber: number | null;
+    sourceColumnNumber: number | null;
 }
 
 interface EditingCell extends CellSelection {
@@ -80,13 +81,8 @@ interface SheetRuntime {
     columnDiffTones: Array<CellDiffStatus | null>;
 }
 
-interface VisibleColumn {
-    label: string;
-    columnNumber: number;
-}
-
 interface ColumnWindow {
-    columns: VisibleColumn[];
+    columns: DiffPanelSheetView["columns"];
     leadingSpacerWidth: number;
     trailingSpacerWidth: number;
     totalWidth: number;
@@ -292,16 +288,22 @@ function getDefaultSideForRow(row: DiffPanelRowView | null): Side {
 }
 
 function createSelection(
+    sheet: DiffPanelSheetView,
     row: DiffPanelRowView | null,
     rowNumber: number,
     columnNumber: number,
     side: Side
 ): CellSelection {
+    const column = sheet.columns[columnNumber - 1];
     return {
         rowNumber,
         columnNumber,
         side,
         sourceRowNumber: getSourceRowNumber(row, side),
+        sourceColumnNumber:
+            side === "left"
+                ? (column?.leftColumnNumber ?? null)
+                : (column?.rightColumnNumber ?? null),
     };
 }
 
@@ -314,7 +316,7 @@ function getInitialSelection(
     }
 
     const row = runtime?.rowByNumber.get(1) ?? null;
-    return createSelection(row, 1, 1, getDefaultSideForRow(row));
+    return createSelection(sheet, row, 1, 1, getDefaultSideForRow(row));
 }
 
 function getFilteredRowCount(sheet: DiffPanelSheetView, filter: FilterMode): number {
@@ -382,6 +384,11 @@ function getDefaultSelectionForFilter(
                 columnNumber: firstDiffCell.columnNumber,
                 side,
                 sourceRowNumber: getSourceRowNumber(row, side),
+                sourceColumnNumber:
+                    side === "left"
+                        ? (sheet.columns[firstDiffCell.columnNumber - 1]?.leftColumnNumber ?? null)
+                        : (sheet.columns[firstDiffCell.columnNumber - 1]?.rightColumnNumber ??
+                          null),
             };
         }
 
@@ -391,7 +398,7 @@ function getDefaultSelectionForFilter(
         }
 
         const row = runtime?.rowByNumber.get(firstDiffRowNumber) ?? null;
-        return createSelection(row, firstDiffRowNumber, 1, getDefaultSideForRow(row));
+        return createSelection(sheet, row, firstDiffRowNumber, 1, getDefaultSideForRow(row));
     }
 
     if (filter === "same") {
@@ -401,6 +408,7 @@ function getDefaultSelectionForFilter(
         }
 
         return createSelection(
+            sheet,
             runtime?.rowByNumber.get(firstSameRowNumber) ?? null,
             firstSameRowNumber,
             1,
@@ -434,10 +442,7 @@ function createColumnWindow(
     const endColumnIndex = Math.min(sheet.columnCount, startColumnIndex + visibleColumnCount);
 
     return {
-        columns: sheet.columns.slice(startColumnIndex, endColumnIndex).map((label, index) => ({
-            label,
-            columnNumber: startColumnIndex + index + 1,
-        })),
+        columns: sheet.columns.slice(startColumnIndex, endColumnIndex),
         leadingSpacerWidth: startColumnIndex * COLUMN_WIDTH,
         trailingSpacerWidth: Math.max(0, totalWidth - endColumnIndex * COLUMN_WIDTH),
         totalWidth,
@@ -698,7 +703,7 @@ function getCellTitle(
     value: string,
     formula: string | null
 ): string {
-    const lines = rowNumber === null ? [] : [`${columnLabel}${rowNumber}`];
+    const lines = rowNumber === null || !columnLabel ? [] : [`${columnLabel}${rowNumber}`];
 
     if (value) {
         lines.push(value);
@@ -745,15 +750,19 @@ function getSelectionAddress(
         return STRINGS.none;
     }
 
-    const columnLabel = sheet.columns[selection.columnNumber - 1] ?? selection.columnNumber;
+    const column = sheet.columns[selection.columnNumber - 1];
+    const columnLabel =
+        selection.side === "left"
+            ? (column?.leftLabel ?? "")
+            : (column?.rightLabel ?? "");
     const row = runtime?.rowByNumber.get(selection.rowNumber) ?? null;
     const sourceRowNumber = selection.sourceRowNumber ?? getSourceRowNumber(row, selection.side);
 
-    if (sourceRowNumber === null) {
+    if (!columnLabel || sourceRowNumber === null) {
         return STRINGS.none;
     }
 
-    return `${columnLabel}${sourceRowNumber ?? selection.rowNumber}`;
+    return `${columnLabel}${sourceRowNumber}`;
 }
 
 function getSelectionPreview(
@@ -863,6 +872,7 @@ function applyPendingEdit(
             rowNumber: edit.rowNumber,
             columnNumber: edit.columnNumber,
             sourceRowNumber: edit.sourceRowNumber,
+            sourceColumnNumber: edit.sourceColumnNumber,
             value: edit.value,
         });
     }
@@ -920,6 +930,7 @@ function getEffectiveMarkerTone(
 }
 
 function PaneHeader({
+    side,
     columnWindow,
     columnDiffTones,
     pendingColumns,
@@ -927,6 +938,7 @@ function PaneHeader({
     selectedColumnNumber,
     viewportRef,
 }: {
+    side: Side;
     columnWindow: ColumnWindow;
     columnDiffTones: Array<CellDiffStatus | null>;
     pendingColumns: ReadonlySet<number>;
@@ -956,7 +968,10 @@ function PaneHeader({
                             aria-hidden="true"
                         />
                     ) : null}
-                    {columnWindow.columns.map(({ label, columnNumber }) => {
+                    {columnWindow.columns.map((column) => {
+                        const columnLabel =
+                            side === "left" ? column.leftLabel : column.rightLabel;
+                        const columnNumber = column.columnNumber;
                         const diffTone = columnDiffTones[columnNumber - 1] ?? null;
                         const hasPending = pendingColumns.has(columnNumber);
                         const markerTone = getEffectiveMarkerTone(diffTone, hasPending);
@@ -975,7 +990,7 @@ function PaneHeader({
                             >
                                 <span className="diff-headerLabel">
                                     <DiffMarker tone={markerTone} />
-                                    <span>{label}</span>
+                                    <span>{columnLabel}</span>
                                 </span>
                             </div>
                         );
@@ -1267,7 +1282,9 @@ function SideRow({
                             aria-hidden="true"
                         />
                     ) : null}
-                    {columnWindow.columns.map(({ label: columnLabel, columnNumber }) => {
+                    {columnWindow.columns.map((column) => {
+                        const columnNumber = column.columnNumber;
+                        const columnLabel = side === "left" ? column.leftLabel : column.rightLabel;
                         const cell = sparseByColumn.get(columnNumber) ?? null;
                         const modelDisplay = getCellDisplay(cell, side);
                         const pendingKey = getPendingEditKey(
@@ -1323,7 +1340,15 @@ function SideRow({
                                     display.formula
                                 )}
                                 onClick={() => {
-                                    onSelect(createSelection(row, rowNumber, columnNumber, side));
+                                    onSelect(
+                                        createSelection(
+                                            activeSheet,
+                                            row,
+                                            rowNumber,
+                                            columnNumber,
+                                            side
+                                        )
+                                    );
                                 }}
                                 onDoubleClick={(event) => {
                                     if (!editable) {
@@ -1332,7 +1357,13 @@ function SideRow({
 
                                     event.preventDefault();
                                     onStartEdit(
-                                        createSelection(row, rowNumber, columnNumber, side),
+                                        createSelection(
+                                            activeSheet,
+                                            row,
+                                            rowNumber,
+                                            columnNumber,
+                                            side
+                                        ),
                                         display.value,
                                         modelDisplay.value
                                     );
@@ -1626,6 +1657,21 @@ function App(): React.JSX.Element {
             return;
         }
 
+        const normalizedSelection = createSelection(
+            activeSheet,
+            runtime?.rowByNumber.get(selectedCell.rowNumber) ?? null,
+            selectedCell.rowNumber,
+            selectedCell.columnNumber,
+            selectedCell.side
+        );
+        if (
+            normalizedSelection.sourceRowNumber !== selectedCell.sourceRowNumber ||
+            normalizedSelection.sourceColumnNumber !== selectedCell.sourceColumnNumber
+        ) {
+            setSelectedCell(normalizedSelection);
+            return;
+        }
+
         if (getRowIndex(activeSheet, filter, runtime, selectedCell.rowNumber) < 0) {
             setSelectedCell(getDefaultSelectionForFilter(activeSheet, runtime, filter));
         }
@@ -1845,11 +1891,12 @@ function App(): React.JSX.Element {
             type: "saveEdits",
             edits: Array.from(nextPendingEdits.values())
                 .filter((edit) => edit.sourceRowNumber !== null)
+                .filter((edit) => edit.sourceColumnNumber !== null)
                 .map((edit) => ({
                     sheetKey: edit.sheetKey,
                     side: edit.side,
                     rowNumber: edit.sourceRowNumber!,
-                    columnNumber: edit.columnNumber,
+                    columnNumber: edit.sourceColumnNumber!,
                     value: edit.value,
                 })),
         });
@@ -1896,6 +1943,7 @@ function App(): React.JSX.Element {
                     rowNumber: selectedCell.rowNumber,
                     columnNumber: selectedCell.columnNumber,
                     sourceRowNumber: selectedCell.sourceRowNumber,
+                    sourceColumnNumber: selectedCell.sourceColumnNumber,
                     value: "",
                 });
             }
@@ -1948,7 +1996,7 @@ function App(): React.JSX.Element {
         setActiveDiffIndex(nextIndex);
         const nextSide = getPreferredSide(cell);
         updateSelectedCell(
-            createSelection(row, nextDiff.rowNumber, nextDiff.columnNumber, nextSide)
+            createSelection(activeSheet, row, nextDiff.rowNumber, nextDiff.columnNumber, nextSide)
         );
         scrollToRow(nextDiff.rowNumber);
     });
@@ -2245,6 +2293,7 @@ function App(): React.JSX.Element {
                                 <div className="diff-gridHeaderRow">
                                     <div className="diff-pane">
                                         <PaneHeader
+                                            side="left"
                                             columnWindow={columnWindow}
                                             columnDiffTones={runtime?.columnDiffTones ?? []}
                                             pendingColumns={pendingSummary.columnsBySide.left}
@@ -2256,6 +2305,7 @@ function App(): React.JSX.Element {
                                     <div className="diff-divider" />
                                     <div className="diff-pane">
                                         <PaneHeader
+                                            side="right"
                                             columnWindow={columnWindow}
                                             columnDiffTones={runtime?.columnDiffTones ?? []}
                                             pendingColumns={pendingSummary.columnsBySide.right}

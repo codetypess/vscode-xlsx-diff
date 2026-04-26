@@ -2,6 +2,7 @@ import { createCellKey, getCellAddress } from "../model/cells";
 import {
     type CellSnapshot,
     type DiffCellLocation,
+    type DiffColumnAlignment,
     type DiffRowAlignment,
     type SheetComparisonKind,
     type SheetDiffModel,
@@ -17,7 +18,14 @@ interface RowSnapshot {
     cellsByColumn: Map<number, CellSnapshot>;
 }
 
-interface ExactRowDiffOp {
+interface ColumnSnapshot {
+    columnNumber: number;
+    signature: string;
+    nonEmptyCellCount: number;
+    cellsByRow: Map<number, CellSnapshot>;
+}
+
+interface ExactDiffOp {
     type: "equal" | "delete" | "insert";
     leftIndex?: number;
     rightIndex?: number;
@@ -26,6 +34,11 @@ interface ExactRowDiffOp {
 interface RowPairing {
     left: RowSnapshot | null;
     right: RowSnapshot | null;
+}
+
+interface ColumnPairing {
+    left: ColumnSnapshot | null;
+    right: ColumnSnapshot | null;
 }
 
 function areMergedRangesEqual(
@@ -107,9 +120,56 @@ function buildRowSnapshots(sheet: SheetSnapshot | null): RowSnapshot[] {
     return rows;
 }
 
-function buildExactRowDiff(leftRows: RowSnapshot[], rightRows: RowSnapshot[]): ExactRowDiffOp[] {
-    const leftSignatures = leftRows.map((row) => row.signature);
-    const rightSignatures = rightRows.map((row) => row.signature);
+function buildColumnSnapshots(
+    sheet: SheetSnapshot | null,
+    alignedRowNumbersBySourceRow: ReadonlyMap<number, number>
+): ColumnSnapshot[] {
+    if (!sheet || sheet.columnCount <= 0) {
+        return [];
+    }
+
+    const cellsByColumn = new Map<number, CellSnapshot[]>();
+
+    for (const cell of Object.values(sheet.cells)) {
+        const bucket = cellsByColumn.get(cell.columnNumber) ?? [];
+        bucket.push(cell);
+        cellsByColumn.set(cell.columnNumber, bucket);
+    }
+
+    const columns: ColumnSnapshot[] = [];
+    for (let columnNumber = 1; columnNumber <= sheet.columnCount; columnNumber += 1) {
+        const cells = (cellsByColumn.get(columnNumber) ?? []).sort((left, right) => {
+            const leftRowNumber =
+                alignedRowNumbersBySourceRow.get(left.rowNumber) ?? left.rowNumber;
+            const rightRowNumber =
+                alignedRowNumbersBySourceRow.get(right.rowNumber) ?? right.rowNumber;
+            return leftRowNumber - rightRowNumber;
+        });
+        const cellsByRow = new Map(
+            cells.map((cell) => [
+                alignedRowNumbersBySourceRow.get(cell.rowNumber) ?? cell.rowNumber,
+                cell,
+            ] as const)
+        );
+        const signature = cells
+            .map((cell) => {
+                const rowNumber = alignedRowNumbersBySourceRow.get(cell.rowNumber) ?? cell.rowNumber;
+                return `${rowNumber}\u0000${cell.displayValue}\u0000${cell.formula ?? ""}`;
+            })
+            .join("\n");
+
+        columns.push({
+            columnNumber,
+            signature,
+            nonEmptyCellCount: cells.length,
+            cellsByRow,
+        });
+    }
+
+    return columns;
+}
+
+function buildExactDiff(leftSignatures: string[], rightSignatures: string[]): ExactDiffOp[] {
     const max = leftSignatures.length + rightSignatures.length;
     const offset = max + 1;
     let furthestX = new Array<number>(offset * 2 + 1).fill(0);
@@ -146,7 +206,7 @@ function buildExactRowDiff(leftRows: RowSnapshot[], rightRows: RowSnapshot[]): E
 
             if (x >= leftSignatures.length && y >= rightSignatures.length) {
                 trace.push(nextFurthestX);
-                return backtrackExactRowDiff(trace, leftSignatures.length, rightSignatures.length);
+                return backtrackExactDiff(trace, leftSignatures.length, rightSignatures.length);
             }
         }
 
@@ -157,13 +217,30 @@ function buildExactRowDiff(leftRows: RowSnapshot[], rightRows: RowSnapshot[]): E
     return [];
 }
 
-function backtrackExactRowDiff(
+function buildExactRowDiff(leftRows: RowSnapshot[], rightRows: RowSnapshot[]): ExactDiffOp[] {
+    return buildExactDiff(
+        leftRows.map((row) => row.signature),
+        rightRows.map((row) => row.signature)
+    );
+}
+
+function buildExactColumnDiff(
+    leftColumns: ColumnSnapshot[],
+    rightColumns: ColumnSnapshot[]
+): ExactDiffOp[] {
+    return buildExactDiff(
+        leftColumns.map((column) => column.signature),
+        rightColumns.map((column) => column.signature)
+    );
+}
+
+function backtrackExactDiff(
     trace: number[][],
     leftLength: number,
     rightLength: number
-): ExactRowDiffOp[] {
+): ExactDiffOp[] {
     const offset = leftLength + rightLength + 1;
-    const operations: ExactRowDiffOp[] = [];
+    const operations: ExactDiffOp[] = [];
     let x = leftLength;
     let y = rightLength;
 
@@ -454,15 +531,260 @@ function buildAlignedRows(
     return alignedRows;
 }
 
+function getColumnGapCost(column: ColumnSnapshot): number {
+    return Math.max(2, column.nonEmptyCellCount * 2);
+}
+
+function getColumnPairCost(leftColumn: ColumnSnapshot, rightColumn: ColumnSnapshot): number {
+    if (leftColumn.signature === rightColumn.signature) {
+        return 0;
+    }
+
+    const rowNumbers = new Set<number>([
+        ...leftColumn.cellsByRow.keys(),
+        ...rightColumn.cellsByRow.keys(),
+    ]);
+    let sharedRowCount = 0;
+    let mismatchCost = 1;
+
+    for (const rowNumber of rowNumbers) {
+        const leftCell = leftColumn.cellsByRow.get(rowNumber);
+        const rightCell = rightColumn.cellsByRow.get(rowNumber);
+
+        if (leftCell && rightCell) {
+            sharedRowCount += 1;
+        }
+
+        if (areCellsEqual(leftCell, rightCell)) {
+            continue;
+        }
+
+        mismatchCost += leftCell && rightCell ? getCellMismatchCost(leftCell, rightCell) : 3;
+    }
+
+    if (
+        sharedRowCount === 0 &&
+        leftColumn.nonEmptyCellCount > 0 &&
+        rightColumn.nonEmptyCellCount > 0
+    ) {
+        return getColumnGapCost(leftColumn) + getColumnGapCost(rightColumn) + 1;
+    }
+
+    return mismatchCost;
+}
+
+function alignColumnSegment(
+    leftColumns: ColumnSnapshot[],
+    rightColumns: ColumnSnapshot[]
+): ColumnPairing[] {
+    if (leftColumns.length === 0) {
+        return rightColumns.map((column) => ({
+            left: null,
+            right: column,
+        }));
+    }
+
+    if (rightColumns.length === 0) {
+        return leftColumns.map((column) => ({
+            left: column,
+            right: null,
+        }));
+    }
+
+    const costs = Array.from({ length: leftColumns.length + 1 }, () =>
+        Array<number>(rightColumns.length + 1).fill(0)
+    );
+    const steps = Array.from({ length: leftColumns.length + 1 }, () =>
+        Array<"pair" | "delete" | "insert" | null>(rightColumns.length + 1).fill(null)
+    );
+
+    for (let leftIndex = 1; leftIndex <= leftColumns.length; leftIndex += 1) {
+        costs[leftIndex]![0] =
+            costs[leftIndex - 1]![0]! + getColumnGapCost(leftColumns[leftIndex - 1]!);
+        steps[leftIndex]![0] = "delete";
+    }
+
+    for (let rightIndex = 1; rightIndex <= rightColumns.length; rightIndex += 1) {
+        costs[0]![rightIndex] =
+            costs[0]![rightIndex - 1]! + getColumnGapCost(rightColumns[rightIndex - 1]!);
+        steps[0]![rightIndex] = "insert";
+    }
+
+    for (let leftIndex = 1; leftIndex <= leftColumns.length; leftIndex += 1) {
+        for (let rightIndex = 1; rightIndex <= rightColumns.length; rightIndex += 1) {
+            const pairCost =
+                costs[leftIndex - 1]![rightIndex - 1]! +
+                getColumnPairCost(leftColumns[leftIndex - 1]!, rightColumns[rightIndex - 1]!);
+            const deleteCost =
+                costs[leftIndex - 1]![rightIndex]! +
+                getColumnGapCost(leftColumns[leftIndex - 1]!);
+            const insertCost =
+                costs[leftIndex]![rightIndex - 1]! +
+                getColumnGapCost(rightColumns[rightIndex - 1]!);
+
+            if (pairCost < deleteCost && pairCost < insertCost) {
+                costs[leftIndex]![rightIndex] = pairCost;
+                steps[leftIndex]![rightIndex] = "pair";
+                continue;
+            }
+
+            if (deleteCost <= insertCost) {
+                costs[leftIndex]![rightIndex] = deleteCost;
+                steps[leftIndex]![rightIndex] = "delete";
+                continue;
+            }
+
+            costs[leftIndex]![rightIndex] = insertCost;
+            steps[leftIndex]![rightIndex] = "insert";
+        }
+    }
+
+    const columns: ColumnPairing[] = [];
+    let leftIndex = leftColumns.length;
+    let rightIndex = rightColumns.length;
+
+    while (leftIndex > 0 || rightIndex > 0) {
+        const step = steps[leftIndex]![rightIndex];
+
+        if (step === "pair") {
+            columns.push({
+                left: leftColumns[leftIndex - 1]!,
+                right: rightColumns[rightIndex - 1]!,
+            });
+            leftIndex -= 1;
+            rightIndex -= 1;
+            continue;
+        }
+
+        if (step === "delete") {
+            columns.push({
+                left: leftColumns[leftIndex - 1]!,
+                right: null,
+            });
+            leftIndex -= 1;
+            continue;
+        }
+
+        columns.push({
+            left: null,
+            right: rightColumns[rightIndex - 1]!,
+        });
+        rightIndex -= 1;
+    }
+
+    return columns.reverse();
+}
+
+function createAlignedRowNumberMap(
+    pairs: RowPairing[],
+    side: "left" | "right"
+): Map<number, number> {
+    const alignedRowNumbersBySourceRow = new Map<number, number>();
+
+    pairs.forEach((pair, index) => {
+        const rowNumber = side === "left" ? pair.left?.rowNumber : pair.right?.rowNumber;
+        if (rowNumber !== undefined && rowNumber !== null) {
+            alignedRowNumbersBySourceRow.set(rowNumber, index + 1);
+        }
+    });
+
+    return alignedRowNumbersBySourceRow;
+}
+
+function buildAlignedColumns(
+    leftSheet: SheetSnapshot | null,
+    rightSheet: SheetSnapshot | null,
+    leftAlignedRowNumbersBySourceRow: ReadonlyMap<number, number>,
+    rightAlignedRowNumbersBySourceRow: ReadonlyMap<number, number>
+): ColumnPairing[] {
+    const leftColumns = buildColumnSnapshots(leftSheet, leftAlignedRowNumbersBySourceRow);
+    const rightColumns = buildColumnSnapshots(rightSheet, rightAlignedRowNumbersBySourceRow);
+
+    if (leftColumns.length === 0) {
+        return rightColumns.map((column) => ({
+            left: null,
+            right: column,
+        }));
+    }
+
+    if (rightColumns.length === 0) {
+        return leftColumns.map((column) => ({
+            left: column,
+            right: null,
+        }));
+    }
+
+    const exactOperations = buildExactColumnDiff(leftColumns, rightColumns);
+    const alignedColumns: ColumnPairing[] = [];
+    let pendingLeft: ColumnSnapshot[] = [];
+    let pendingRight: ColumnSnapshot[] = [];
+
+    const flushPendingColumns = () => {
+        if (pendingLeft.length === 0 && pendingRight.length === 0) {
+            return;
+        }
+
+        alignedColumns.push(...alignColumnSegment(pendingLeft, pendingRight));
+        pendingLeft = [];
+        pendingRight = [];
+    };
+
+    for (const operation of exactOperations) {
+        if (operation.type === "equal") {
+            flushPendingColumns();
+            alignedColumns.push({
+                left: leftColumns[operation.leftIndex!] ?? null,
+                right: rightColumns[operation.rightIndex!] ?? null,
+            });
+            continue;
+        }
+
+        if (operation.type === "delete") {
+            pendingLeft.push(leftColumns[operation.leftIndex!]!);
+            continue;
+        }
+
+        pendingRight.push(rightColumns[operation.rightIndex!]!);
+    }
+
+    flushPendingColumns();
+
+    return alignedColumns;
+}
+
 function createSheetDiff(
     kind: SheetComparisonKind,
     leftSheet: SheetSnapshot | null,
     rightSheet: SheetSnapshot | null
 ): SheetDiffModel {
     const alignedRowPairs = buildAlignedRows(leftSheet, rightSheet);
+    const leftAlignedRowNumbersBySourceRow = createAlignedRowNumberMap(alignedRowPairs, "left");
+    const rightAlignedRowNumbersBySourceRow = createAlignedRowNumberMap(alignedRowPairs, "right");
+    const alignedColumnPairs = buildAlignedColumns(
+        leftSheet,
+        rightSheet,
+        leftAlignedRowNumbersBySourceRow,
+        rightAlignedRowNumbersBySourceRow
+    );
     const alignedRows: DiffRowAlignment[] = [];
+    const alignedColumns: DiffColumnAlignment[] = alignedColumnPairs.map((pair, index) => ({
+        columnNumber: index + 1,
+        leftColumnNumber: pair.left?.columnNumber ?? null,
+        rightColumnNumber: pair.right?.columnNumber ?? null,
+    }));
     const diffRows = new Set<number>();
     const diffCells: DiffCellLocation[] = [];
+    const leftAlignedColumnsBySourceColumn = new Map<number, number>();
+    const rightAlignedColumnsBySourceColumn = new Map<number, number>();
+
+    alignedColumns.forEach((column) => {
+        if (column.leftColumnNumber !== null) {
+            leftAlignedColumnsBySourceColumn.set(column.leftColumnNumber, column.columnNumber);
+        }
+        if (column.rightColumnNumber !== null) {
+            rightAlignedColumnsBySourceColumn.set(column.rightColumnNumber, column.columnNumber);
+        }
+    });
 
     alignedRowPairs.forEach((pair, index) => {
         const rowNumber = index + 1;
@@ -472,17 +794,35 @@ function createSheetDiff(
             rightRowNumber: pair.right?.rowNumber ?? null,
         });
 
-        const columnNumbers = new Set<number>([
-            ...Array.from(pair.left?.cellsByColumn.keys() ?? []),
-            ...Array.from(pair.right?.cellsByColumn.keys() ?? []),
-        ]);
+        const alignedColumnNumbers = new Set<number>();
+        for (const sourceColumnNumber of pair.left?.cellsByColumn.keys() ?? []) {
+            const alignedColumnNumber =
+                leftAlignedColumnsBySourceColumn.get(sourceColumnNumber) ?? null;
+            if (alignedColumnNumber !== null) {
+                alignedColumnNumbers.add(alignedColumnNumber);
+            }
+        }
+        for (const sourceColumnNumber of pair.right?.cellsByColumn.keys() ?? []) {
+            const alignedColumnNumber =
+                rightAlignedColumnsBySourceColumn.get(sourceColumnNumber) ?? null;
+            if (alignedColumnNumber !== null) {
+                alignedColumnNumbers.add(alignedColumnNumber);
+            }
+        }
 
         let hasRowDiff = pair.left === null || pair.right === null;
 
-        const sortedColumnNumbers = [...columnNumbers].sort((left, right) => left - right);
+        const sortedColumnNumbers = [...alignedColumnNumbers].sort((left, right) => left - right);
         for (const columnNumber of sortedColumnNumbers) {
-            const leftCell = pair.left?.cellsByColumn.get(columnNumber);
-            const rightCell = pair.right?.cellsByColumn.get(columnNumber);
+            const alignedColumn = alignedColumns[columnNumber - 1];
+            const leftCell =
+                alignedColumn?.leftColumnNumber !== null
+                    ? pair.left?.cellsByColumn.get(alignedColumn.leftColumnNumber)
+                    : undefined;
+            const rightCell =
+                alignedColumn?.rightColumnNumber !== null
+                    ? pair.right?.cellsByColumn.get(alignedColumn.rightColumnNumber)
+                    : undefined;
 
             if (areCellsEqual(leftCell, rightCell)) {
                 continue;
@@ -522,8 +862,9 @@ function createSheetDiff(
         leftSheetName: leftSheet?.name ?? null,
         rightSheetName: rightSheet?.name ?? null,
         rowCount: alignedRows.length,
-        columnCount: Math.max(leftSheet?.columnCount ?? 0, rightSheet?.columnCount ?? 0),
+        columnCount: alignedColumns.length,
         alignedRows,
+        alignedColumns,
         diffRows: [...diffRows].sort((left, right) => left - right),
         diffCells,
         diffCellCount: diffCells.length,

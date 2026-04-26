@@ -196,9 +196,10 @@ function ensureCell(
 function applyLeftCell(
     rowsByNumber: Map<number, Map<number, MutableSparseCellView>>,
     rowNumber: number,
+    alignedColumnNumber: number,
     cell: CellSnapshot
 ): void {
-    const current = ensureCell(rowsByNumber, rowNumber, cell.columnNumber);
+    const current = ensureCell(rowsByNumber, rowNumber, alignedColumnNumber);
     current.leftPresent = true;
     current.leftValue = cell.displayValue;
     current.leftFormula = cell.formula;
@@ -207,9 +208,10 @@ function applyLeftCell(
 function applyRightCell(
     rowsByNumber: Map<number, Map<number, MutableSparseCellView>>,
     rowNumber: number,
+    alignedColumnNumber: number,
     cell: CellSnapshot
 ): void {
-    const current = ensureCell(rowsByNumber, rowNumber, cell.columnNumber);
+    const current = ensureCell(rowsByNumber, rowNumber, alignedColumnNumber);
     current.rightPresent = true;
     current.rightValue = cell.displayValue;
     current.rightFormula = cell.formula;
@@ -237,6 +239,8 @@ function createSheetView(sheet: SheetDiffModel): DiffPanelSheetView {
     const diffRowsSet = new Set(sheet.diffRows);
     const leftCellsByRow = new Map<number, CellSnapshot[]>();
     const rightCellsByRow = new Map<number, CellSnapshot[]>();
+    const leftAlignedColumnsBySourceColumn = new Map<number, number>();
+    const rightAlignedColumnsBySourceColumn = new Map<number, number>();
 
     for (const cell of Object.values(sheet.leftSheet?.cells ?? {})) {
         const bucket = leftCellsByRow.get(cell.rowNumber) ?? [];
@@ -250,13 +254,41 @@ function createSheetView(sheet: SheetDiffModel): DiffPanelSheetView {
         rightCellsByRow.set(cell.rowNumber, bucket);
     }
 
+    for (const alignedColumn of sheet.alignedColumns) {
+        if (alignedColumn.leftColumnNumber !== null) {
+            leftAlignedColumnsBySourceColumn.set(
+                alignedColumn.leftColumnNumber,
+                alignedColumn.columnNumber
+            );
+        }
+
+        if (alignedColumn.rightColumnNumber !== null) {
+            rightAlignedColumnsBySourceColumn.set(
+                alignedColumn.rightColumnNumber,
+                alignedColumn.columnNumber
+            );
+        }
+    }
+
     for (const alignedRow of sheet.alignedRows) {
         for (const cell of leftCellsByRow.get(alignedRow.leftRowNumber ?? -1) ?? []) {
-            applyLeftCell(rowsByNumber, alignedRow.rowNumber, cell);
+            const alignedColumnNumber =
+                leftAlignedColumnsBySourceColumn.get(cell.columnNumber) ?? null;
+            if (alignedColumnNumber === null) {
+                continue;
+            }
+
+            applyLeftCell(rowsByNumber, alignedRow.rowNumber, alignedColumnNumber, cell);
         }
 
         for (const cell of rightCellsByRow.get(alignedRow.rightRowNumber ?? -1) ?? []) {
-            applyRightCell(rowsByNumber, alignedRow.rowNumber, cell);
+            const alignedColumnNumber =
+                rightAlignedColumnsBySourceColumn.get(cell.columnNumber) ?? null;
+            if (alignedColumnNumber === null) {
+                continue;
+            }
+
+            applyRightCell(rowsByNumber, alignedRow.rowNumber, alignedColumnNumber, cell);
         }
     }
 
@@ -298,7 +330,19 @@ function createSheetView(sheet: SheetDiffModel): DiffPanelSheetView {
         rightName: sheet.rightSheetName,
         rowCount: sheet.rowCount,
         columnCount: sheet.columnCount,
-        columns: Array.from({ length: sheet.columnCount }, (_, index) => getColumnLabel(index + 1)),
+        columns: sheet.alignedColumns.map((alignedColumn) => ({
+            columnNumber: alignedColumn.columnNumber,
+            leftColumnNumber: alignedColumn.leftColumnNumber,
+            rightColumnNumber: alignedColumn.rightColumnNumber,
+            leftLabel:
+                alignedColumn.leftColumnNumber === null
+                    ? ""
+                    : getColumnLabel(alignedColumn.leftColumnNumber),
+            rightLabel:
+                alignedColumn.rightColumnNumber === null
+                    ? ""
+                    : getColumnLabel(alignedColumn.rightColumnNumber),
+        })),
         rows,
         diffRows: [...sheet.diffRows],
         diffCells: sheet.diffCells.map((cell) => ({

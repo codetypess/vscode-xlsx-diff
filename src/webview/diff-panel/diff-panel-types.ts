@@ -47,6 +47,14 @@ export interface DiffPanelSparseCellView {
     rightFormula: string | null;
 }
 
+export interface DiffPanelColumnView {
+    columnNumber: number;
+    leftColumnNumber: number | null;
+    rightColumnNumber: number | null;
+    leftLabel: string;
+    rightLabel: string;
+}
+
 export interface DiffPanelRowView {
     rowNumber: number;
     leftRowNumber: number | null;
@@ -63,7 +71,7 @@ export interface DiffPanelSheetView {
     rightName: string | null;
     rowCount: number;
     columnCount: number;
-    columns: string[];
+    columns: DiffPanelColumnView[];
     rows: DiffPanelRowView[];
     diffRows: number[];
     diffCells: DiffPanelDiffCellView[];
