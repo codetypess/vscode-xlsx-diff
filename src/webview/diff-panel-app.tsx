@@ -780,34 +780,88 @@ function PaneScrollbar({
     );
 }
 
+function SelectionValueContent({
+    value,
+    otherValue,
+    className,
+}: {
+    value: string;
+    otherValue: string;
+    className: string;
+}): React.JSX.Element {
+    const inlineDiff = getSelectionPreviewInlineDiff(value, otherValue);
+
+    return (
+        <span className={className}>
+            {value.length > 0 ? (
+                <>
+                    {inlineDiff.before}
+                    {inlineDiff.changed ? (
+                        <span className="diff-selectionValue__diff">{inlineDiff.changed}</span>
+                    ) : null}
+                    {inlineDiff.after}
+                </>
+            ) : (
+                <span
+                    className={classNames([
+                        "diff-selectionValue__empty",
+                        otherValue.length > 0 && "diff-selectionValue__diff",
+                    ])}
+                >
+                    {STRINGS.emptyValue}
+                </span>
+            )}
+        </span>
+    );
+}
+
 function SelectionPreviewPane({
     preview,
     peerPreview,
     isActive,
+    showExpandToggle,
+    isExpanded,
+    onToggleExpanded,
 }: {
     preview: SelectionPreview;
     peerPreview: SelectionPreview;
     isActive: boolean;
+    showExpandToggle?: boolean;
+    isExpanded?: boolean;
+    onToggleExpanded?: () => void;
 }): React.JSX.Element {
-    const inlineDiff = getSelectionPreviewInlineDiff(preview.value, peerPreview.value);
-
     return (
         <div
             className={classNames([
                 "diff-selectionPreviewPane",
                 isActive && "diff-selectionPreviewPane--active",
+                isExpanded && "diff-selectionPreviewPane--expanded",
             ])}
-            title={preview.value || undefined}
+            title={preview.value || STRINGS.emptyValue}
         >
-            <span className="diff-selectionPreviewPane__value">
-                {inlineDiff.before}
-                {inlineDiff.changed ? (
-                    <span className="diff-selectionPreviewPane__valueDiff">
-                        {inlineDiff.changed}
-                    </span>
-                ) : null}
-                {inlineDiff.after}
-            </span>
+            <SelectionValueContent
+                value={preview.value}
+                otherValue={peerPreview.value}
+                className="diff-selectionPreviewPane__value"
+            />
+            {showExpandToggle ? (
+                <button
+                    type="button"
+                    className="diff-button diff-selectionPreviewPane__action"
+                    aria-label={isExpanded ? STRINGS.close : STRINGS.viewDetails}
+                    aria-expanded={isExpanded}
+                    title={isExpanded ? STRINGS.close : STRINGS.viewDetails}
+                    onClick={onToggleExpanded}
+                >
+                    <span
+                        className={classNames([
+                            "codicon",
+                            isExpanded ? "codicon-screen-normal" : "codicon-screen-full",
+                        ])}
+                        aria-hidden="true"
+                    />
+                </button>
+            ) : null}
         </div>
     );
 }
@@ -1046,6 +1100,7 @@ function App(): React.JSX.Element {
     const [filter, setFilter] = React.useState<FilterMode>("all");
     const [selectedCell, setSelectedCell] = React.useState<CellSelection | null>(null);
     const [editingCell, setEditingCell] = React.useState<EditingCell | null>(null);
+    const [isSelectionPreviewExpanded, setIsSelectionPreviewExpanded] = React.useState(false);
     const [pendingEdits, setPendingEdits] = React.useState<Map<string, PendingEdit>>(
         () => new Map()
     );
@@ -1275,6 +1330,7 @@ function App(): React.JSX.Element {
 
     React.useEffect(() => {
         if (!activeSheet || !selectedCell) {
+            setIsSelectionPreviewExpanded(false);
             return;
         }
 
@@ -1672,8 +1728,22 @@ function App(): React.JSX.Element {
         vscode.postMessage({ type: "setSheet", sheetKey });
     });
 
+    const handleToggleSelectionPreviewExpanded = React.useEffectEvent(() => {
+        if (!activeSheet || !selectedCell) {
+            return;
+        }
+
+        setIsSelectionPreviewExpanded((currentValue) => !currentValue);
+    });
+
     React.useEffect(() => {
         const handleKeyDown = (event: KeyboardEvent) => {
+            if (isSelectionPreviewExpanded && (event.key === "Escape" || event.code === "Escape")) {
+                event.preventDefault();
+                setIsSelectionPreviewExpanded(false);
+                return;
+            }
+
             if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
                 event.preventDefault();
                 handleSave();
@@ -1694,7 +1764,7 @@ function App(): React.JSX.Element {
         return () => {
             document.removeEventListener("keydown", handleKeyDown);
         };
-    }, [handleClearSelectedCell, handleSave]);
+    }, [handleClearSelectedCell, handleSave, isSelectionPreviewExpanded]);
 
     if (viewState.kind === "loading") {
         return <div className="diff-loading">{viewState.message}</div>;
@@ -1749,6 +1819,7 @@ function App(): React.JSX.Element {
         activeSheet && activeSheet.diffCells.length > 0
             ? `${activeDiffIndex + 1}/${activeSheet.diffCells.length}`
             : STRINGS.none;
+    const canViewSelectionDetails = Boolean(activeSheet && selectedCell);
     const shellStyle = {
         "--diff-row-header-width": `${getDiffRowHeaderWidth(activeSheet?.rowCount ?? 0)}px`,
         "--diff-viewport-scrollbar-width": `${viewportScrollbarWidth}px`,
@@ -2037,12 +2108,22 @@ function App(): React.JSX.Element {
                             </div>
                         )}
 
-                        <div className="diff-selectionPreviewRow">
+                        <div
+                            className={classNames([
+                                "diff-selectionPreviewRow",
+                                isSelectionPreviewExpanded && "diff-selectionPreviewRow--expanded",
+                            ])}
+                        >
                             <div className="diff-pane">
                                 <SelectionPreviewPane
                                     preview={leftSelectionPreview}
                                     peerPreview={rightSelectionPreview}
                                     isActive={selectedCell?.side === "left"}
+                                    showExpandToggle={
+                                        canViewSelectionDetails && selectedCell?.side === "left"
+                                    }
+                                    isExpanded={isSelectionPreviewExpanded}
+                                    onToggleExpanded={handleToggleSelectionPreviewExpanded}
                                 />
                             </div>
                             <div className="diff-divider" />
@@ -2051,6 +2132,11 @@ function App(): React.JSX.Element {
                                     preview={rightSelectionPreview}
                                     peerPreview={leftSelectionPreview}
                                     isActive={selectedCell?.side === "right"}
+                                    showExpandToggle={
+                                        canViewSelectionDetails && selectedCell?.side === "right"
+                                    }
+                                    isExpanded={isSelectionPreviewExpanded}
+                                    onToggleExpanded={handleToggleSelectionPreviewExpanded}
                                 />
                             </div>
                         </div>

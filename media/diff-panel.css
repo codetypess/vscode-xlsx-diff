@@ -14,13 +14,37 @@
     );
     --diff-header-border: color-mix(in srgb, var(--vscode-panel-border) 72%, transparent);
     --diff-subtle-text: var(--vscode-descriptionForeground);
-    --diff-modified-bg: color-mix(in srgb, var(--vscode-inputValidation-warningBackground) 28%, transparent);
-    --diff-added-bg: color-mix(in srgb, var(--vscode-inputValidation-infoBackground) 24%, transparent);
-    --diff-removed-bg: color-mix(in srgb, var(--vscode-inputValidation-errorBackground) 20%, transparent);
-    --diff-ghost-bg: color-mix(in srgb, var(--vscode-editor-background) 85%, var(--vscode-panel-border) 15%);
-    --diff-peer-bg: color-mix(in srgb, var(--vscode-list-inactiveSelectionBackground) 48%, transparent);
+    --diff-modified-bg: color-mix(
+        in srgb,
+        var(--vscode-inputValidation-warningBackground) 28%,
+        transparent
+    );
+    --diff-added-bg: color-mix(
+        in srgb,
+        var(--vscode-inputValidation-infoBackground) 24%,
+        transparent
+    );
+    --diff-removed-bg: color-mix(
+        in srgb,
+        var(--vscode-inputValidation-errorBackground) 20%,
+        transparent
+    );
+    --diff-ghost-bg: color-mix(
+        in srgb,
+        var(--vscode-editor-background) 85%,
+        var(--vscode-panel-border) 15%
+    );
+    --diff-peer-bg: color-mix(
+        in srgb,
+        var(--vscode-list-inactiveSelectionBackground) 48%,
+        transparent
+    );
     --diff-active-outline: var(--vscode-focusBorder);
-    --diff-current-outline: color-mix(in srgb, var(--vscode-focusBorder) 66%, var(--vscode-editorWarning-foreground) 34%);
+    --diff-current-outline: color-mix(
+        in srgb,
+        var(--vscode-focusBorder) 66%,
+        var(--vscode-editorWarning-foreground) 34%
+    );
     --diff-button-bg: color-mix(in srgb, var(--vscode-button-secondaryBackground) 90%, transparent);
 }
 
@@ -649,9 +673,14 @@ select {
     );
 }
 
+.diff-selectionPreviewRow--expanded {
+    min-height: clamp(148px, 25vh, 280px);
+}
+
 .diff-selectionPreviewPane {
     display: flex;
     align-items: stretch;
+    gap: 12px;
     min-height: calc(1.35em * 2 + 12px);
     padding: 6px 12px;
     background: color-mix(
@@ -663,6 +692,12 @@ select {
 
 .diff-selectionPreviewPane--active {
     box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--vscode-focusBorder) 45%, transparent 55%);
+}
+
+.diff-selectionPreviewPane--expanded {
+    min-height: clamp(148px, 25vh, 280px);
+    padding-top: 10px;
+    padding-bottom: 10px;
 }
 
 .diff-selectionPreviewPane__value {
@@ -680,9 +715,45 @@ select {
     line-height: 1.35;
 }
 
-.diff-selectionPreviewPane__valueDiff {
+.diff-selectionPreviewPane--expanded .diff-selectionPreviewPane__value {
+    max-height: clamp(132px, calc(25vh - 20px), 264px);
+}
+
+.diff-selectionPreviewPane__action {
+    flex: 0 0 auto;
+    align-self: flex-start;
+    justify-content: center;
+    min-width: 28px;
+    min-height: 28px;
+    padding: 0;
+    background: transparent;
+    border-color: transparent;
+    color: var(--diff-subtle-text);
+}
+
+.diff-selectionPreviewPane__action:hover {
+    background: transparent;
+    border-color: transparent;
+    color: var(--vscode-editor-foreground);
+}
+
+.diff-selectionPreviewPane__action:focus-visible {
+    outline: none;
+    box-shadow: inset 0 0 0 1px var(--vscode-focusBorder);
+}
+
+.diff-selectionPreviewPane__action .codicon {
+    font-size: 16px;
+}
+
+.diff-selectionValue__diff {
     color: var(--vscode-editorError-foreground, #f14c4c);
     font-weight: 700;
+}
+
+.diff-selectionValue__empty {
+    color: var(--diff-subtle-text);
+    font-style: italic;
 }
 
 .diff-statusBar {
@@ -719,4 +790,11 @@ select {
         display: none;
     }
 
+    .diff-selectionPreviewPane {
+        flex-direction: column;
+    }
+
+    .diff-selectionPreviewPane__action {
+        align-self: flex-end;
+    }
 }

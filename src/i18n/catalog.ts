@@ -5,6 +5,7 @@ export type I18nLanguage = "en" | "zh-cn";
 export interface DiffPanelStrings {
     loading: string;
     reload: string;
+    close: string;
     swap: string;
     all: string;
     diffs: string;
@@ -20,8 +21,10 @@ export interface DiffPanelStrings {
     visibleRows: string;
     currentDiff: string;
     selected: string;
+    viewDetails: string;
     save: string;
     none: string;
+    emptyValue: string;
     modified: string;
     size: string;
     readOnly: string;
@@ -85,8 +88,7 @@ export const RUNTIME_MESSAGES = {
             compareTwoFilesSelectRightWorkbook: "Select the right XLSX workbook",
             compareActiveWithOpenWorkbookFirst:
                 'Open an .xlsx file first, or run "Compare Two XLSX Files" from the Command Palette.',
-            compareActiveWithSelectTargetWorkbook:
-                "Select the XLSX workbook to compare against",
+            compareActiveWithSelectTargetWorkbook: "Select the XLSX workbook to compare against",
         },
         workbook: {
             schemeResource: "{scheme} resource",
@@ -162,6 +164,7 @@ export const RUNTIME_MESSAGES = {
         diffPanel: {
             loading: "Loading XLSX diff...",
             reload: "Reload",
+            close: "Close",
             swap: "Swap",
             all: "All",
             diffs: "Diffs",
@@ -177,8 +180,10 @@ export const RUNTIME_MESSAGES = {
             visibleRows: "Visible Rows",
             currentDiff: "Current Diff",
             selected: "Selected",
+            viewDetails: "View Details",
             save: "Save",
             none: "-",
+            emptyValue: "(empty)",
             modified: "Modified",
             size: "Size",
             readOnly: "Read-only",
@@ -257,8 +262,7 @@ export const RUNTIME_MESSAGES = {
             noRowsAvailable: "当前视图没有可显示的行。",
             localChangesBlockedReload:
                 "工作簿文件已在磁盘上变化。请先保存或放弃当前未保存修改，再刷新。",
-            displayLanguageRefreshBlocked:
-                "当前有未保存修改，语言变更将在保存或手动刷新后生效。",
+            displayLanguageRefreshBlocked: "当前有未保存修改，语言变更将在保存或手动刷新后生效。",
             noSearchMatches: "没有找到匹配的单元格。",
             invalidCellReference:
                 "无法定位该单元格，请使用 A1 或 Sheet1!B2 格式，并确保目标在当前工作簿范围内。",
@@ -270,6 +274,7 @@ export const RUNTIME_MESSAGES = {
         diffPanel: {
             loading: "正在加载 XLSX 对比...",
             reload: "刷新",
+            close: "关闭",
             swap: "交换",
             all: "全部",
             diffs: "差异",
@@ -285,8 +290,10 @@ export const RUNTIME_MESSAGES = {
             visibleRows: "可见行",
             currentDiff: "当前差异",
             selected: "选中",
+            viewDetails: "查看详细",
             save: "保存",
             none: "-",
+            emptyValue: "空值",
             modified: "修改时间",
             size: "大小",
             readOnly: "只读",
