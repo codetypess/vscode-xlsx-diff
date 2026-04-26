@@ -134,7 +134,7 @@
           "enum": [
             "auto",
             "en",
-            "zh-cn"
+            "zh-CN"
           ],
           "default": "auto",
           "markdownDescription": "%configuration.displayLanguage.description%",

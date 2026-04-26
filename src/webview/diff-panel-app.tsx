@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import type { CellDiffStatus } from "../core/model/types";
 import { RUNTIME_MESSAGES } from "../i18n/catalog";
 import { getDiffRowHeaderWidth } from "./diff-grid-layout";
+import { getMaxVisibleSheetTabsForWidth, partitionSheetTabs } from "./editor-sheet-tabs";
 import { getSelectionPreviewInlineDiff } from "./selection-preview-diff";
 import type {
     DiffPanelRenderModel,
@@ -103,6 +104,10 @@ const ROW_HEIGHT = 27;
 const ROW_OVERSCAN = 8;
 const COLUMN_WIDTH = 120;
 const COLUMN_OVERSCAN = 2;
+const DIFF_SHEET_TAB_ITEM_GAP = 1;
+const DIFF_SHEET_TAB_ESTIMATED_WIDTH = 120;
+const DIFF_SHEET_TAB_VISIBLE_MAX_WIDTH = 160;
+const DIFF_SHEET_TAB_OVERFLOW_TRIGGER_WIDTH = 32;
 
 const DEFAULT_STRINGS = RUNTIME_MESSAGES.en.diffPanel;
 
@@ -116,6 +121,71 @@ const vscode = acquireVsCodeApi();
 
 function classNames(values: Array<string | false | null | undefined>): string {
     return values.filter(Boolean).join(" ");
+}
+
+function areSheetTabWidthsEqual(
+    left: Record<string, number>,
+    right: Record<string, number>
+): boolean {
+    const leftKeys = Object.keys(left);
+    const rightKeys = Object.keys(right);
+    if (leftKeys.length !== rightKeys.length) {
+        return false;
+    }
+
+    return leftKeys.every((key) => left[key] === right[key]);
+}
+
+function getMaxVisibleDiffSheetTabs(
+    tabs: readonly DiffPanelSheetTabView[],
+    containerWidth: number,
+    measuredTabWidths: Record<string, number>
+): number {
+    return getMaxVisibleSheetTabsForWidth(tabs, {
+        containerWidth,
+        getTabWidth: (tab) => measuredTabWidths[tab.key] ?? DIFF_SHEET_TAB_ESTIMATED_WIDTH,
+        itemGap: DIFF_SHEET_TAB_ITEM_GAP,
+        overflowTriggerWidth: DIFF_SHEET_TAB_OVERFLOW_TRIGGER_WIDTH,
+    });
+}
+
+function useObservedElementWidth<TElement extends HTMLElement>(
+    ref: React.RefObject<TElement | null>
+): number {
+    const [width, setWidth] = React.useState(0);
+
+    React.useLayoutEffect(() => {
+        const element = ref.current;
+        if (!element) {
+            return;
+        }
+
+        let frameId = 0;
+        const updateWidth = (): void => {
+            cancelAnimationFrame(frameId);
+            frameId = requestAnimationFrame(() => {
+                setWidth(Math.round(element.getBoundingClientRect().width));
+            });
+        };
+
+        updateWidth();
+
+        const observer = new ResizeObserver(() => {
+            updateWidth();
+        });
+        observer.observe(element);
+        window.addEventListener("resize", updateWidth);
+        window.visualViewport?.addEventListener("resize", updateWidth);
+
+        return () => {
+            cancelAnimationFrame(frameId);
+            observer.disconnect();
+            window.removeEventListener("resize", updateWidth);
+            window.visualViewport?.removeEventListener("resize", updateWidth);
+        };
+    }, [ref]);
+
+    return width;
 }
 
 function getPendingEditKey(
@@ -408,6 +478,218 @@ function DiffMarker({
 
 function getSheetTooltip(sheet: DiffPanelSheetTabView): string {
     return `${sheet.label} · ${sheet.diffCellCount} ${STRINGS.diffCells} · ${sheet.diffRowCount} ${STRINGS.diffRows}`;
+}
+
+function DiffSheetTabs({
+    sheets,
+    pendingSummary,
+    onSetSheet,
+}: {
+    sheets: readonly DiffPanelSheetTabView[];
+    pendingSummary: PendingSummary;
+    onSetSheet(sheetKey: string): void;
+}): React.JSX.Element {
+    const viewportRef = React.useRef<HTMLDivElement | null>(null);
+    const overflowRef = React.useRef<HTMLDivElement | null>(null);
+    const measureRef = React.useRef<HTMLDivElement | null>(null);
+    const [isOverflowOpen, setIsOverflowOpen] = React.useState(false);
+    const [measuredTabWidths, setMeasuredTabWidths] = React.useState<Record<string, number>>({});
+    const viewportWidth = useObservedElementWidth(viewportRef);
+    const pendingSheetKeySignature = Array.from(pendingSummary.sheetKeys).sort().join("\0");
+    const maxVisibleTabs = getMaxVisibleDiffSheetTabs(sheets, viewportWidth, measuredTabWidths);
+    const tabLayout = partitionSheetTabs(sheets, maxVisibleTabs);
+
+    React.useLayoutEffect(() => {
+        const measureRoot = measureRef.current;
+        if (!measureRoot) {
+            return;
+        }
+
+        const nextMeasuredTabWidths: Record<string, number> = {};
+        for (const element of measureRoot.querySelectorAll<HTMLElement>(
+            '[data-role="diff-sheet-tab-measure"]'
+        )) {
+            const sheetKey = element.dataset.sheetKey;
+            if (!sheetKey) {
+                continue;
+            }
+
+            nextMeasuredTabWidths[sheetKey] = Math.min(
+                DIFF_SHEET_TAB_VISIBLE_MAX_WIDTH,
+                Math.ceil(element.getBoundingClientRect().width)
+            );
+        }
+
+        setMeasuredTabWidths((currentWidths) =>
+            areSheetTabWidthsEqual(currentWidths, nextMeasuredTabWidths)
+                ? currentWidths
+                : nextMeasuredTabWidths
+        );
+    }, [sheets, pendingSheetKeySignature]);
+
+    React.useEffect(() => {
+        setIsOverflowOpen(false);
+    }, [sheets.length, tabLayout.hasOverflow, tabLayout.activeTab?.key]);
+
+    React.useEffect(() => {
+        if (!isOverflowOpen) {
+            return;
+        }
+
+        const handlePointerDown = (event: PointerEvent): void => {
+            const target = event.target;
+            if (!(target instanceof HTMLElement)) {
+                setIsOverflowOpen(false);
+                return;
+            }
+
+            if (overflowRef.current?.contains(target)) {
+                return;
+            }
+
+            setIsOverflowOpen(false);
+        };
+
+        const handleKeyDown = (event: KeyboardEvent): void => {
+            if (event.key === "Escape") {
+                setIsOverflowOpen(false);
+            }
+        };
+
+        document.addEventListener("pointerdown", handlePointerDown);
+        document.addEventListener("keydown", handleKeyDown);
+
+        return () => {
+            document.removeEventListener("pointerdown", handlePointerDown);
+            document.removeEventListener("keydown", handleKeyDown);
+        };
+    }, [isOverflowOpen]);
+
+    return (
+        <nav className="diff-sheetTabs diff-sheetTabs--bottom" aria-label={STRINGS.sheets}>
+            <div ref={viewportRef} className="diff-sheetTabs__viewport">
+                <div className="diff-sheetTabs__content">
+                    <div className="diff-sheetTabs__list">
+                        {tabLayout.visibleTabs.map((sheet) => {
+                            const hasPending = pendingSummary.sheetKeys.has(sheet.key);
+                            const markerTone = getEffectiveMarkerTone(
+                                sheet.hasDiff ? sheet.diffTone : null,
+                                hasPending
+                            );
+
+                            return (
+                                <button
+                                    key={sheet.key}
+                                    type="button"
+                                    className={classNames([
+                                        "diff-sheetTab",
+                                        sheet.isActive && "diff-sheetTab--active",
+                                        hasPending && "diff-sheetTab--pending",
+                                    ])}
+                                    title={getSheetTooltip(sheet)}
+                                    onClick={() => onSetSheet(sheet.key)}
+                                >
+                                    <DiffMarker
+                                        tone={markerTone}
+                                        className="diff-sheetTab__marker"
+                                    />
+                                    <span className="diff-sheetTab__label">{sheet.label}</span>
+                                </button>
+                            );
+                        })}
+                    </div>
+                    {tabLayout.hasOverflow ? (
+                        <div ref={overflowRef} className="diff-sheetTabs__overflow">
+                            <button
+                                aria-label={STRINGS.moreSheets}
+                                aria-expanded={isOverflowOpen}
+                                aria-haspopup="menu"
+                                className={classNames([
+                                    "diff-sheetTab",
+                                    "diff-sheetTab--overflowTrigger",
+                                    isOverflowOpen && "diff-sheetTab--overflowActive",
+                                ])}
+                                title={STRINGS.moreSheets}
+                                type="button"
+                                onClick={() => {
+                                    setIsOverflowOpen((open) => !open);
+                                }}
+                            >
+                                <span
+                                    className="codicon codicon-more diff-sheetTab__icon"
+                                    aria-hidden
+                                />
+                                <span className="diff-sheetTabs__overflowCount" aria-hidden>
+                                    {tabLayout.overflowTabs.length}
+                                </span>
+                            </button>
+                            {isOverflowOpen ? (
+                                <div className="diff-sheetTabs__overflowMenu" role="menu">
+                                    {tabLayout.overflowTabs.map((sheet) => {
+                                        const hasPending = pendingSummary.sheetKeys.has(sheet.key);
+                                        const markerTone = getEffectiveMarkerTone(
+                                            sheet.hasDiff ? sheet.diffTone : null,
+                                            hasPending
+                                        );
+
+                                        return (
+                                            <button
+                                                key={sheet.key}
+                                                className="diff-sheetTabs__overflowItem"
+                                                role="menuitem"
+                                                title={getSheetTooltip(sheet)}
+                                                type="button"
+                                                onClick={() => {
+                                                    setIsOverflowOpen(false);
+                                                    onSetSheet(sheet.key);
+                                                }}
+                                            >
+                                                <DiffMarker
+                                                    tone={markerTone}
+                                                    className="diff-sheetTab__marker"
+                                                />
+                                                <span className="diff-sheetTabs__overflowLabel">
+                                                    {sheet.label}
+                                                </span>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            ) : null}
+                        </div>
+                    ) : null}
+                </div>
+            </div>
+            <div ref={measureRef} aria-hidden className="diff-sheetTabs__measure">
+                {sheets.map((sheet) => {
+                    const hasPending = pendingSummary.sheetKeys.has(sheet.key);
+                    const markerTone = getEffectiveMarkerTone(
+                        sheet.hasDiff ? sheet.diffTone : null,
+                        hasPending
+                    );
+
+                    return (
+                        <button
+                            key={sheet.key}
+                            className={classNames([
+                                "diff-sheetTab",
+                                "diff-sheetTabs__measureTab",
+                                sheet.isActive && "diff-sheetTab--active",
+                                hasPending && "diff-sheetTab--pending",
+                            ])}
+                            data-role="diff-sheet-tab-measure"
+                            data-sheet-key={sheet.key}
+                            tabIndex={-1}
+                            type="button"
+                        >
+                            <DiffMarker tone={markerTone} className="diff-sheetTab__marker" />
+                            <span className="diff-sheetTab__label">{sheet.label}</span>
+                        </button>
+                    );
+                })}
+            </div>
+        </nav>
+    );
 }
 
 function getCellTitle(
@@ -2144,32 +2426,11 @@ function App(): React.JSX.Element {
                 )}
             </section>
 
-            <nav className="diff-sheetTabs diff-sheetTabs--bottom" aria-label={STRINGS.sheets}>
-                {model.sheets.map((sheet) => {
-                    const hasPending = pendingSummary.sheetKeys.has(sheet.key);
-                    const markerTone = getEffectiveMarkerTone(
-                        sheet.hasDiff ? sheet.diffTone : null,
-                        hasPending
-                    );
-
-                    return (
-                        <button
-                            key={sheet.key}
-                            type="button"
-                            className={classNames([
-                                "diff-sheetTab",
-                                sheet.isActive && "diff-sheetTab--active",
-                                hasPending && "diff-sheetTab--pending",
-                            ])}
-                            title={getSheetTooltip(sheet)}
-                            onClick={() => handleSetSheet(sheet.key)}
-                        >
-                            <DiffMarker tone={markerTone} className="diff-sheetTab__marker" />
-                            <span className="diff-sheetTab__label">{sheet.label}</span>
-                        </button>
-                    );
-                })}
-            </nav>
+            <DiffSheetTabs
+                sheets={model.sheets}
+                pendingSummary={pendingSummary}
+                onSetSheet={handleSetSheet}
+            />
 
             <footer className="diff-statusBar">
                 <span>

@@ -6,7 +6,7 @@ const DISPLAY_LANGUAGE_SETTING = "displayLanguage";
 
 export const DISPLAY_LANGUAGE_CONFIGURATION_KEY = `${CONFIGURATION_SECTION}.${DISPLAY_LANGUAGE_SETTING}`;
 
-export type DisplayLanguageSetting = "auto" | "en" | "zh-cn";
+export type DisplayLanguageSetting = "auto" | "en" | "zh-CN";
 export type ResolvedDisplayLanguage = I18nLanguage;
 
 export function resolveDisplayLanguage(
@@ -16,12 +16,12 @@ export function resolveDisplayLanguage(
     switch (configuredLanguage) {
         case "en":
             return "en";
-        case "zh-cn":
-            return "zh-cn";
+        case "zh-CN":
+            return "zh-CN";
         case "auto":
         case undefined:
         default:
-            return vscodeLanguage.toLowerCase().startsWith("zh") ? "zh-cn" : "en";
+            return vscodeLanguage.toLowerCase().startsWith("zh") ? "zh-CN" : "en";
     }
 }
 
@@ -34,11 +34,11 @@ export function getResolvedDisplayLanguage(): ResolvedDisplayLanguage {
 }
 
 export function isChineseDisplayLanguage(): boolean {
-    return getResolvedDisplayLanguage() === "zh-cn";
+    return getResolvedDisplayLanguage() === "zh-CN";
 }
 
 export function getHtmlLanguageTag(): string {
-    return getResolvedDisplayLanguage() === "zh-cn" ? "zh-CN" : "en";
+    return getResolvedDisplayLanguage() === "zh-CN" ? "zh-CN" : "en";
 }
 
 export function affectsDisplayLanguage(event: vscode.ConfigurationChangeEvent): boolean {

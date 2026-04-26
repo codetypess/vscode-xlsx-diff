@@ -3,6 +3,7 @@
 
 import * as assert from "assert";
 import {
+    shouldResetInvisibleSelectionAnchor,
     shouldSyncLocalSelectionDomFromModelSelection,
     shouldUseLocalSimpleSelectionUpdate,
 } from "../webview/editor-selection-render";
@@ -55,6 +56,28 @@ suite("Editor selection render helpers", () => {
                 { rowNumber: 7, columnNumber: 6 },
                 { rowNumber: 10, columnNumber: 6 }
             ),
+            false
+        );
+    });
+
+    test("resets an invisible anchor for simple selections", () => {
+        assert.strictEqual(
+            shouldResetInvisibleSelectionAnchor({
+                hasSelectionRangeOverride: false,
+                hasExpandedSelection: false,
+                isAnchorVisible: false,
+            }),
+            true
+        );
+    });
+
+    test("preserves an invisible anchor for expanded selections", () => {
+        assert.strictEqual(
+            shouldResetInvisibleSelectionAnchor({
+                hasSelectionRangeOverride: false,
+                hasExpandedSelection: true,
+                isAnchorVisible: false,
+            }),
             false
         );
     });

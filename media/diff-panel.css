@@ -197,18 +197,36 @@ select {
 }
 
 .diff-sheetTabs {
-    display: flex;
-    align-items: flex-end;
-    flex-wrap: wrap;
-    gap: 1px;
     padding: 8px 12px 0;
     border-top: 1px solid var(--vscode-panel-border, var(--diff-header-border));
     border-bottom: 1px solid var(--vscode-tab-border, var(--vscode-panel-border));
-    overflow-x: auto;
+    overflow: visible;
     background: var(
         --vscode-editorGroupHeader-tabsBackground,
         color-mix(in srgb, var(--vscode-editor-background) 96%, white 4%)
     );
+}
+
+.diff-sheetTabs__viewport {
+    width: 100%;
+    min-width: 0;
+    overflow: visible;
+}
+
+.diff-sheetTabs__content {
+    display: flex;
+    align-items: flex-end;
+    gap: 1px;
+    width: max-content;
+    max-width: 100%;
+}
+
+.diff-sheetTabs__list {
+    display: flex;
+    align-items: flex-end;
+    gap: 1px;
+    min-width: 0;
+    overflow: hidden;
 }
 
 .diff-sheetTab {
@@ -230,6 +248,10 @@ select {
     position: relative;
     top: 1px;
     white-space: nowrap;
+}
+
+.diff-sheetTabs__list .diff-sheetTab {
+    max-width: 160px;
 }
 
 .diff-sheetTab:hover {
@@ -258,12 +280,145 @@ select {
     margin-right: 2px;
 }
 
+.diff-sheetTab__icon {
+    font-size: 13px;
+}
+
 .diff-sheetTab__label {
     display: inline-block;
     max-width: 160px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+.diff-sheetTabs__overflow {
+    position: relative;
+    flex: 0 0 auto;
+}
+
+.diff-sheetTab--overflowTrigger {
+    justify-content: center;
+    width: 32px;
+    height: 28px;
+    padding: 0;
+    top: 0;
+    align-self: center;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--vscode-descriptionForeground, var(--vscode-tab-inactiveForeground));
+}
+
+.diff-sheetTab--overflowTrigger:hover {
+    background: var(
+        --vscode-toolbar-hoverBackground,
+        color-mix(in srgb, var(--vscode-editor-background) 88%, white 12%)
+    );
+}
+
+.diff-sheetTab--overflowTrigger:active,
+.diff-sheetTab--overflowActive {
+    background: color-mix(in srgb, var(--vscode-focusBorder) 18%, transparent 82%);
+    border-color: color-mix(in srgb, var(--vscode-focusBorder) 30%, transparent 70%);
+    color: var(--vscode-editor-foreground);
+    box-shadow: none;
+    font-weight: 600;
+}
+
+.diff-sheetTab--overflowActive:hover {
+    background: color-mix(in srgb, var(--vscode-focusBorder) 24%, transparent 76%);
+}
+
+.diff-sheetTabs__overflowCount {
+    position: absolute;
+    top: -3px;
+    right: -3px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--vscode-focusBorder) 18%, transparent 82%);
+    color: inherit;
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 1;
+}
+
+.diff-sheetTab--overflowActive .diff-sheetTabs__overflowCount {
+    background: color-mix(in srgb, var(--vscode-focusBorder) 28%, transparent 72%);
+}
+
+.diff-sheetTabs__overflowMenu {
+    position: absolute;
+    right: 0;
+    bottom: calc(100% - 1px);
+    z-index: 20;
+    min-width: 220px;
+    max-width: min(320px, calc(100vw - 24px));
+    max-height: min(320px, calc(100vh - 120px));
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 6px;
+    border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border));
+    border-radius: 8px;
+    background: var(
+        --vscode-menu-background,
+        color-mix(in srgb, var(--vscode-editor-background) 94%, white 6%)
+    );
+    box-shadow: 0 10px 24px color-mix(in srgb, black 28%, transparent 72%);
+}
+
+.diff-sheetTabs__overflowItem {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 7px 10px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--vscode-menu-foreground, var(--vscode-editor-foreground));
+    cursor: pointer;
+    text-align: left;
+    font: inherit;
+}
+
+.diff-sheetTabs__overflowItem:hover {
+    background: var(
+        --vscode-menu-selectionBackground,
+        color-mix(in srgb, var(--vscode-editor-background) 86%, white 14%)
+    );
+    color: var(--vscode-menu-selectionForeground, var(--vscode-editor-foreground));
+}
+
+.diff-sheetTabs__overflowLabel {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.diff-sheetTabs__measure {
+    position: absolute;
+    left: 0;
+    bottom: 100%;
+    height: 0;
+    overflow: hidden;
+    visibility: hidden;
+    pointer-events: none;
+    white-space: nowrap;
+}
+
+.diff-sheetTabs__measureTab {
+    flex: 0 0 auto;
+    max-width: 160px;
+    min-width: 0;
 }
 
 .diff-gridSection {

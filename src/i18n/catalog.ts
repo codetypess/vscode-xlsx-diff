@@ -1,6 +1,6 @@
 import type { EditorPanelStrings } from "../webview/editor-panel-types";
 
-export type I18nLanguage = "en" | "zh-cn";
+export type I18nLanguage = "en" | "zh-CN";
 
 export interface DiffPanelStrings {
     loading: string;
@@ -15,6 +15,7 @@ export interface DiffPanelStrings {
     prevDiff: string;
     nextDiff: string;
     sheets: string;
+    moreSheets: string;
     diffCells: string;
     rows: string;
     filter: string;
@@ -175,6 +176,7 @@ export const RUNTIME_MESSAGES = {
             prevDiff: "Prev Diff",
             nextDiff: "Next Diff",
             sheets: "Sheets",
+            moreSheets: "More",
             diffCells: "Diff Cells",
             rows: "Rows",
             filter: "Filter",
@@ -192,7 +194,7 @@ export const RUNTIME_MESSAGES = {
             noRows: "No rows are available in this sheet.",
         },
     },
-    "zh-cn": {
+    "zh-CN": {
         commands: {
             workbookFilterLabel: "Excel 工作簿",
             openEditorSelectLocalWorkbook: "请先选择或打开一个本地 .xlsx 文件。",
@@ -286,6 +288,7 @@ export const RUNTIME_MESSAGES = {
             prevDiff: "上一处差异",
             nextDiff: "下一处差异",
             sheets: "工作表",
+            moreSheets: "更多",
             diffCells: "差异单元格",
             rows: "行",
             filter: "筛选",

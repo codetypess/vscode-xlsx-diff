@@ -11,7 +11,7 @@ A VS Code extension for visually comparing and editing `.xlsx` workbooks — dir
 - **Side-by-side spreadsheet diff** — view left and right workbooks in a clean table layout with colour-coded differences (modified / added / removed).
 - **Git, SVN & SCM integration** — click any `.xlsx` file in the Source Control panel to open the diff view automatically.
 - **Sheet tabs** — navigate between multiple worksheets; tabs show diff markers when a sheet contains changes.
-- **Row filters** — toggle between *All rows*, *Diff rows only*, or *Same rows only*.
+- **Row filters** — toggle between _All rows_, _Diff rows only_, or _Same rows only_.
 - **Diff navigation** — jump to the previous / next changed cell with a single click or keyboard shortcut.
 - **Pagination** — large workbooks are split into pages for performance.
 - **Row height sync** — left and right rows are height-matched so multi-line cells align correctly.
@@ -52,14 +52,14 @@ In the editor view you can:
 
 ### Compare from Source Control
 
-Open the **Source Control** panel, then click any `.xlsx` file listed under *Changes*. The XLSX diff view opens automatically instead of VS Code's built-in binary diff.
+Open the **Source Control** panel, then click any `.xlsx` file listed under _Changes_. The XLSX diff view opens automatically instead of VS Code's built-in binary diff.
 
 Git support works with VS Code's built-in Git extension. SVN support works with the `johnstoncode.svn-scm` extension and its `svn:` read-only resources.
 
 ### Keyboard shortcuts in the diff view
 
-| Action | Key |
-|---|---|
+| Action    | Key                          |
+| --------- | ---------------------------- |
 | Next diff | Click **↓ Next Diff** button |
 | Prev diff | Click **↑ Prev Diff** button |
 
@@ -78,9 +78,9 @@ Git support works with VS Code's built-in Git extension. SVN support works with 
 
 ## Settings
 
-| Setting | Values | Default | Description |
-|---|---|---|---|
-| `xlsx-diff.displayLanguage` | `auto`, `en`, `zh-cn` | `auto` | Controls the language used in diff panel prompts and UI labels. `auto` follows the active VS Code display language. |
+| Setting                     | Values                | Default | Description                                                                                                         |
+| --------------------------- | --------------------- | ------- | ------------------------------------------------------------------------------------------------------------------- |
+| `xlsx-diff.displayLanguage` | `auto`, `en`, `zh-CN` | `auto`  | Controls the language used in diff panel prompts and UI labels. `auto` follows the active VS Code display language. |
 
 ---
 
