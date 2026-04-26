@@ -1264,6 +1264,8 @@ body {
 .footer {
     display: flex;
     flex-direction: column;
+    position: relative;
+    z-index: 8;
     border-top: 1px solid var(--vscode-panel-border);
     background: var(
         --vscode-editorGroupHeader-tabsBackground,
@@ -1272,19 +1274,38 @@ body {
 }
 
 .tabs {
+    padding: 8px 12px 0;
+    overflow: visible;
+    border-bottom: 1px solid var(--vscode-tab-border, var(--vscode-panel-border));
+}
+
+.tabs__viewport {
+    width: 100%;
+    min-width: 0;
+    overflow: visible;
+}
+
+.tabs__content {
     display: flex;
     align-items: flex-end;
-    flex-wrap: wrap;
     gap: 1px;
-    padding: 8px 12px 0;
-    overflow-x: auto;
-    border-bottom: 1px solid var(--vscode-tab-border, var(--vscode-panel-border));
+    width: max-content;
+    max-width: 100%;
+}
+
+.tabs__list {
+    display: flex;
+    align-items: flex-end;
+    gap: 1px;
+    min-width: 0;
+    overflow: hidden;
 }
 
 .tab {
     display: inline-flex;
     align-items: center;
     gap: 6px;
+    min-width: 0;
     border: 1px solid transparent;
     border-bottom: 0;
     border-radius: 0;
@@ -1298,6 +1319,12 @@ body {
     position: relative;
     top: 1px;
     white-space: nowrap;
+}
+
+.tabs__list .tab {
+    flex: 0 0 auto;
+    max-width: 144px;
+    min-width: 0;
 }
 
 .tab:disabled {
@@ -1330,6 +1357,10 @@ body {
 
 .tab__label {
     display: inline-block;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .tab--action {
@@ -1338,6 +1369,115 @@ body {
 
 .tab--danger {
     color: var(--vscode-errorForeground, var(--vscode-editorError-foreground, #f14c4c));
+}
+
+.tabs__overflow {
+    position: relative;
+    flex: 0 0 auto;
+}
+
+.tab--overflowTrigger {
+    flex: 0 0 auto;
+    max-width: none;
+    min-width: 0;
+    gap: 8px;
+    top: 0;
+    align-self: center;
+    padding: 6px 8px;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--vscode-descriptionForeground, var(--vscode-tab-inactiveForeground));
+}
+
+.tab--overflowTrigger:hover {
+    background: var(
+        --vscode-toolbar-hoverBackground,
+        color-mix(in srgb, var(--vscode-editor-background) 88%, white 12%)
+    );
+}
+
+.tab--overflowTrigger:active,
+.tab--overflowTrigger.is-active {
+    background: color-mix(in srgb, var(--vscode-focusBorder) 18%, transparent 82%);
+    border-color: color-mix(in srgb, var(--vscode-focusBorder) 30%, transparent 70%);
+    color: var(--vscode-editor-foreground);
+    box-shadow: none;
+    font-weight: 600;
+}
+
+.tab--overflowTrigger.is-active:hover {
+    background: color-mix(in srgb, var(--vscode-focusBorder) 24%, transparent 76%);
+}
+
+.tabs__overflowCount {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--vscode-focusBorder) 18%, transparent 82%);
+    color: inherit;
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1;
+}
+
+.tab--overflowTrigger.is-active .tabs__overflowCount {
+    background: color-mix(in srgb, var(--vscode-focusBorder) 28%, transparent 72%);
+}
+
+.tabs__overflowMenu {
+    position: absolute;
+    right: 0;
+    bottom: calc(100% - 1px);
+    z-index: 20;
+    min-width: 220px;
+    max-width: min(320px, calc(100vw - 24px));
+    max-height: min(320px, calc(100vh - 120px));
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 6px;
+    border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border));
+    border-radius: 8px;
+    background: var(
+        --vscode-menu-background,
+        color-mix(in srgb, var(--vscode-editor-background) 94%, white 6%)
+    );
+    box-shadow: 0 10px 24px color-mix(in srgb, black 28%, transparent 72%);
+}
+
+.tabs__overflowItem {
+    min-width: 0;
+}
+
+.tabs__overflowLabel {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.tabs__measure {
+    position: absolute;
+    left: 0;
+    bottom: 100%;
+    height: 0;
+    overflow: hidden;
+    visibility: hidden;
+    pointer-events: none;
+    white-space: nowrap;
+}
+
+.tabs__measureTab,
+.tabs__measureOverflow {
+    flex: 0 0 auto;
+    max-width: none;
+    min-width: 0;
 }
 
 .context-menu {

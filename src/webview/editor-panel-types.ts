@@ -86,6 +86,7 @@ export interface EditorPanelStrings {
     save: string;
     lockView: string;
     unlockView: string;
+    moreSheets: string;
     addSheet: string;
     deleteSheet: string;
     renameSheet: string;

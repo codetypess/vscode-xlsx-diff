@@ -37,6 +37,7 @@ import {
     shouldResetToolbarCellValueDraft,
     type ToolbarCellEditTarget,
 } from "./editor-toolbar-input";
+import { getMaxVisibleSheetTabsForWidth, partitionSheetTabs } from "./editor-sheet-tabs";
 import type {
     EditorSearchResultMessage,
     EditorSearchScope,
@@ -237,6 +238,9 @@ const WHEEL_DELTA_PAGE_MODE = 2;
 const WHEEL_LINE_SCROLL_PIXELS = 40;
 const DEFAULT_EDITOR_VIEWPORT_HEIGHT = 480;
 const DEFAULT_EDITOR_VIEWPORT_WIDTH = 960;
+const SHEET_TAB_ITEM_GAP = 1;
+const SHEET_TAB_ESTIMATED_WIDTH = 120;
+const SHEET_TAB_OVERFLOW_TRIGGER_WIDTH = 72;
 const DEFAULT_SEARCH_OPTIONS: SearchOptions = {
     isRegexp: false,
     matchCase: false,
@@ -3823,6 +3827,72 @@ function EditorPane({
     );
 }
 
+function areSheetTabWidthsEqual(
+    left: Record<string, number>,
+    right: Record<string, number>
+): boolean {
+    const leftKeys = Object.keys(left);
+    const rightKeys = Object.keys(right);
+    if (leftKeys.length !== rightKeys.length) {
+        return false;
+    }
+
+    return leftKeys.every((key) => left[key] === right[key]);
+}
+
+function getMaxVisibleSheetTabs(
+    tabs: readonly EditorSheetTabView[],
+    containerWidth: number,
+    overflowTriggerWidth: number,
+    measuredTabWidths: Record<string, number>
+): number {
+    return getMaxVisibleSheetTabsForWidth(tabs, {
+        containerWidth,
+        getTabWidth: (tab) => measuredTabWidths[tab.key] ?? SHEET_TAB_ESTIMATED_WIDTH,
+        itemGap: SHEET_TAB_ITEM_GAP,
+        overflowTriggerWidth,
+    });
+}
+
+function useObservedElementWidth<TElement extends HTMLElement>(
+    ref: React.RefObject<TElement | null>
+): number {
+    const [width, setWidth] = React.useState(0);
+
+    React.useLayoutEffect(() => {
+        const element = ref.current;
+        if (!element) {
+            return;
+        }
+
+        let frameId = 0;
+        const updateWidth = (): void => {
+            cancelAnimationFrame(frameId);
+            frameId = requestAnimationFrame(() => {
+                setWidth(Math.round(element.getBoundingClientRect().width));
+            });
+        };
+
+        updateWidth();
+
+        const observer = new ResizeObserver(() => {
+            updateWidth();
+        });
+        observer.observe(element);
+        window.addEventListener("resize", updateWidth);
+        window.visualViewport?.addEventListener("resize", updateWidth);
+
+        return () => {
+            cancelAnimationFrame(frameId);
+            observer.disconnect();
+            window.removeEventListener("resize", updateWidth);
+            window.visualViewport?.removeEventListener("resize", updateWidth);
+        };
+    }, [ref]);
+
+    return width;
+}
+
 function Tabs({
     currentModel,
     pendingSummary,
@@ -3830,12 +3900,116 @@ function Tabs({
     currentModel: EditorRenderModel;
     pendingSummary: PendingSummary;
 }): React.ReactElement {
+    const viewportRef = React.useRef<HTMLDivElement | null>(null);
+    const overflowRef = React.useRef<HTMLDivElement | null>(null);
+    const measureRef = React.useRef<HTMLDivElement | null>(null);
+    const [isOverflowOpen, setIsOverflowOpen] = React.useState(false);
+    const [measuredTabWidths, setMeasuredTabWidths] = React.useState<Record<string, number>>({});
+    const [overflowTriggerWidth, setOverflowTriggerWidth] = React.useState(
+        SHEET_TAB_OVERFLOW_TRIGGER_WIDTH
+    );
+    const viewportWidth = useObservedElementWidth(viewportRef);
+    const pendingSheetKeySignature = Array.from(pendingSummary.sheetKeys).sort().join("\0");
+    const maxVisibleTabs = getMaxVisibleSheetTabs(
+        currentModel.sheets,
+        viewportWidth,
+        overflowTriggerWidth,
+        measuredTabWidths
+    );
+    const tabLayout = partitionSheetTabs(currentModel.sheets, maxVisibleTabs);
+
+    React.useLayoutEffect(() => {
+        const measureRoot = measureRef.current;
+        if (!measureRoot) {
+            return;
+        }
+
+        const nextMeasuredTabWidths: Record<string, number> = {};
+        for (const element of measureRoot.querySelectorAll<HTMLElement>('[data-role="sheet-tab-measure"]')) {
+            const sheetKey = element.dataset.sheetKey;
+            if (!sheetKey) {
+                continue;
+            }
+
+            nextMeasuredTabWidths[sheetKey] = Math.ceil(element.getBoundingClientRect().width);
+        }
+
+        const triggerElement = measureRoot.querySelector<HTMLElement>(
+            '[data-role="sheet-tab-overflow-trigger-measure"]'
+        );
+        const nextOverflowTriggerWidth = triggerElement
+            ? Math.ceil(triggerElement.getBoundingClientRect().width)
+            : SHEET_TAB_OVERFLOW_TRIGGER_WIDTH;
+
+        setMeasuredTabWidths((currentWidths) =>
+            areSheetTabWidthsEqual(currentWidths, nextMeasuredTabWidths)
+                ? currentWidths
+                : nextMeasuredTabWidths
+        );
+        setOverflowTriggerWidth((currentWidth) =>
+            currentWidth === nextOverflowTriggerWidth ? currentWidth : nextOverflowTriggerWidth
+        );
+    }, [
+        currentModel.sheets,
+        currentModel.activeSheet.key,
+        pendingSheetKeySignature,
+        viewportWidth,
+        tabLayout.overflowTabs.length,
+    ]);
+
+    React.useEffect(() => {
+        setIsOverflowOpen(false);
+    }, [currentModel.activeSheet.key, currentModel.sheets.length, tabLayout.hasOverflow]);
+
+    React.useEffect(() => {
+        if (!isOverflowOpen) {
+            return;
+        }
+
+        const handlePointerDown = (event: PointerEvent): void => {
+            const target = event.target;
+            if (!(target instanceof HTMLElement)) {
+                setIsOverflowOpen(false);
+                return;
+            }
+
+            if (overflowRef.current?.contains(target)) {
+                return;
+            }
+
+            setIsOverflowOpen(false);
+        };
+
+        const handleKeyDown = (event: KeyboardEvent): void => {
+            if (event.key === "Escape") {
+                setIsOverflowOpen(false);
+            }
+        };
+
+        document.addEventListener("pointerdown", handlePointerDown);
+        document.addEventListener("keydown", handleKeyDown);
+
+        return () => {
+            document.removeEventListener("pointerdown", handlePointerDown);
+            document.removeEventListener("keydown", handleKeyDown);
+        };
+    }, [isOverflowOpen]);
+
+    const setSheet = (sheetKey: string): void => {
+        closeContextMenu({ refresh: false });
+        setIsOverflowOpen(false);
+        vscode.postMessage({ type: "setSheet", sheetKey });
+    };
+
     return (
         <div
             className="tabs"
             onContextMenu={(event) => {
                 const target = event.target;
-                if (target instanceof HTMLElement && target.closest('[data-role="sheet-tab"]')) {
+                if (
+                    target instanceof HTMLElement &&
+                    target.closest('[data-role="sheet-tab"], [data-role="sheet-tab-overflow"]')
+                ) {
                     return;
                 }
 
@@ -3843,29 +4017,139 @@ function Tabs({
                 openTabContextMenu(currentModel.activeSheet.key, event.clientX, event.clientY);
             }}
         >
-            {currentModel.sheets.map((sheet: EditorSheetTabView) => {
-                const hasPending = pendingSummary.sheetKeys.has(sheet.key);
+            <div ref={viewportRef} className="tabs__viewport">
+                <div className="tabs__content">
+                    <div className="tabs__list">
+                        {tabLayout.visibleTabs.map((sheet: EditorSheetTabView) => {
+                            const hasPending = pendingSummary.sheetKeys.has(sheet.key);
 
-                return (
-                    <button
-                        key={sheet.key}
-                        className={classNames(["tab", sheet.isActive && "is-active"])}
-                        data-role="sheet-tab"
-                        title={sheet.label}
-                        type="button"
-                        onClick={() =>
-                            vscode.postMessage({ type: "setSheet", sheetKey: sheet.key })
-                        }
-                        onContextMenu={(event) => {
-                            event.preventDefault();
-                            openTabContextMenu(sheet.key, event.clientX, event.clientY);
-                        }}
-                    >
-                        {hasPending ? <PendingMarker extraClass="tab__marker" /> : null}
-                        <span className="tab__label">{sheet.label}</span>
-                    </button>
-                );
-            })}
+                            return (
+                                <button
+                                    key={sheet.key}
+                                    className={classNames(["tab", sheet.isActive && "is-active"])}
+                                    data-role="sheet-tab"
+                                    title={sheet.label}
+                                    type="button"
+                                    onClick={() => setSheet(sheet.key)}
+                                    onContextMenu={(event) => {
+                                        event.preventDefault();
+                                        setIsOverflowOpen(false);
+                                        openTabContextMenu(sheet.key, event.clientX, event.clientY);
+                                    }}
+                                >
+                                    {hasPending ? <PendingMarker extraClass="tab__marker" /> : null}
+                                    <span className="tab__label">{sheet.label}</span>
+                                </button>
+                            );
+                        })}
+                    </div>
+                    {tabLayout.hasOverflow ? (
+                        <div
+                            ref={overflowRef}
+                            className="tabs__overflow"
+                            data-role="sheet-tab-overflow"
+                            onContextMenu={(event) => {
+                                event.preventDefault();
+                            }}
+                        >
+                            <button
+                                aria-label={STRINGS.moreSheets}
+                                aria-expanded={isOverflowOpen}
+                                aria-haspopup="menu"
+                                className={classNames([
+                                    "tab",
+                                    "tab--overflowTrigger",
+                                    isOverflowOpen && "is-active",
+                                ])}
+                                title={STRINGS.moreSheets}
+                                type="button"
+                                onClick={() => {
+                                    closeContextMenu({ refresh: false });
+                                    setIsOverflowOpen((open) => !open);
+                                }}
+                            >
+                                <span className="codicon codicon-more tab__icon" aria-hidden />
+                                <span className="tabs__overflowCount" aria-hidden>
+                                    {tabLayout.overflowTabs.length}
+                                </span>
+                            </button>
+                            {isOverflowOpen ? (
+                                <div
+                                    className="tabs__overflowMenu"
+                                    data-role="sheet-tab-overflow"
+                                    role="menu"
+                                >
+                                    {tabLayout.overflowTabs.map((sheet: EditorSheetTabView) => {
+                                        const hasPending = pendingSummary.sheetKeys.has(sheet.key);
+
+                                        return (
+                                            <button
+                                                key={sheet.key}
+                                                className="context-menu__item tabs__overflowItem"
+                                                role="menuitem"
+                                                title={sheet.label}
+                                                type="button"
+                                                onClick={() => setSheet(sheet.key)}
+                                                onContextMenu={(event) => {
+                                                    event.preventDefault();
+                                                    setIsOverflowOpen(false);
+                                                    openTabContextMenu(
+                                                        sheet.key,
+                                                        event.clientX,
+                                                        event.clientY
+                                                    );
+                                                }}
+                                            >
+                                                {hasPending ? (
+                                                    <PendingMarker extraClass="tab__marker" />
+                                                ) : null}
+                                                <span className="tabs__overflowLabel">
+                                                    {sheet.label}
+                                                </span>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            ) : null}
+                        </div>
+                    ) : null}
+                </div>
+            </div>
+            <div ref={measureRef} aria-hidden className="tabs__measure">
+                {currentModel.sheets.map((sheet: EditorSheetTabView) => {
+                    const hasPending = pendingSummary.sheetKeys.has(sheet.key);
+
+                    return (
+                        <button
+                            key={sheet.key}
+                            className={classNames([
+                                "tab",
+                                "tabs__measureTab",
+                                sheet.isActive && "is-active",
+                            ])}
+                            data-role="sheet-tab-measure"
+                            data-sheet-key={sheet.key}
+                            tabIndex={-1}
+                            type="button"
+                        >
+                            {hasPending ? <PendingMarker extraClass="tab__marker" /> : null}
+                            <span className="tab__label">{sheet.label}</span>
+                        </button>
+                    );
+                })}
+                <button
+                    aria-label={STRINGS.moreSheets}
+                    className="tab tab--overflowTrigger tabs__measureOverflow"
+                    data-role="sheet-tab-overflow-trigger-measure"
+                    tabIndex={-1}
+                    type="button"
+                >
+                    <span className="codicon codicon-more tab__icon" aria-hidden />
+                    <span className="tabs__overflowCount" aria-hidden>
+                        {Math.max(1, tabLayout.overflowTabs.length)}
+                    </span>
+                </button>
+            </div>
         </div>
     );
 }
