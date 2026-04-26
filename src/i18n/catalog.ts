@@ -159,6 +159,9 @@ export const RUNTIME_MESSAGES = {
             invalidCellReference:
                 "Unable to locate that cell. Use A1 or Sheet1!B2 and stay within the workbook range.",
             invalidSearchPattern: "The search pattern is invalid.",
+            searchMatchFound: "Found at {address}.",
+            searchMatchFoundInSelection: "Found at {address} in selected range {range}.",
+            searchMatchSummary: "Match {index} of {count}.",
             searchRegex: "Use Regular Expression",
             searchMatchCase: "Match Case",
             searchWholeWord: "Match Whole Word",
@@ -271,6 +274,9 @@ export const RUNTIME_MESSAGES = {
             invalidCellReference:
                 "无法定位该单元格，请使用 A1 或 Sheet1!B2 格式，并确保目标在当前工作簿范围内。",
             invalidSearchPattern: "搜索表达式无效。",
+            searchMatchFound: "已定位到 {address}。",
+            searchMatchFoundInSelection: "已在选定区域 {range} 中定位到 {address}。",
+            searchMatchSummary: "第 {index} / {count} 个匹配项。",
             searchRegex: "使用正则表达式",
             searchMatchCase: "区分大小写",
             searchWholeWord: "匹配整个单词",

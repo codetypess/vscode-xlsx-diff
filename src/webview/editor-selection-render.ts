@@ -13,6 +13,18 @@ export interface SelectionPositionLike {
     columnNumber: number;
 }
 
+export function isSelectionFocusCell(
+    currentSelection: SelectionPositionLike | null,
+    rowNumber: number,
+    columnNumber: number
+): boolean {
+    return Boolean(
+        currentSelection &&
+            currentSelection.rowNumber === rowNumber &&
+            currentSelection.columnNumber === columnNumber
+    );
+}
+
 export function shouldUseLocalSimpleSelectionUpdate({
     hasNextCell,
     hasModel,
@@ -47,4 +59,16 @@ export function shouldSyncLocalSelectionDomFromModelSelection(
         anchor.rowNumber === previousCell.rowNumber &&
         anchor.columnNumber === previousCell.columnNumber
     );
+}
+
+export function shouldResetInvisibleSelectionAnchor({
+    hasSelectionRangeOverride,
+    hasExpandedSelection,
+    isAnchorVisible,
+}: {
+    hasSelectionRangeOverride: boolean;
+    hasExpandedSelection: boolean;
+    isAnchorVisible: boolean;
+}): boolean {
+    return !hasSelectionRangeOverride && !hasExpandedSelection && !isAnchorVisible;
 }

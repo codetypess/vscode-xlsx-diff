@@ -475,6 +475,8 @@ export class XlsxEditorPanel {
                         status: "matched",
                         scope: message.scope,
                         match: result.match,
+                        matchCount: result.matchCount,
+                        matchIndex: result.matchIndex,
                     });
                     return;
                 }

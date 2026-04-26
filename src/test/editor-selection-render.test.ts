@@ -3,6 +3,7 @@
 
 import * as assert from "assert";
 import {
+    isSelectionFocusCell,
     shouldResetInvisibleSelectionAnchor,
     shouldSyncLocalSelectionDomFromModelSelection,
     shouldUseLocalSimpleSelectionUpdate,
@@ -34,6 +35,17 @@ suite("Editor selection render helpers", () => {
                 isSimpleSelection: true,
                 forceRender: true,
             }),
+            false
+        );
+    });
+
+    test("marks the current selection cell as the focus cell", () => {
+        assert.strictEqual(
+            isSelectionFocusCell({ rowNumber: 7, columnNumber: 3 }, 7, 3),
+            true
+        );
+        assert.strictEqual(
+            isSelectionFocusCell({ rowNumber: 7, columnNumber: 3 }, 7, 4),
             false
         );
     });

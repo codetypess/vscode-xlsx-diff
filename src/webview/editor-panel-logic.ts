@@ -23,6 +23,11 @@ interface SearchableEditorCell {
     formula: string | null;
 }
 
+interface SearchMatchContext {
+    effectiveScope: EditorSearchScope;
+    matches: EditorSearchMatch[];
+}
+
 export function createEditorSearchPattern(query: string, options: SearchOptions): RegExp {
     const source = options.isRegexp ? query.trim() : escapeRegex(query.trim());
     const wrappedSource = options.wholeWord ? `\\b(?:${source})\\b` : source;
@@ -75,11 +80,10 @@ function getSearchableEditorCells(
     return [...cells.values()];
 }
 
-export function findEditorSearchMatch(
+function getEditorSearchMatchContext(
     sheetEntries: WorkingSheetEntry[],
     state: EditorPanelState,
     query: string,
-    direction: "next" | "prev",
     options: SearchOptions,
     searchContext: {
         pendingEdits?: CellEdit[];
@@ -91,7 +95,7 @@ export function findEditorSearchMatch(
             endColumn: number;
         };
     } = {}
-): EditorSearchMatch | null {
+): SearchMatchContext | null {
     const normalizedQuery = query.trim();
     if (!normalizedQuery) {
         return null;
@@ -141,6 +145,39 @@ export function findEditorSearchMatch(
 
         return left.columnNumber - right.columnNumber;
     });
+
+    return {
+        effectiveScope,
+        matches,
+    };
+}
+
+export function findEditorSearchMatch(
+    sheetEntries: WorkingSheetEntry[],
+    state: EditorPanelState,
+    query: string,
+    direction: "next" | "prev",
+    options: SearchOptions,
+    searchContext: {
+        pendingEdits?: CellEdit[];
+        scope?: EditorSearchScope;
+        selectionRange?: {
+            startRow: number;
+            endRow: number;
+            startColumn: number;
+            endColumn: number;
+        };
+    } = {}
+): EditorSearchMatch | null {
+    const matchContext = getEditorSearchMatchContext(sheetEntries, state, query, options, searchContext);
+    if (!matchContext) {
+        return null;
+    }
+    const { effectiveScope, matches } = matchContext;
+    const activeSheetEntry = getActiveSearchSheetEntry(sheetEntries, state);
+    if (!activeSheetEntry) {
+        return null;
+    }
 
     const selectionOnCurrentSheet =
         state.selectedCell &&
@@ -204,6 +241,21 @@ export function resolveEditorSearchResult(
     } = {}
 ): EditorSearchResult {
     try {
+        const matchContext = getEditorSearchMatchContext(
+            sheetEntries,
+            state,
+            request.query,
+            request.options,
+            {
+                pendingEdits: searchContext.pendingEdits,
+                scope: request.scope,
+                selectionRange: request.selectionRange,
+            }
+        );
+        if (!matchContext) {
+            return { status: "no-match" };
+        }
+
         const match = findEditorSearchMatch(
             sheetEntries,
             state,
@@ -217,7 +269,23 @@ export function resolveEditorSearchResult(
             }
         );
 
-        return match ? { status: "matched", match } : { status: "no-match" };
+        if (!match) {
+            return { status: "no-match" };
+        }
+
+        const matchIndex = matchContext.matches.findIndex(
+            (candidate) =>
+                candidate.sheetKey === match.sheetKey &&
+                candidate.rowNumber === match.rowNumber &&
+                candidate.columnNumber === match.columnNumber
+        );
+
+        return {
+            status: "matched",
+            match,
+            matchCount: matchContext.matches.length,
+            matchIndex: matchIndex >= 0 ? matchIndex + 1 : undefined,
+        };
     } catch {
         return { status: "invalid-pattern" };
     }

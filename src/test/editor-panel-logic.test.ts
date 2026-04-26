@@ -219,6 +219,47 @@ suite("Editor panel logic", () => {
         assert.strictEqual(result.status, "invalid-pattern");
     });
 
+    test("search result includes the current match index and total count", () => {
+        const workbook = createWorkbook("editor.xlsx", [
+            createSheet("Sheet1", [
+                createCell(1, 1, "alpha"),
+                createCell(2, 1, "alpha"),
+                createCell(4, 1, "alpha"),
+            ]),
+        ]);
+        const sheetEntries = createWorkingSheetEntries(workbook);
+        const state: EditorPanelState = {
+            activeSheetKey: "sheet:0",
+            selectedCell: { rowNumber: 2, columnNumber: 1 },
+        };
+
+        const result = resolveEditorSearchResult(
+            sheetEntries,
+            state,
+            {
+                query: "alpha",
+                direction: "next",
+                options: {
+                    isRegexp: false,
+                    matchCase: false,
+                    wholeWord: false,
+                },
+                scope: "sheet",
+            }
+        );
+
+        assert.deepStrictEqual(result, {
+            status: "matched",
+            match: {
+                sheetKey: "sheet:0",
+                rowNumber: 4,
+                columnNumber: 1,
+            },
+            matchCount: 3,
+            matchIndex: 3,
+        });
+    });
+
     test("goto cell resolves sheet names case-insensitively and rejects out-of-range cells", () => {
         const workbook = createWorkbook("editor.xlsx", [
             createSheet("Sheet1", [createCell(1, 1, "alpha")], { rowCount: 3, columnCount: 3 }),

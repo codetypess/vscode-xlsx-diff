@@ -3,7 +3,7 @@ import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import type { CellSnapshot, EditorRenderModel, EditorSheetTabView } from "../core/model/types";
 import { createCellKey, getColumnLabel } from "../core/model/cells";
-import { RUNTIME_MESSAGES } from "../i18n/catalog";
+import { formatI18nMessage, RUNTIME_MESSAGES } from "../i18n/catalog";
 import {
     EDITOR_VIRTUAL_COLUMN_WIDTH,
     EDITOR_VIRTUAL_HEADER_HEIGHT,
@@ -17,6 +17,8 @@ import {
     getVisibleFrozenEditorCounts,
 } from "./editor-virtual-grid";
 import {
+    isSelectionFocusCell,
+    shouldResetInvisibleSelectionAnchor,
     shouldSyncLocalSelectionDomFromModelSelection,
     shouldUseLocalSimpleSelectionUpdate,
 } from "./editor-selection-render";
@@ -1393,12 +1395,14 @@ function setSelectedCellLocal(
         syncHost = true,
         anchorCell,
         selectionRange,
+        clearSearchFeedback = true,
         forceRender = false,
     }: {
         reveal?: boolean;
         syncHost?: boolean;
         anchorCell?: CellPosition | null;
         selectionRange?: CellRange | null;
+        clearSearchFeedback?: boolean;
         forceRender?: boolean;
     } = {}
 ): void {
@@ -1408,10 +1412,11 @@ function setSelectedCellLocal(
         nextCell && nextAnchorCell
             ? (selectionRange ?? createSelectionRange(nextAnchorCell, nextCell))
             : null;
+    const shouldClearSearchFeedback = clearSearchFeedback && Boolean(searchFeedback);
     const canUseLocalUpdate = canUseLocalSimpleSelectionUpdate(nextCell, {
         anchorCell: nextAnchorCell,
         selectionRange: nextSelectionRange,
-        forceRender,
+        forceRender: forceRender || shouldClearSearchFeedback,
     });
 
     selectedCell = nextCell;
@@ -1419,6 +1424,9 @@ function setSelectedCellLocal(
     selectionRangeOverride = selectionRange ?? null;
     suppressAutoSelection = nextCell === null;
     clearBrowserTextSelection();
+    if (shouldClearSearchFeedback) {
+        searchFeedback = null;
+    }
 
     if (syncHost) {
         syncSelectedCellToHost();
@@ -1489,7 +1497,13 @@ function prepareSelectionForRender({
     pendingSelectionAfterRender = null;
 
     if (isCellVisible(selectedCell)) {
-        if (!selectionRangeOverride && !isCellVisible(selectionAnchorCell)) {
+        if (
+            shouldResetInvisibleSelectionAnchor({
+                hasSelectionRangeOverride: Boolean(selectionRangeOverride),
+                hasExpandedSelection: hasExpandedSelection(),
+                isAnchorVisible: isCellVisible(selectionAnchorCell),
+            })
+        ) {
             selectionAnchorCell = selectedCell;
         }
         syncSelectedCellToHost();
@@ -2142,6 +2156,33 @@ function submitSearch(direction: "next" | "prev"): void {
     });
 }
 
+function getSearchMatchFeedbackMessage(
+    match: { rowNumber: number; columnNumber: number },
+    scope: EditorSearchScope,
+    selectionRange: CellRange | null,
+    matchCount?: number,
+    matchIndex?: number
+): string {
+    const address = getCellAddressLabel(match.rowNumber, match.columnNumber);
+    const locationMessage =
+        scope === "selection" && selectionRange
+            ? formatI18nMessage(STRINGS.searchMatchFoundInSelection, {
+                  address,
+                  range: getSelectionRangeAddress(selectionRange),
+              })
+            : formatI18nMessage(STRINGS.searchMatchFound, { address });
+    if (!matchCount || !matchIndex) {
+        return locationMessage;
+    }
+
+    const summaryMessage = formatI18nMessage(STRINGS.searchMatchSummary, {
+        count: matchCount,
+        index: matchIndex,
+    });
+
+    return `${locationMessage} ${summaryMessage}`;
+}
+
 function handleSearchResult(message: EditorSearchResultMessage): void {
     if (message.status !== "matched" || !message.match) {
         searchFeedback = message;
@@ -2158,7 +2199,16 @@ function handleSearchResult(message: EditorSearchResultMessage): void {
         columnNumber: message.match.columnNumber,
     };
 
-    searchFeedback = null;
+    searchFeedback = {
+        ...message,
+        message: getSearchMatchFeedbackMessage(
+            message.match,
+            message.scope,
+            preservedSelectionRange,
+            message.matchCount,
+            message.matchIndex
+        ),
+    };
     setSelectedCellLocal(
         {
             rowNumber: message.match.rowNumber,
@@ -2172,6 +2222,7 @@ function handleSearchResult(message: EditorSearchResultMessage): void {
                     ? (selectionAnchorCell ?? selectedCell ?? fallbackAnchor)
                     : undefined,
             selectionRange: preservedSelectionRange ?? undefined,
+            clearSearchFeedback: false,
             forceRender: true,
         }
     );
@@ -2410,7 +2461,9 @@ function SearchPanel({
     const hasSearchableGrid =
         currentModel.activeSheet.rowCount > 0 && currentModel.activeSheet.columnCount > 0;
     const feedbackToneClass =
-        searchFeedback?.status === "invalid-pattern"
+        searchFeedback?.status === "matched"
+            ? "search-strip__feedback--success"
+            : searchFeedback?.status === "invalid-pattern"
             ? "search-strip__feedback--error"
             : searchFeedback?.status === "no-match"
               ? "search-strip__feedback--warn"
@@ -3428,7 +3481,6 @@ const EditorVirtualCell = React.memo(function EditorVirtualCell({
     selectionRange,
     activeRowNumber,
     activeColumnNumber,
-    hasExpandedRange,
     currentSelection,
     activeEditingCell,
     pendingEdit,
@@ -3441,7 +3493,6 @@ const EditorVirtualCell = React.memo(function EditorVirtualCell({
     selectionRange: CellRange | null;
     activeRowNumber: number | null;
     activeColumnNumber: number | null;
-    hasExpandedRange: boolean;
     currentSelection: CellPosition | null;
     activeEditingCell: EditingCell | null;
     pendingEdit: PendingEdit | undefined;
@@ -3458,10 +3509,7 @@ const EditorVirtualCell = React.memo(function EditorVirtualCell({
     const value = pendingEdit?.value ?? cell.value;
     const formula = pendingEdit ? null : cell.formula;
     const editable = Boolean(currentModel.canEdit && !cell.formula);
-    const isPrimarySelection =
-        !hasExpandedRange &&
-        currentSelection?.rowNumber === rowNumber &&
-        currentSelection.columnNumber === columnNumber;
+    const isPrimarySelection = isSelectionFocusCell(currentSelection, rowNumber, columnNumber);
     const isSelected = isCellWithinSelectionRange(selectionRange, rowNumber, columnNumber);
     const isActiveRow = isActiveHighlightRow(activeRowNumber, rowNumber);
     const isActiveColumn = isActiveHighlightColumn(activeColumnNumber, columnNumber);
@@ -3563,7 +3611,6 @@ const EditorVirtualCell = React.memo(function EditorVirtualCell({
     previous.left === next.left &&
     previous.activeRowNumber === next.activeRowNumber &&
     previous.activeColumnNumber === next.activeColumnNumber &&
-    previous.hasExpandedRange === next.hasExpandedRange &&
     areSelectionRangesEqual(previous.selectionRange, next.selectionRange) &&
     areCellPositionsEqual(previous.currentSelection, next.currentSelection) &&
     areEditingCellsEqual(previous.activeEditingCell, next.activeEditingCell) &&
@@ -3585,7 +3632,6 @@ function EditorVirtualGrid({
         view.revision
     );
     const selectionRange = getSelectionRange();
-    const hasExpandedRange = hasExpandedSelection(selectionRange);
     const currentSelection = selectedCell;
     const activeHighlightCell = getActiveHighlightCell();
     const activeRowNumber = activeHighlightCell?.rowNumber ?? null;
@@ -3623,7 +3669,6 @@ function EditorVirtualGrid({
                 selectionRange={selectionRange}
                 activeRowNumber={activeRowNumber}
                 activeColumnNumber={activeColumnNumber}
-                hasExpandedRange={hasExpandedRange}
                 currentSelection={currentSelection}
                 activeEditingCell={activeEditingCell}
                 pendingEdit={pendingEdit}

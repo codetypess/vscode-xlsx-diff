@@ -34,6 +34,8 @@ export interface EditorSearchRequest {
 export interface EditorSearchResult {
     status: EditorSearchStatus;
     match?: EditorSearchMatch;
+    matchCount?: number;
+    matchIndex?: number;
 }
 
 export interface EditorSearchResultMessage extends EditorSearchResult {
@@ -118,6 +120,9 @@ export interface EditorPanelStrings {
     noSearchMatches: string;
     invalidCellReference: string;
     invalidSearchPattern: string;
+    searchMatchFound: string;
+    searchMatchFoundInSelection: string;
+    searchMatchSummary: string;
     searchRegex: string;
     searchMatchCase: string;
     searchWholeWord: string;
