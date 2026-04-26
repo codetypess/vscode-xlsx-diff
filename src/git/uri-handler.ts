@@ -1,10 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as vscode from "vscode";
-
-function toErrorMessage(error: unknown): string {
-    return error instanceof Error ? error.message : String(error);
-}
+import { toErrorMessage } from "../error-message";
 
 async function ensureWorkbookFile(filePath: string, label: string): Promise<vscode.Uri> {
     const normalizedPath = path.resolve(filePath);

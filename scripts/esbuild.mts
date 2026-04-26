@@ -45,7 +45,7 @@ async function main() {
     });
 
     const editorWebviewCtx = await context({
-        entryPoints: ["src/webview/editor-panel/editor-webview.ts"],
+        entryPoints: ["src/webview/editor-panel/editor-panel-webview.ts"],
         bundle: true,
         format: "iife",
         minify: production,
@@ -58,14 +58,14 @@ async function main() {
     });
 
     const diffPanelWebviewCtx = await context({
-        entryPoints: ["src/webview/diff-panel/panel.ts"],
+        entryPoints: ["src/webview/diff-panel/diff-panel-webview.ts"],
         bundle: true,
         format: "iife",
         minify: production,
         sourcemap: !production,
         sourcesContent: false,
         platform: "browser",
-        outfile: "media/panel.js",
+        outfile: "media/diff-panel.js",
         logLevel: "silent",
         plugins: [esbuildProblemMatcherPlugin],
     });

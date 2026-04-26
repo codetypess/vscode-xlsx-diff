@@ -6,9 +6,11 @@ import { loadWorkbookSnapshot } from "../../core/fastxlsx/load-workbook-snapshot
 import { writeCellValues, type CellEdit } from "../../core/fastxlsx/write-cell-value";
 import type { WorkbookDiffModel } from "../../core/model/types";
 import { getHtmlLanguageTag } from "../../display-language";
+import { toErrorMessage } from "../../error-message";
 import { getRuntimeMessages, type DiffPanelStrings } from "../../i18n";
 import { getWorkbookResourceName } from "../../workbook/resource-uri";
 import { withWorkbookSaveProgress } from "../../workbook/save-progress";
+import { createWebviewNonce, escapeWatcherGlobSegment } from "../webview-utils";
 import { createDiffPanelRenderModel } from "./diff-panel-model";
 import type { DiffPanelRenderModel } from "./diff-panel-types";
 
@@ -27,18 +29,6 @@ type WebviewMessage =
       }
     | { type: "swap" }
     | { type: "reload" };
-
-function getNonce(): string {
-    return Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
-}
-
-function toErrorMessage(error: unknown): string {
-    return error instanceof Error ? error.message : String(error);
-}
-
-function escapeWatcherGlobSegment(value: string): string {
-    return value.replace(/[{}\[\]*?]/g, "[$&]");
-}
 
 function getWebviewStrings(): DiffPanelStrings {
     return getRuntimeMessages().diffPanel;
@@ -286,11 +276,11 @@ export class XlsxDiffPanel {
 
     private getHtml(): string {
         const webview = this.panel.webview;
-        const nonce = getNonce();
+        const nonce = createWebviewNonce();
         const webviewStrings = getWebviewStrings();
         const strings = JSON.stringify(webviewStrings).replace(/</g, "\\u003c");
         const scriptUri = webview.asWebviewUri(
-            vscode.Uri.joinPath(this.extensionUri, "media", "panel.js")
+            vscode.Uri.joinPath(this.extensionUri, "media", "diff-panel.js")
         );
         const styleUri = webview.asWebviewUri(
             vscode.Uri.joinPath(this.extensionUri, "media", "diff-panel.css")

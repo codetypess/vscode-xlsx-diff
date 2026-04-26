@@ -13,9 +13,11 @@ import type {
     WorkbookSnapshot,
 } from "../../core/model/types";
 import { getHtmlLanguageTag } from "../../display-language";
+import { toErrorMessage } from "../../error-message";
 import { getRuntimeMessages } from "../../i18n";
 import { rememberRecentWorkbookResourceUri } from "../../scm/recent-workbook-resource-context";
 import { getWorkbookResourceName } from "../../workbook/resource-uri";
+import { createWebviewNonce, escapeWatcherGlobSegment } from "../webview-utils";
 import {
     getInsertEditorSheetIndex,
     getNewEditorSheetName,
@@ -56,18 +58,6 @@ import {
 } from "./editor-render-model";
 import { hasLockedView } from "../view-lock";
 import { XlsxEditorDocument } from "./xlsx-editor-document";
-
-function getNonce(): string {
-    return Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
-}
-
-function toErrorMessage(error: unknown): string {
-    return error instanceof Error ? error.message : String(error);
-}
-
-function escapeWatcherGlobSegment(value: string): string {
-    return value.replace(/[{}\[\]*?]/g, "[$&]");
-}
 
 function getWebviewStrings(): EditorPanelStrings {
     return getRuntimeMessages().editorPanel;
@@ -407,14 +397,14 @@ export class XlsxEditorPanel {
 
     private getHtml(): string {
         const webview = this.panel.webview;
-        const nonce = getNonce();
+        const nonce = createWebviewNonce();
         const webviewStrings = getWebviewStrings();
         const strings = JSON.stringify(webviewStrings).replace(/</g, "\\u003c");
         const scriptUri = webview.asWebviewUri(
             vscode.Uri.joinPath(this.extensionUri, "media", "editor-panel.js")
         );
         const styleUri = webview.asWebviewUri(
-            vscode.Uri.joinPath(this.extensionUri, "media", "panel.css")
+            vscode.Uri.joinPath(this.extensionUri, "media", "editor-panel.css")
         );
         const codiconStyleUri = webview.asWebviewUri(
             vscode.Uri.joinPath(this.extensionUri, "media", "codicons", "codicon.css")
