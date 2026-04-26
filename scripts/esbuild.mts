@@ -45,7 +45,7 @@ async function main() {
     });
 
     const editorWebviewCtx = await context({
-        entryPoints: ["src/webview/editor-webview.ts"],
+        entryPoints: ["src/webview/editor-panel/editor-webview.ts"],
         bundle: true,
         format: "iife",
         minify: production,
@@ -58,7 +58,7 @@ async function main() {
     });
 
     const diffPanelWebviewCtx = await context({
-        entryPoints: ["src/webview/panel.ts"],
+        entryPoints: ["src/webview/diff-panel/panel.ts"],
         bundle: true,
         format: "iife",
         minify: production,

@@ -1,17 +1,21 @@
 import * as path from "node:path";
 import * as vscode from "vscode";
-import { DEFAULT_PAGE_SIZE } from "../constants";
-import { loadWorkbookSnapshot } from "../core/fastxlsx/load-workbook-snapshot";
+import { DEFAULT_PAGE_SIZE } from "../../constants";
+import { loadWorkbookSnapshot } from "../../core/fastxlsx/load-workbook-snapshot";
 import {
     type CellEdit,
     type SheetEdit,
     type SheetViewEdit,
-} from "../core/fastxlsx/write-cell-value";
-import type { EditorPanelState, EditorRenderModel, WorkbookSnapshot } from "../core/model/types";
-import { getHtmlLanguageTag } from "../display-language";
-import { getRuntimeMessages } from "../i18n";
-import { rememberRecentWorkbookResourceUri } from "../scm/recent-workbook-resource-context";
-import { getWorkbookResourceName } from "../workbook/resource-uri";
+} from "../../core/fastxlsx/write-cell-value";
+import type {
+    EditorPanelState,
+    EditorRenderModel,
+    WorkbookSnapshot,
+} from "../../core/model/types";
+import { getHtmlLanguageTag } from "../../display-language";
+import { getRuntimeMessages } from "../../i18n";
+import { rememberRecentWorkbookResourceUri } from "../../scm/recent-workbook-resource-context";
+import { getWorkbookResourceName } from "../../workbook/resource-uri";
 import {
     getInsertEditorSheetIndex,
     getNewEditorSheetName,
@@ -50,7 +54,7 @@ import {
     setActiveEditorSheet,
     setSelectedEditorCell,
 } from "./editor-render-model";
-import { hasLockedView } from "./view-lock";
+import { hasLockedView } from "../view-lock";
 import { XlsxEditorDocument } from "./xlsx-editor-document";
 
 function getNonce(): string {

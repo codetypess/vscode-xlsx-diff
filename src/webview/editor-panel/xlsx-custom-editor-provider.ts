@@ -1,8 +1,8 @@
 import * as vscode from "vscode";
-import { WEBVIEW_TYPE_EDITOR_PANEL } from "../constants";
-import { type WorkbookEditState } from "../core/fastxlsx/write-cell-value";
-import { rememberRecentWorkbookResourceUri } from "../scm/recent-workbook-resource-context";
-import { withWorkbookSaveProgress } from "../workbook/save-progress";
+import { WEBVIEW_TYPE_EDITOR_PANEL } from "../../constants";
+import { type WorkbookEditState } from "../../core/fastxlsx/write-cell-value";
+import { rememberRecentWorkbookResourceUri } from "../../scm/recent-workbook-resource-context";
+import { withWorkbookSaveProgress } from "../../workbook/save-progress";
 import { readEditorBackupState, writeEditorBackupState } from "./editor-backup-state";
 import { XlsxEditorDocument } from "./xlsx-editor-document";
 

@@ -5,7 +5,7 @@ import * as assert from "assert";
 import {
     getToolbarCellEditTargetKey,
     shouldResetToolbarCellValueDraft,
-} from "../webview/editor-toolbar-input";
+} from "../webview/editor-panel/editor-toolbar-input";
 
 suite("Editor toolbar input helpers", () => {
     test("keeps the draft while editing the same cell", () => {

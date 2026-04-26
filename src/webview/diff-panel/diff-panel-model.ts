@@ -1,12 +1,12 @@
-import { createCellKey, getCellAddress, getColumnLabel } from "../core/model/cells";
+import { createCellKey, getCellAddress, getColumnLabel } from "../../core/model/cells";
 import type {
     CellDiffStatus,
     CellSnapshot,
     SheetDiffModel,
     WorkbookDiffModel,
     WorkbookSnapshot,
-} from "../core/model/types";
-import { getRuntimeMessages } from "../i18n";
+} from "../../core/model/types";
+import { getRuntimeMessages } from "../../i18n";
 import type {
     DiffPanelFileView,
     DiffPanelRenderModel,

@@ -1,4 +1,4 @@
-import { DEFAULT_EDITOR_WINDOW_OVERSCAN } from "../constants";
+import { DEFAULT_EDITOR_WINDOW_OVERSCAN } from "../../constants";
 
 export const EDITOR_VIRTUAL_ROW_HEIGHT = 28;
 export const EDITOR_VIRTUAL_COLUMN_WIDTH = 120;

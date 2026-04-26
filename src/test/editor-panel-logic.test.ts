@@ -12,7 +12,7 @@ import {
     resolveEditorSearchResult,
     resolveEditorCellReference,
     validateEditorSheetName,
-} from "../webview/editor-panel-logic";
+} from "../webview/editor-panel/editor-panel-logic";
 import {
     applyGridSheetEditToSheet,
     captureStructuralSnapshot,
@@ -23,7 +23,7 @@ import {
     mapPendingCellEditsToWebview,
     restoreStructuralSnapshot,
     shiftPendingCellEditsForGridSheetEdit,
-} from "../webview/editor-panel-state";
+} from "../webview/editor-panel/editor-panel-state";
 
 function createCell(
     rowNumber: number,

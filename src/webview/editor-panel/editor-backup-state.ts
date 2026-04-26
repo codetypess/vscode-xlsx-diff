@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import type { WorkbookEditState } from "../core/fastxlsx/write-cell-value";
+import type { WorkbookEditState } from "../../core/fastxlsx/write-cell-value";
 
 const BACKUP_STATE_TYPE = "xlsx-diff-editor-backup";
 const BACKUP_STATE_VERSION = 1;

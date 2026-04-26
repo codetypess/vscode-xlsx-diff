@@ -1,4 +1,4 @@
-import type { CellDiffStatus } from "../core/model/types";
+import type { CellDiffStatus } from "../../core/model/types";
 
 export interface DiffPanelFileView {
     title: string;

@@ -12,7 +12,7 @@ import {
     writeWorkbookEditsToDestination,
     type WorkbookEditState,
 } from "../core/fastxlsx/write-cell-value";
-import { XlsxEditorDocument } from "../webview/xlsx-editor-document";
+import { XlsxEditorDocument } from "../webview/editor-panel";
 
 suite("Workbook edit writer", () => {
     test("batches workbook mutations before saving", async () => {

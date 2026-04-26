@@ -8,7 +8,7 @@ import {
     createInitialEditorPanelState,
     setActiveEditorSheet,
     setSelectedEditorCell,
-} from "../webview/editor-render-model";
+} from "../webview/editor-panel/editor-render-model";
 
 function createCell(rowNumber: number, columnNumber: number, displayValue: string): CellSnapshot {
     return {

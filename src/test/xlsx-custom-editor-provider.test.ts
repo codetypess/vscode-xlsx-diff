@@ -3,9 +3,11 @@
 
 import * as assert from "assert";
 import * as vscode from "vscode";
-import { XlsxEditorPanel } from "../webview/editor-panel";
-import { XlsxCustomEditorProvider } from "../webview/xlsx-custom-editor-provider";
-import { XlsxEditorDocument } from "../webview/xlsx-editor-document";
+import {
+    XlsxCustomEditorProvider,
+    XlsxEditorDocument,
+    XlsxEditorPanel,
+} from "../webview/editor-panel";
 
 suite("Xlsx custom editor provider", () => {
     test("save clears pending edits without re-emitting a dirty change event", async () => {

@@ -23,7 +23,7 @@
 		"src/**/*.ts"
 	],
 	"exclude": [
-		"src/webview/panel.ts",
-		"src/webview/editor-webview.ts"
+        "src/webview/diff-panel/panel.ts",
+        "src/webview/editor-panel/editor-webview.ts"
 	]
 }

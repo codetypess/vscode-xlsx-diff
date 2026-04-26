@@ -4,14 +4,16 @@ import {
     type SheetEdit,
     type SheetViewEdit,
     type WorkbookEditState,
-} from "../core/fastxlsx/write-cell-value";
+} from "../../core/fastxlsx/write-cell-value";
 
 async function writePendingWorkbookEditsToDestination(
     sourceUri: vscode.Uri,
     destinationUri: vscode.Uri,
     edits: WorkbookEditState
 ): Promise<void> {
-    const { writeWorkbookEditsToDestination } = await import("../core/fastxlsx/write-cell-value");
+    const { writeWorkbookEditsToDestination } = await import(
+        "../../core/fastxlsx/write-cell-value"
+    );
     await writeWorkbookEditsToDestination(sourceUri, destinationUri, edits);
 }
 

@@ -14,7 +14,7 @@ import {
     getEditorScrollPositionForCell,
     getFrozenEditorCounts,
     getVisibleFrozenEditorCounts,
-} from "../webview/editor-virtual-grid";
+} from "../webview/editor-panel/editor-virtual-grid";
 
 suite("Editor virtual grid helpers", () => {
     test("creates a scrollable row window below frozen rows", () => {

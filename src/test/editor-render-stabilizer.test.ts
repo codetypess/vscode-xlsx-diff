@@ -3,7 +3,7 @@
 
 import * as assert from "assert";
 import type { EditorRenderModel, SheetFreezePaneSnapshot } from "../core/model/types";
-import { stabilizeIncomingRenderModel } from "../webview/editor-render-stabilizer";
+import { stabilizeIncomingRenderModel } from "../webview/editor-panel/editor-render-stabilizer";
 
 function createRenderModel(
     value: string,

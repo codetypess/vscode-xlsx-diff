@@ -7,7 +7,7 @@ import {
     notifyEditorToolbarSync,
     resetEditorToolbarSyncForTests,
     subscribeEditorToolbarSync,
-} from "../webview/editor-toolbar-sync";
+} from "../webview/editor-panel/editor-toolbar-sync";
 
 suite("Editor toolbar sync", () => {
     setup(() => {

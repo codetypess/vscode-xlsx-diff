@@ -2,7 +2,7 @@
 /// <reference types="node" />
 
 import * as assert from "assert";
-import { rebasePendingHistory } from "../webview/editor-pending-history";
+import { rebasePendingHistory } from "../webview/editor-panel/editor-pending-history";
 
 suite("Editor pending history", () => {
     test("rebases saved cells in undo and redo history to the current saved value", () => {

@@ -1,4 +1,4 @@
-import type { EditorRenderModel } from "../core/model/types";
+import type { EditorRenderModel } from "../../core/model/types";
 
 export function stabilizeIncomingRenderModel(
     previousModel: EditorRenderModel | null,

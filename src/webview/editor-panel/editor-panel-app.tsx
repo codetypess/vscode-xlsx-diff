@@ -1,9 +1,13 @@
 import * as React from "react";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
-import type { CellSnapshot, EditorRenderModel, EditorSheetTabView } from "../core/model/types";
-import { createCellKey, getColumnLabel } from "../core/model/cells";
-import { formatI18nMessage, RUNTIME_MESSAGES } from "../i18n/catalog";
+import type {
+    CellSnapshot,
+    EditorRenderModel,
+    EditorSheetTabView,
+} from "../../core/model/types";
+import { createCellKey, getColumnLabel } from "../../core/model/cells";
+import { formatI18nMessage, RUNTIME_MESSAGES } from "../../i18n/catalog";
 import {
     EDITOR_VIRTUAL_COLUMN_WIDTH,
     EDITOR_VIRTUAL_HEADER_HEIGHT,
@@ -39,7 +43,7 @@ import {
     shouldResetToolbarCellValueDraft,
     type ToolbarCellEditTarget,
 } from "./editor-toolbar-input";
-import { getMaxVisibleSheetTabsForWidth, partitionSheetTabs } from "./editor-sheet-tabs";
+import { getMaxVisibleSheetTabsForWidth, partitionSheetTabs } from "../editor-sheet-tabs";
 import type {
     EditorSearchResultMessage,
     EditorSearchScope,
@@ -52,7 +56,7 @@ import {
     type PendingHistoryEntry as HistoryEntry,
 } from "./editor-pending-history";
 import { stabilizeIncomingRenderModel } from "./editor-render-stabilizer";
-import { getFreezePaneCountsForCell, hasLockedView } from "./view-lock";
+import { getFreezePaneCountsForCell, hasLockedView } from "../view-lock";
 
 interface VsCodeApi {
     postMessage(message: OutgoingMessage): void;

@@ -7,7 +7,7 @@ import {
     shouldResetInvisibleSelectionAnchor,
     shouldSyncLocalSelectionDomFromModelSelection,
     shouldUseLocalSimpleSelectionUpdate,
-} from "../webview/editor-selection-render";
+} from "../webview/editor-panel/editor-selection-render";
 
 suite("Editor selection render helpers", () => {
     test("allows local selection updates when no full render is needed", () => {

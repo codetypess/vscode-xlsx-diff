@@ -1,14 +1,14 @@
 import * as path from "node:path";
 import * as vscode from "vscode";
-import { WEBVIEW_TYPE_DIFF_PANEL } from "../constants";
-import { buildWorkbookDiff } from "../core/diff/build-workbook-diff";
-import { loadWorkbookSnapshot } from "../core/fastxlsx/load-workbook-snapshot";
-import { writeCellValues, type CellEdit } from "../core/fastxlsx/write-cell-value";
-import type { WorkbookDiffModel } from "../core/model/types";
-import { getHtmlLanguageTag } from "../display-language";
-import { getRuntimeMessages, type DiffPanelStrings } from "../i18n";
-import { getWorkbookResourceName } from "../workbook/resource-uri";
-import { withWorkbookSaveProgress } from "../workbook/save-progress";
+import { WEBVIEW_TYPE_DIFF_PANEL } from "../../constants";
+import { buildWorkbookDiff } from "../../core/diff/build-workbook-diff";
+import { loadWorkbookSnapshot } from "../../core/fastxlsx/load-workbook-snapshot";
+import { writeCellValues, type CellEdit } from "../../core/fastxlsx/write-cell-value";
+import type { WorkbookDiffModel } from "../../core/model/types";
+import { getHtmlLanguageTag } from "../../display-language";
+import { getRuntimeMessages, type DiffPanelStrings } from "../../i18n";
+import { getWorkbookResourceName } from "../../workbook/resource-uri";
+import { withWorkbookSaveProgress } from "../../workbook/save-progress";
 import { createDiffPanelRenderModel } from "./diff-panel-model";
 import type { DiffPanelRenderModel } from "./diff-panel-types";
 

@@ -1,6 +1,6 @@
-import type { CellEdit } from "../core/fastxlsx/write-cell-value";
-import { createCellKey, getColumnNumber } from "../core/model/cells";
-import type { EditorPanelState } from "../core/model/types";
+import type { CellEdit } from "../../core/fastxlsx/write-cell-value";
+import { createCellKey, getColumnNumber } from "../../core/model/cells";
+import type { EditorPanelState } from "../../core/model/types";
 import { isCellWithinSelectionRange, type SelectionRange } from "./editor-selection-range";
 import type {
     EditorSearchDirection,

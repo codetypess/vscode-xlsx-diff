@@ -10,7 +10,7 @@ import {
 import { affectsDisplayLanguage } from "./display-language";
 import { XlsxDiffUriHandler } from "./git/uri-handler";
 import { registerScmWorkbookDiffInterceptor } from "./scm/scm-diff-interceptor";
-import { XlsxCustomEditorProvider } from "./webview/xlsx-custom-editor-provider";
+import { XlsxCustomEditorProvider } from "./webview/editor-panel";
 
 export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(

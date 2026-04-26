@@ -4,7 +4,7 @@
 import * as assert from "assert";
 import { buildWorkbookDiff } from "../core/diff/build-workbook-diff";
 import type { SheetSnapshot, WorkbookSnapshot } from "../core/model/types";
-import { createDiffPanelRenderModel } from "../webview/diff-panel-model";
+import { createDiffPanelRenderModel } from "../webview/diff-panel/diff-panel-model";
 
 function createWorkbook(overrides: Partial<WorkbookSnapshot>): WorkbookSnapshot {
     const sheet: SheetSnapshot = {

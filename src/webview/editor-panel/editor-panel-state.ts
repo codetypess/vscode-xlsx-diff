@@ -1,12 +1,12 @@
-import { createCellKey, getCellAddress } from "../core/model/cells";
-import { DEFAULT_PAGE_SIZE } from "../constants";
+import { createCellKey, getCellAddress } from "../../core/model/cells";
+import { DEFAULT_PAGE_SIZE } from "../../constants";
 import type {
     CellEdit,
     SheetEdit,
     SheetViewEdit,
     WorkbookEditState,
-} from "../core/fastxlsx/write-cell-value";
-import type { EditorPanelState, WorkbookSnapshot } from "../core/model/types";
+} from "../../core/fastxlsx/write-cell-value";
+import type { EditorPanelState, WorkbookSnapshot } from "../../core/model/types";
 import type {
     EditorPendingEdit,
     RestoredStructuralState,

@@ -2,7 +2,7 @@
 /// <reference types="node" />
 
 import * as assert from "assert";
-import { getDiffRowHeaderWidth } from "../webview/diff-grid-layout";
+import { getDiffRowHeaderWidth } from "../webview/diff-panel/diff-grid-layout";
 
 suite("Diff grid layout helpers", () => {
     test("keeps the default width for up to three-digit row numbers", () => {

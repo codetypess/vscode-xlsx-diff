@@ -3,8 +3,8 @@ import type {
     SheetEdit,
     SheetViewEdit,
     WorkbookEditState,
-} from "../core/fastxlsx/write-cell-value";
-import type { EditorPanelState, SheetSnapshot } from "../core/model/types";
+} from "../../core/fastxlsx/write-cell-value";
+import type { EditorPanelState, SheetSnapshot } from "../../core/model/types";
 import type { SelectionRange } from "./editor-selection-range";
 
 export interface SearchOptions {

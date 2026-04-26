@@ -1,4 +1,4 @@
-import { createCellKey, getColumnLabel } from "../core/model/cells";
+import { createCellKey, getColumnLabel } from "../../core/model/cells";
 import {
     type EditorPanelState,
     type EditorRenderModel,
@@ -7,8 +7,8 @@ import {
     type EditorSheetTabView,
     type SheetSnapshot,
     type WorkbookSnapshot,
-} from "../core/model/types";
-import { getRuntimeMessages } from "../i18n";
+} from "../../core/model/types";
+import { getRuntimeMessages } from "../../i18n";
 
 export interface EditorSheetEntry {
     key: string;

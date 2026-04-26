@@ -1,4 +1,4 @@
-import type { EditorPanelStrings } from "../webview/editor-panel-types";
+import type { EditorPanelStrings } from "../webview/editor-panel/editor-panel-types";
 
 export type I18nLanguage = "en" | "zh-CN";
 

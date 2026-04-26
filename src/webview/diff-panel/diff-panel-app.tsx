@@ -1,9 +1,9 @@
 import * as React from "react";
 import { createRoot } from "react-dom/client";
-import type { CellDiffStatus } from "../core/model/types";
-import { RUNTIME_MESSAGES } from "../i18n/catalog";
+import type { CellDiffStatus } from "../../core/model/types";
+import { RUNTIME_MESSAGES } from "../../i18n/catalog";
 import { getDiffRowHeaderWidth } from "./diff-grid-layout";
-import { getMaxVisibleSheetTabsForWidth, partitionSheetTabs } from "./editor-sheet-tabs";
+import { getMaxVisibleSheetTabsForWidth, partitionSheetTabs } from "../editor-sheet-tabs";
 import { getSelectionPreviewInlineDiff } from "./selection-preview-diff";
 import type {
     DiffPanelRenderModel,

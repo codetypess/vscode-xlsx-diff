@@ -2,7 +2,7 @@
 /// <reference types="node" />
 
 import * as assert from "assert";
-import { getSelectionPreviewInlineDiff } from "../webview/selection-preview-diff";
+import { getSelectionPreviewInlineDiff } from "../webview/diff-panel/selection-preview-diff";
 
 suite("Selection preview inline diff", () => {
     test("keeps identical text unhighlighted", () => {

@@ -7,7 +7,7 @@ import {
     createRowSelectionRange,
     createSelectionRange,
     hasExpandedSelectionRange,
-} from "../webview/editor-selection-range";
+} from "../webview/editor-panel/editor-selection-range";
 
 suite("Editor selection range helpers", () => {
     test("builds a rectangular range from two cells", () => {
