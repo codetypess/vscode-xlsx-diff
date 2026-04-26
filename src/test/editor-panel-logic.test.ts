@@ -3,7 +3,12 @@
 
 import * as assert from "assert";
 import { createCellKey, getCellAddress } from "../core/model/cells";
-import type { CellSnapshot, EditorPanelState, SheetSnapshot, WorkbookSnapshot } from "../core/model/types";
+import type {
+    CellSnapshot,
+    EditorPanelState,
+    SheetSnapshot,
+    WorkbookSnapshot,
+} from "../core/model/types";
 import {
     findEditorSearchMatch,
     getInsertEditorSheetIndex,
@@ -153,10 +158,7 @@ suite("Editor panel logic", () => {
 
     test("search matches pending edits before the saved snapshot", () => {
         const workbook = createWorkbook("editor.xlsx", [
-            createSheet("Sheet1", [
-                createCell(1, 1, "alpha"),
-                createCell(2, 1, "beta"),
-            ]),
+            createSheet("Sheet1", [createCell(1, 1, "alpha"), createCell(2, 1, "beta")]),
         ]);
         const sheetEntries = createWorkingSheetEntries(workbook);
         const state: EditorPanelState = {
@@ -203,20 +205,16 @@ suite("Editor panel logic", () => {
             selectedCell: { rowNumber: 1, columnNumber: 1 },
         };
 
-        const result = resolveEditorSearchResult(
-            sheetEntries,
-            state,
-            {
-                query: "[alpha",
-                direction: "next",
-                options: {
-                    isRegexp: true,
-                    matchCase: false,
-                    wholeWord: false,
-                },
-                scope: "sheet",
-            }
-        );
+        const result = resolveEditorSearchResult(sheetEntries, state, {
+            query: "[alpha",
+            direction: "next",
+            options: {
+                isRegexp: true,
+                matchCase: false,
+                wholeWord: false,
+            },
+            scope: "sheet",
+        });
 
         assert.strictEqual(result.status, "invalid-pattern");
     });
@@ -235,20 +233,16 @@ suite("Editor panel logic", () => {
             selectedCell: { rowNumber: 2, columnNumber: 1 },
         };
 
-        const result = resolveEditorSearchResult(
-            sheetEntries,
-            state,
-            {
-                query: "alpha",
-                direction: "next",
-                options: {
-                    isRegexp: false,
-                    matchCase: false,
-                    wholeWord: false,
-                },
-                scope: "sheet",
-            }
-        );
+        const result = resolveEditorSearchResult(sheetEntries, state, {
+            query: "alpha",
+            direction: "next",
+            options: {
+                isRegexp: false,
+                matchCase: false,
+                wholeWord: false,
+            },
+            scope: "sheet",
+        });
 
         assert.deepStrictEqual(result, {
             status: "matched",
@@ -264,10 +258,7 @@ suite("Editor panel logic", () => {
 
     test("replace updates the current editable match and advances to the next one", () => {
         const workbook = createWorkbook("editor.xlsx", [
-            createSheet("Sheet1", [
-                createCell(1, 1, "alpha"),
-                createCell(2, 1, "alpha"),
-            ]),
+            createSheet("Sheet1", [createCell(1, 1, "alpha"), createCell(2, 1, "alpha")]),
         ]);
         const sheetEntries = createWorkingSheetEntries(workbook);
         const activeSheetEntry = sheetEntries[0]!;
@@ -457,18 +448,12 @@ suite("Editor panel logic", () => {
         ]);
         const sheetEntries = createWorkingSheetEntries(workbook);
 
-        assert.deepStrictEqual(
-            resolveEditorCellReference(sheetEntries, "sheet:0", "data!B2"),
-            {
-                sheetKey: "sheet:1",
-                rowNumber: 2,
-                columnNumber: 2,
-            }
-        );
-        assert.strictEqual(
-            resolveEditorCellReference(sheetEntries, "sheet:0", "Sheet1!D4"),
-            null
-        );
+        assert.deepStrictEqual(resolveEditorCellReference(sheetEntries, "sheet:0", "data!B2"), {
+            sheetKey: "sheet:1",
+            rowNumber: 2,
+            columnNumber: 2,
+        });
+        assert.strictEqual(resolveEditorCellReference(sheetEntries, "sheet:0", "Sheet1!D4"), null);
     });
 
     test("sheet helpers validate names and derive insertion defaults", () => {
@@ -631,7 +616,10 @@ suite("Editor panel state helpers", () => {
         assert.strictEqual(committedWorkbook.sheets[1]!.cells["4:3"]!.address, "C4");
         assert.strictEqual(committedWorkbook.sheets[1]!.rowCount, 4);
         assert.strictEqual(committedWorkbook.sheets[1]!.columnCount, 3);
-        assert.strictEqual(committedState.sheetEntries[0]!.sheet.cells["2:2"]!.displayValue, "after");
+        assert.strictEqual(
+            committedState.sheetEntries[0]!.sheet.cells["2:2"]!.displayValue,
+            "after"
+        );
         assert.strictEqual(sheetEntries[0]!.sheet.cells["2:2"]!.displayValue, "before");
     });
 
@@ -650,7 +638,11 @@ suite("Editor panel state helpers", () => {
         ];
 
         const workingWorkbook = createWorkingWorkbook(workbook, sheetEntries, pendingCellEdits);
-        const committedState = createCommittedWorkbookState(workbook, sheetEntries, pendingCellEdits);
+        const committedState = createCommittedWorkbookState(
+            workbook,
+            sheetEntries,
+            pendingCellEdits
+        );
 
         assert.strictEqual(workingWorkbook.sheets[0]!.rowCount, 12);
         assert.strictEqual(workingWorkbook.sheets[0]!.columnCount, 8);
@@ -720,11 +712,7 @@ suite("Editor panel state helpers", () => {
         const workbook = createWorkbook("editor.xlsx", [
             createSheet(
                 "Sheet1",
-                [
-                    createCell(1, 1, "A1"),
-                    createCell(2, 2, "B2"),
-                    createCell(3, 3, "C3"),
-                ],
+                [createCell(1, 1, "A1"), createCell(2, 2, "B2"), createCell(3, 3, "C3")],
                 { rowCount: 3, columnCount: 3 }
             ),
         ]);
@@ -775,16 +763,13 @@ suite("Editor panel state helpers", () => {
                 count: 1,
             }
         );
-        const movedAfterColumnDelete = shiftPendingCellEditsForGridSheetEdit(
-            movedAfterRowInsert,
-            {
-                type: "deleteColumn",
-                sheetKey: "sheet:0",
-                sheetName: "Sheet1",
-                columnNumber: 1,
-                count: 1,
-            }
-        );
+        const movedAfterColumnDelete = shiftPendingCellEditsForGridSheetEdit(movedAfterRowInsert, {
+            type: "deleteColumn",
+            sheetKey: "sheet:0",
+            sheetName: "Sheet1",
+            columnNumber: 1,
+            count: 1,
+        });
 
         assert.deepStrictEqual(movedAfterColumnDelete, [
             {
@@ -797,11 +782,10 @@ suite("Editor panel state helpers", () => {
     });
 
     test("applies grid edits directly to sheet snapshots", () => {
-        const sheet = createSheet(
-            "Sheet1",
-            [createCell(2, 2, "B2"), createCell(3, 3, "C3")],
-            { rowCount: 3, columnCount: 3 }
-        );
+        const sheet = createSheet("Sheet1", [createCell(2, 2, "B2"), createCell(3, 3, "C3")], {
+            rowCount: 3,
+            columnCount: 3,
+        });
 
         const updatedSheet = applyGridSheetEditToSheet(sheet, {
             type: "insertColumn",
@@ -814,5 +798,32 @@ suite("Editor panel state helpers", () => {
         assert.strictEqual(updatedSheet.columnCount, 4);
         assert.strictEqual(updatedSheet.cells["2:3"]?.displayValue, "B2");
         assert.strictEqual(updatedSheet.cells["3:4"]?.displayValue, "C3");
+    });
+
+    test("applies insert row/column at the sheet end", () => {
+        const sheet = createSheet("Sheet1", [createCell(1, 1, "A1"), createCell(3, 3, "C3")], {
+            rowCount: 3,
+            columnCount: 3,
+        });
+
+        const withRowAtEnd = applyGridSheetEditToSheet(sheet, {
+            type: "insertRow",
+            sheetKey: "sheet:0",
+            sheetName: "Sheet1",
+            rowNumber: 4,
+            count: 1,
+        });
+        const withColumnAtEnd = applyGridSheetEditToSheet(withRowAtEnd, {
+            type: "insertColumn",
+            sheetKey: "sheet:0",
+            sheetName: "Sheet1",
+            columnNumber: 4,
+            count: 1,
+        });
+
+        assert.strictEqual(withColumnAtEnd.rowCount, 4);
+        assert.strictEqual(withColumnAtEnd.columnCount, 4);
+        assert.strictEqual(withColumnAtEnd.cells["1:1"]?.displayValue, "A1");
+        assert.strictEqual(withColumnAtEnd.cells["3:3"]?.displayValue, "C3");
     });
 });

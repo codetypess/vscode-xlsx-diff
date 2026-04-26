@@ -7,11 +7,7 @@ import {
     type SheetEdit,
     type SheetViewEdit,
 } from "../../core/fastxlsx/write-cell-value";
-import type {
-    EditorPanelState,
-    EditorRenderModel,
-    WorkbookSnapshot,
-} from "../../core/model/types";
+import type { EditorPanelState, EditorRenderModel, WorkbookSnapshot } from "../../core/model/types";
 import { getHtmlLanguageTag } from "../../display-language";
 import { toErrorMessage } from "../../error-message";
 import { getRuntimeMessages } from "../../i18n";
@@ -681,7 +677,9 @@ export class XlsxEditorPanel {
         const nextActiveEntry =
             (activeSheetName
                 ? this.workingSheetEntries.find((entry) => entry.sheet.name === activeSheetName)
-                : null) ?? this.workingSheetEntries[0] ?? null;
+                : null) ??
+            this.workingSheetEntries[0] ??
+            null;
 
         this.state = normalizeEditorPanelState(
             this.getWorkingWorkbook()!,
@@ -1255,7 +1253,7 @@ export class XlsxEditorPanel {
             !activeEntry ||
             !Number.isInteger(rowNumber) ||
             rowNumber < 1 ||
-            rowNumber > activeEntry.sheet.rowCount
+            rowNumber > activeEntry.sheet.rowCount + 1
         ) {
             return;
         }
@@ -1342,7 +1340,7 @@ export class XlsxEditorPanel {
             !activeEntry ||
             !Number.isInteger(columnNumber) ||
             columnNumber < 1 ||
-            columnNumber > activeEntry.sheet.columnCount
+            columnNumber > activeEntry.sheet.columnCount + 1
         ) {
             return;
         }

@@ -1,11 +1,7 @@
 import * as React from "react";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
-import type {
-    CellSnapshot,
-    EditorRenderModel,
-    EditorSheetTabView,
-} from "../../core/model/types";
+import type { CellSnapshot, EditorRenderModel, EditorSheetTabView } from "../../core/model/types";
 import { createCellKey, getColumnLabel } from "../../core/model/cells";
 import { formatI18nMessage, RUNTIME_MESSAGES } from "../../i18n/catalog";
 import {
@@ -351,7 +347,9 @@ function isSearchPanelInteractiveTarget(target: EventTarget | null): boolean {
     );
 }
 
-function getVirtualViewportState(currentModel: EditorRenderModel | null): VirtualViewportState | null {
+function getVirtualViewportState(
+    currentModel: EditorRenderModel | null
+): VirtualViewportState | null {
     if (!currentModel) {
         return null;
     }
@@ -543,19 +541,31 @@ function getSelectionRangeAddress(range: CellRange): string {
 function normalizeSearchPanelState(): void {
     const currentSelectionRange = getExpandedSelectionRange();
 
-    if (searchScope !== "selection") {
+    if (!isSearchPanelOpen) {
         searchSelectionRange = currentSelectionRange;
         return;
     }
 
-    if (!currentSelectionRange) {
-        searchScope = "sheet";
-        searchSelectionRange = null;
-        searchFeedback = null;
+    if (currentSelectionRange) {
+        const shouldAutoSwitchToSelection =
+            searchScope !== "selection" &&
+            !areSelectionRangesEqual(searchSelectionRange, currentSelectionRange);
+        searchSelectionRange = currentSelectionRange;
+        if (shouldAutoSwitchToSelection) {
+            searchScope = "selection";
+            searchFeedback = null;
+        }
         return;
     }
 
-    searchSelectionRange = currentSelectionRange;
+    if (!currentSelectionRange) {
+        if (searchScope === "selection") {
+            searchScope = "sheet";
+            searchFeedback = null;
+        }
+        searchSelectionRange = null;
+        return;
+    }
 }
 
 function getSelectionOutlineClasses(
@@ -1027,17 +1037,14 @@ function revealSelectedCell(): void {
         columnCount: displayGrid.columnCount,
         rowHeaderWidth: displayGrid.rowHeaderWidth,
     });
-    const stickyTop =
-        EDITOR_VIRTUAL_HEADER_HEIGHT + frozenRowCount * EDITOR_VIRTUAL_ROW_HEIGHT;
-    const stickyLeft =
-        displayGrid.rowHeaderWidth + frozenColumnCount * EDITOR_VIRTUAL_COLUMN_WIDTH;
+    const stickyTop = EDITOR_VIRTUAL_HEADER_HEIGHT + frozenRowCount * EDITOR_VIRTUAL_ROW_HEIGHT;
+    const stickyLeft = displayGrid.rowHeaderWidth + frozenColumnCount * EDITOR_VIRTUAL_COLUMN_WIDTH;
     let nextTop = pane.scrollTop;
     let nextLeft = pane.scrollLeft;
 
     if (selectedCell.rowNumber > frozenRowCount) {
         const cellTop =
-            EDITOR_VIRTUAL_HEADER_HEIGHT +
-            (selectedCell.rowNumber - 1) * EDITOR_VIRTUAL_ROW_HEIGHT;
+            EDITOR_VIRTUAL_HEADER_HEIGHT + (selectedCell.rowNumber - 1) * EDITOR_VIRTUAL_ROW_HEIGHT;
         const cellBottom = cellTop + EDITOR_VIRTUAL_ROW_HEIGHT;
         const visibleTop = pane.scrollTop + stickyTop;
         const visibleBottom = pane.scrollTop + pane.clientHeight;
@@ -1094,9 +1101,9 @@ function isRowVisibleInViewport(
 ): boolean {
     return Boolean(
         rowNumber &&
-            viewportState &&
-            (viewportState.frozenRowNumbers.includes(rowNumber) ||
-                viewportState.rowNumbers.includes(rowNumber))
+        viewportState &&
+        (viewportState.frozenRowNumbers.includes(rowNumber) ||
+            viewportState.rowNumbers.includes(rowNumber))
     );
 }
 
@@ -1106,9 +1113,9 @@ function isColumnVisibleInViewport(
 ): boolean {
     return Boolean(
         columnNumber &&
-            viewportState &&
-            (viewportState.frozenColumnNumbers.includes(columnNumber) ||
-                viewportState.columnNumbers.includes(columnNumber))
+        viewportState &&
+        (viewportState.frozenColumnNumbers.includes(columnNumber) ||
+            viewportState.columnNumbers.includes(columnNumber))
     );
 }
 
@@ -1191,10 +1198,7 @@ function selectEntireColumn(columnNumber: number): void {
         return;
     }
 
-    const selectionRange = createColumnSelectionRange(
-        columnNumber,
-        model.activeSheet.rowCount
-    );
+    const selectionRange = createColumnSelectionRange(columnNumber, model.activeSheet.rowCount);
     if (!selectionRange) {
         return;
     }
@@ -1238,7 +1242,9 @@ function isSimpleSelection(
         return anchorCell === null && selectionRange === null;
     }
 
-    return !hasExpandedSelectionRange(selectionRange ?? createSelectionRange(anchorCell ?? cell, cell));
+    return !hasExpandedSelectionRange(
+        selectionRange ?? createSelectionRange(anchorCell ?? cell, cell)
+    );
 }
 
 function getRenderedCellElements(
@@ -2021,9 +2027,7 @@ function commitToolbarCellValue(target: ToolbarCellEditTarget, value: string): v
 
 function focusToolbarInput(role: "position" | "value"): void {
     const selector =
-        role === "position"
-            ? '[data-role="position-input"]'
-            : '[data-role="cell-value-input"]';
+        role === "position" ? '[data-role="position-input"]' : '[data-role="cell-value-input"]';
     const input = document.querySelector<HTMLInputElement>(selector);
     if (!input) {
         return;
@@ -2135,27 +2139,6 @@ function setSearchMode(mode: SearchPanelMode): void {
     });
 }
 
-function updateSearchScope(scope: EditorSearchScope): void {
-    if (scope === "selection") {
-        const currentSelectionRange = getExpandedSelectionRange();
-        if (!currentSelectionRange) {
-            return;
-        }
-
-        searchSelectionRange = currentSelectionRange;
-    } else {
-        searchSelectionRange = getExpandedSelectionRange();
-    }
-
-    if (searchScope === scope && !searchFeedback) {
-        return;
-    }
-
-    searchScope = scope;
-    searchFeedback = null;
-    renderApp({ commitEditing: false });
-}
-
 function toggleSearchOption(option: keyof SearchOptions): void {
     searchOptions = {
         ...searchOptions,
@@ -2166,7 +2149,8 @@ function toggleSearchOption(option: keyof SearchOptions): void {
 }
 
 function getEffectiveSearchScope(): EditorSearchScope {
-    return searchScope === "selection" && Boolean(searchSelectionRange ?? getExpandedSelectionRange())
+    return searchScope === "selection" &&
+        Boolean(searchSelectionRange ?? getExpandedSelectionRange())
         ? "selection"
         : "sheet";
 }
@@ -2482,13 +2466,16 @@ function renderApp({
     });
     normalizeSearchPanelState();
     viewRevision += 1;
-    updateView({
-        kind: "app",
-        model,
-        revealSelection: shouldRevealSelection,
-        revision: viewRevision,
-        scrollState,
-    }, { sync });
+    updateView(
+        {
+            kind: "app",
+            model,
+            revealSelection: shouldRevealSelection,
+            revision: viewRevision,
+            scrollState,
+        },
+        { sync }
+    );
 }
 
 function PendingMarker({ extraClass }: { extraClass?: string }): React.ReactElement {
@@ -2526,6 +2513,7 @@ function CellValue({
 function ToolbarButton({
     actionLabel,
     icon,
+    className,
     disabled = false,
     isActive = false,
     isLoading = false,
@@ -2535,6 +2523,7 @@ function ToolbarButton({
 }: {
     actionLabel: string;
     icon: string;
+    className?: string;
     disabled?: boolean;
     isActive?: boolean;
     isLoading?: boolean;
@@ -2549,6 +2538,7 @@ function ToolbarButton({
             aria-label={actionLabel}
             className={classNames([
                 "toolbar__button",
+                className,
                 isActive && "is-active",
                 isLoading && "is-loading",
                 iconOnly && "toolbar__button--icon",
@@ -2609,25 +2599,26 @@ function SearchPanel({
     }
 
     const currentSelectionRange = getExpandedSelectionRange();
-    const selectionRange =
-        searchScope === "selection"
-            ? (searchSelectionRange ?? currentSelectionRange)
-            : currentSelectionRange;
-    const isSelectionScopeAvailable = Boolean(currentSelectionRange);
     const effectiveScope = getEffectiveSearchScope();
+    const selectionRange =
+        effectiveScope === "selection"
+            ? (searchSelectionRange ?? currentSelectionRange)
+            : null;
     const isReplaceMode = searchMode === "replace";
     const isQueryEmpty = searchQuery.trim().length === 0;
     const hasSearchableGrid =
         currentModel.activeSheet.rowCount > 0 && currentModel.activeSheet.columnCount > 0;
     const canReplace = !isQueryEmpty && hasSearchableGrid && currentModel.canEdit;
+    const scopeSummary =
+        selectionRange ? getSelectionRangeAddress(selectionRange) : STRINGS.searchScopeWholeSheet;
     const feedbackToneClass =
         searchFeedback?.status === "matched" || searchFeedback?.status === "replaced"
             ? "search-strip__feedback--success"
             : searchFeedback?.status === "invalid-pattern"
-            ? "search-strip__feedback--error"
-            : searchFeedback?.status === "no-match" || searchFeedback?.status === "no-change"
-              ? "search-strip__feedback--warn"
-              : undefined;
+              ? "search-strip__feedback--error"
+              : searchFeedback?.status === "no-match" || searchFeedback?.status === "no-change"
+                ? "search-strip__feedback--warn"
+                : undefined;
     const panelStyle: React.CSSProperties | undefined = searchPanelPosition
         ? {
               left: `${searchPanelPosition.left}px`,
@@ -2666,7 +2657,10 @@ function SearchPanel({
                             type="button"
                             onClick={() => setSearchMode("find")}
                         >
-                            <span className="codicon codicon-search search-strip__tab-icon" aria-hidden />
+                            <span
+                                className="codicon codicon-search search-strip__tab-icon"
+                                aria-hidden
+                            />
                             <span>{STRINGS.searchFind}</span>
                         </button>
                         <button
@@ -2680,9 +2674,21 @@ function SearchPanel({
                             type="button"
                             onClick={() => setSearchMode("replace")}
                         >
-                            <span className="codicon codicon-replace search-strip__tab-icon" aria-hidden />
+                            <span
+                                className="codicon codicon-replace search-strip__tab-icon"
+                                aria-hidden
+                            />
                             <span>{STRINGS.searchReplace}</span>
                         </button>
+                    </div>
+                    <div className="search-strip__header-tools">
+                        <ToolbarButton
+                            actionLabel={STRINGS.searchClose}
+                            className="search-strip__close-button"
+                            icon="codicon-close"
+                            iconOnly={true}
+                            onClick={closeSearchPanel}
+                        />
                     </div>
                 </div>
                 <div className="search-strip__row search-strip__row--primary">
@@ -2720,7 +2726,11 @@ function SearchPanel({
                                 }
                             }}
                         />
-                        <div className="search-strip__input-tools" role="group" aria-label={STRINGS.search}>
+                        <div
+                            className="search-strip__input-tools"
+                            role="group"
+                            aria-label={STRINGS.search}
+                        >
                             <button
                                 aria-label={STRINGS.searchRegex}
                                 aria-pressed={searchOptions.isRegexp}
@@ -2780,12 +2790,6 @@ function SearchPanel({
                             iconOnly={true}
                             onClick={() => submitSearch("next")}
                         />
-                        <ToolbarButton
-                            actionLabel={STRINGS.searchClose}
-                            icon="codicon-close"
-                            iconOnly={true}
-                            onClick={closeSearchPanel}
-                        />
                     </div>
                 </div>
                 {isReplaceMode ? (
@@ -2841,45 +2845,19 @@ function SearchPanel({
                     </div>
                 ) : null}
                 <div className="search-strip__row search-strip__row--meta">
-                    <div className="search-strip__scope-group">
-                        <button
-                            aria-pressed={effectiveScope === "sheet"}
+                    <div className="search-strip__scope-summary">
+                        <span className="search-strip__scope-summary-label">
+                            {STRINGS.searchScopeLabel}
+                        </span>
+                        <span
                             className={classNames([
-                                "search-strip__scope-button",
-                                effectiveScope === "sheet" && "is-active",
+                                "search-strip__scope-summary-value",
+                                selectionRange && "is-selection",
                             ])}
-                            type="button"
-                            onClick={() => updateSearchScope("sheet")}
                         >
-                            {STRINGS.searchScopeSheet}
-                        </button>
-                        <button
-                            aria-pressed={effectiveScope === "selection"}
-                            className={classNames([
-                                "search-strip__scope-button",
-                                effectiveScope === "selection" && "is-active",
-                            ])}
-                            disabled={!isSelectionScopeAvailable}
-                            title={
-                                isSelectionScopeAvailable
-                                    ? STRINGS.searchScopeSelection
-                                    : STRINGS.searchScopeSelectionDisabled
-                            }
-                            type="button"
-                            onClick={() => updateSearchScope("selection")}
-                        >
-                            {STRINGS.searchScopeSelection}
-                        </button>
+                            {scopeSummary}
+                        </span>
                     </div>
-                    {selectionRange ? (
-                        <span className="search-strip__range">
-                            {getSelectionRangeAddress(selectionRange)}
-                        </span>
-                    ) : (
-                        <span className="search-strip__hint">
-                            {STRINGS.searchScopeSelectionDisabled}
-                        </span>
-                    )}
                 </div>
                 {searchFeedback?.message ? (
                     <div className={classNames(["search-strip__feedback", feedbackToneClass])}>
@@ -3083,7 +3061,10 @@ function EditorToolbar({ currentModel }: { currentModel: EditorRenderModel }): R
                                 onMouseDown={(event) => event.preventDefault()}
                                 onClick={resetCellValueInput}
                             >
-                                <span className="codicon codicon-close toolbar__toggle-icon" aria-hidden />
+                                <span
+                                    className="codicon codicon-close toolbar__toggle-icon"
+                                    aria-hidden
+                                />
                             </button>
                             <button
                                 type="button"
@@ -3093,7 +3074,10 @@ function EditorToolbar({ currentModel }: { currentModel: EditorRenderModel }): R
                                 onMouseDown={(event) => event.preventDefault()}
                                 onClick={commitCellValueInput}
                             >
-                                <span className="codicon codicon-check toolbar__toggle-icon" aria-hidden />
+                                <span
+                                    className="codicon codicon-check toolbar__toggle-icon"
+                                    aria-hidden
+                                />
                             </button>
                         </span>
                     ) : null}
@@ -3261,10 +3245,7 @@ function isActiveHighlightRow(activeRowNumber: number | null, rowNumber: number)
     return activeRowNumber === rowNumber;
 }
 
-function isActiveHighlightColumn(
-    activeColumnNumber: number | null,
-    columnNumber: number
-): boolean {
+function isActiveHighlightColumn(activeColumnNumber: number | null, columnNumber: number): boolean {
     return activeColumnNumber === columnNumber;
 }
 
@@ -3275,10 +3256,10 @@ function isCellWithinSelectionRange(
 ): boolean {
     return Boolean(
         selectionRange &&
-            rowNumber >= selectionRange.startRow &&
-            rowNumber <= selectionRange.endRow &&
-            columnNumber >= selectionRange.startColumn &&
-            columnNumber <= selectionRange.endColumn
+        rowNumber >= selectionRange.startRow &&
+        rowNumber <= selectionRange.endRow &&
+        columnNumber >= selectionRange.startColumn &&
+        columnNumber <= selectionRange.endColumn
     );
 }
 
@@ -3376,16 +3357,14 @@ function createEditorVirtualGridMetrics(
         columnCount: currentModel.activeSheet.columnCount,
         freezePane: currentModel.activeSheet.freezePane,
     });
-    const {
-        rowCount: visibleFrozenRowCount,
-        columnCount: visibleFrozenColumnCount,
-    } = getVisibleFrozenEditorCounts({
-        frozenRowCount,
-        frozenColumnCount,
-        viewportHeight,
-        viewportWidth,
-        rowHeaderWidth: displayGrid.rowHeaderWidth,
-    });
+    const { rowCount: visibleFrozenRowCount, columnCount: visibleFrozenColumnCount } =
+        getVisibleFrozenEditorCounts({
+            frozenRowCount,
+            frozenColumnCount,
+            viewportHeight,
+            viewportWidth,
+            rowHeaderWidth: displayGrid.rowHeaderWidth,
+        });
     const rowWindow = createEditorRowWindow({
         totalRows: displayGrid.rowCount,
         frozenRowCount,
@@ -3419,8 +3398,7 @@ function createEditorVirtualGridMetrics(
         contentHeight: contentSize.height,
         frozenRowNumbers: createSequentialNumbers(visibleFrozenRowCount),
         frozenColumnNumbers: createSequentialNumbers(visibleFrozenColumnCount),
-        stickyTopHeight:
-            EDITOR_VIRTUAL_HEADER_HEIGHT + frozenRowCount * EDITOR_VIRTUAL_ROW_HEIGHT,
+        stickyTopHeight: EDITOR_VIRTUAL_HEADER_HEIGHT + frozenRowCount * EDITOR_VIRTUAL_ROW_HEIGHT,
         stickyLeftWidth:
             displayGrid.rowHeaderWidth + frozenColumnCount * EDITOR_VIRTUAL_COLUMN_WIDTH,
     };
@@ -3579,151 +3557,153 @@ const EditorCornerHeader = React.memo(function EditorCornerHeader({
     );
 });
 
-const EditorColumnHeaderCell = React.memo(function EditorColumnHeaderCell({
-    label,
-    columnNumber,
-    hasPending,
-    activeColumnNumber,
-    top,
-    left,
-}: {
-    label: string;
-    columnNumber: number;
-    hasPending: boolean;
-    activeColumnNumber: number | null;
-    top: number;
-    left: number;
-}): React.ReactElement {
-    const isActiveColumn = isActiveHighlightColumn(activeColumnNumber, columnNumber);
+const EditorColumnHeaderCell = React.memo(
+    function EditorColumnHeaderCell({
+        label,
+        columnNumber,
+        hasPending,
+        activeColumnNumber,
+        top,
+        left,
+    }: {
+        label: string;
+        columnNumber: number;
+        hasPending: boolean;
+        activeColumnNumber: number | null;
+        top: number;
+        left: number;
+    }): React.ReactElement {
+        const isActiveColumn = isActiveHighlightColumn(activeColumnNumber, columnNumber);
 
-    return (
-        <div
-            className={classNames([
-                "editor-grid__item",
-                "editor-grid__item--header",
-                "grid__column",
-                hasPending && "grid__column--diff",
-                hasPending && "grid__column--pending",
-                isActiveColumn && "grid__column--active",
-            ])}
-            data-column-number={columnNumber}
-            data-role="grid-column-header"
-            style={getEditorGridItemStyle({
-                top,
-                left,
-                width: EDITOR_VIRTUAL_COLUMN_WIDTH,
-                height: EDITOR_VIRTUAL_HEADER_HEIGHT,
-            })}
-            onClick={() => {
-                closeContextMenu({ refresh: false });
-                selectEntireColumn(columnNumber);
-            }}
-            onContextMenu={(event) => {
-                event.preventDefault();
-                selectEntireColumn(columnNumber);
-                openColumnContextMenu(columnNumber, event.clientX, event.clientY);
-            }}
-        >
-            <span className="grid__column-label">
-                {hasPending ? <PendingMarker /> : null}
-                <span>{label}</span>
-            </span>
-        </div>
-    );
-},
-(previous, next) =>
-    previous.label === next.label &&
-    previous.columnNumber === next.columnNumber &&
-    previous.hasPending === next.hasPending &&
-    previous.activeColumnNumber === next.activeColumnNumber &&
-    previous.top === next.top &&
-    previous.left === next.left
+        return (
+            <div
+                className={classNames([
+                    "editor-grid__item",
+                    "editor-grid__item--header",
+                    "grid__column",
+                    hasPending && "grid__column--diff",
+                    hasPending && "grid__column--pending",
+                    isActiveColumn && "grid__column--active",
+                ])}
+                data-column-number={columnNumber}
+                data-role="grid-column-header"
+                style={getEditorGridItemStyle({
+                    top,
+                    left,
+                    width: EDITOR_VIRTUAL_COLUMN_WIDTH,
+                    height: EDITOR_VIRTUAL_HEADER_HEIGHT,
+                })}
+                onClick={() => {
+                    closeContextMenu({ refresh: false });
+                    selectEntireColumn(columnNumber);
+                }}
+                onContextMenu={(event) => {
+                    event.preventDefault();
+                    selectEntireColumn(columnNumber);
+                    openColumnContextMenu(columnNumber, event.clientX, event.clientY);
+                }}
+            >
+                <span className="grid__column-label">
+                    {hasPending ? <PendingMarker /> : null}
+                    <span>{label}</span>
+                </span>
+            </div>
+        );
+    },
+    (previous, next) =>
+        previous.label === next.label &&
+        previous.columnNumber === next.columnNumber &&
+        previous.hasPending === next.hasPending &&
+        previous.activeColumnNumber === next.activeColumnNumber &&
+        previous.top === next.top &&
+        previous.left === next.left
 );
 
-const EditorRowHeaderCell = React.memo(function EditorRowHeaderCell({
-    rowNumber,
-    hasPending,
-    activeRowNumber,
-    top,
-    rowHeaderWidth,
-}: {
-    rowNumber: number;
-    hasPending: boolean;
-    activeRowNumber: number | null;
-    top: number;
-    rowHeaderWidth: number;
-}): React.ReactElement {
-    const isActiveRow = isActiveHighlightRow(activeRowNumber, rowNumber);
+const EditorRowHeaderCell = React.memo(
+    function EditorRowHeaderCell({
+        rowNumber,
+        hasPending,
+        activeRowNumber,
+        top,
+        rowHeaderWidth,
+    }: {
+        rowNumber: number;
+        hasPending: boolean;
+        activeRowNumber: number | null;
+        top: number;
+        rowHeaderWidth: number;
+    }): React.ReactElement {
+        const isActiveRow = isActiveHighlightRow(activeRowNumber, rowNumber);
 
-    return (
-        <div
-            className={classNames([
-                "editor-grid__item",
-                "editor-grid__item--row-header",
-                "grid__row-number",
-                hasPending && "grid__row-number--pending",
-                isActiveRow && "grid__row-number--active",
-            ])}
-            data-role="grid-row-header"
-            data-row-number={rowNumber}
-            style={getEditorGridItemStyle({
-                top,
-                left: 0,
-                width: rowHeaderWidth,
-                height: EDITOR_VIRTUAL_ROW_HEIGHT,
-            })}
-            onClick={() => {
-                closeContextMenu({ refresh: false });
-                selectEntireRow(rowNumber);
-            }}
-            onContextMenu={(event) => {
-                event.preventDefault();
-                selectEntireRow(rowNumber);
-                openRowContextMenu(rowNumber, event.clientX, event.clientY);
-            }}
-        >
-            <span className="grid__row-label">
-                {hasPending ? <PendingMarker /> : null}
-                <span>{rowNumber}</span>
-            </span>
-        </div>
-    );
-},
-(previous, next) =>
-    previous.rowNumber === next.rowNumber &&
-    previous.hasPending === next.hasPending &&
-    previous.activeRowNumber === next.activeRowNumber &&
-    previous.top === next.top &&
-    previous.rowHeaderWidth === next.rowHeaderWidth
+        return (
+            <div
+                className={classNames([
+                    "editor-grid__item",
+                    "editor-grid__item--row-header",
+                    "grid__row-number",
+                    hasPending && "grid__row-number--pending",
+                    isActiveRow && "grid__row-number--active",
+                ])}
+                data-role="grid-row-header"
+                data-row-number={rowNumber}
+                style={getEditorGridItemStyle({
+                    top,
+                    left: 0,
+                    width: rowHeaderWidth,
+                    height: EDITOR_VIRTUAL_ROW_HEIGHT,
+                })}
+                onClick={() => {
+                    closeContextMenu({ refresh: false });
+                    selectEntireRow(rowNumber);
+                }}
+                onContextMenu={(event) => {
+                    event.preventDefault();
+                    selectEntireRow(rowNumber);
+                    openRowContextMenu(rowNumber, event.clientX, event.clientY);
+                }}
+            >
+                <span className="grid__row-label">
+                    {hasPending ? <PendingMarker /> : null}
+                    <span>{rowNumber}</span>
+                </span>
+            </div>
+        );
+    },
+    (previous, next) =>
+        previous.rowNumber === next.rowNumber &&
+        previous.hasPending === next.hasPending &&
+        previous.activeRowNumber === next.activeRowNumber &&
+        previous.top === next.top &&
+        previous.rowHeaderWidth === next.rowHeaderWidth
 );
 
-const EditorVirtualCell = React.memo(function EditorVirtualCell({
-    currentModel,
-    rowNumber,
-    columnNumber,
-    top,
-    left,
-    selectionRange,
-    activeRowNumber,
-    activeColumnNumber,
-    currentSelection,
-    activeEditingCell,
-    pendingEdit,
-}: {
-    currentModel: EditorRenderModel;
-    rowNumber: number;
-    columnNumber: number;
-    top: number;
-    left: number;
-    selectionRange: CellRange | null;
-    activeRowNumber: number | null;
-    activeColumnNumber: number | null;
-    currentSelection: CellPosition | null;
-    activeEditingCell: EditingCell | null;
-    pendingEdit: PendingEdit | undefined;
-}): React.ReactElement {
-    const cell =
-        getCellView(rowNumber, columnNumber, currentModel) ?? {
+const EditorVirtualCell = React.memo(
+    function EditorVirtualCell({
+        currentModel,
+        rowNumber,
+        columnNumber,
+        top,
+        left,
+        selectionRange,
+        activeRowNumber,
+        activeColumnNumber,
+        currentSelection,
+        activeEditingCell,
+        pendingEdit,
+    }: {
+        currentModel: EditorRenderModel;
+        rowNumber: number;
+        columnNumber: number;
+        top: number;
+        left: number;
+        selectionRange: CellRange | null;
+        activeRowNumber: number | null;
+        activeColumnNumber: number | null;
+        currentSelection: CellPosition | null;
+        activeEditingCell: EditingCell | null;
+        pendingEdit: PendingEdit | undefined;
+    }): React.ReactElement {
+        const cell = getCellView(rowNumber, columnNumber, currentModel) ?? {
             key: createCellKey(rowNumber, columnNumber),
             address: getCellAddressLabel(rowNumber, columnNumber),
             value: "",
@@ -3731,122 +3711,122 @@ const EditorVirtualCell = React.memo(function EditorVirtualCell({
             isPresent: false,
             isSelected: false,
         };
-    const value = pendingEdit?.value ?? cell.value;
-    const formula = pendingEdit ? null : cell.formula;
-    const editable = Boolean(currentModel.canEdit && !cell.formula);
-    const isPrimarySelection = isSelectionFocusCell(currentSelection, rowNumber, columnNumber);
-    const isSelected = isCellWithinSelectionRange(selectionRange, rowNumber, columnNumber);
-    const isSearchFocusedSelection =
-        searchFeedback?.status === "matched" ||
-        searchFeedback?.status === "replaced" ||
-        searchFeedback?.status === "no-change";
-    const showPrimarySelectionFrame =
-        isPrimarySelection &&
-        (!hasExpandedSelectionRange(selectionRange) || isSearchFocusedSelection);
-    const isActiveRow = isActiveHighlightRow(activeRowNumber, rowNumber);
-    const isActiveColumn = isActiveHighlightColumn(activeColumnNumber, columnNumber);
-    const isEditing =
-        activeEditingCell?.rowNumber === rowNumber &&
-        activeEditingCell.columnNumber === columnNumber;
+        const value = pendingEdit?.value ?? cell.value;
+        const formula = pendingEdit ? null : cell.formula;
+        const editable = Boolean(currentModel.canEdit && !cell.formula);
+        const isPrimarySelection = isSelectionFocusCell(currentSelection, rowNumber, columnNumber);
+        const isSelected = isCellWithinSelectionRange(selectionRange, rowNumber, columnNumber);
+        const isSearchFocusedSelection =
+            searchFeedback?.status === "matched" ||
+            searchFeedback?.status === "replaced" ||
+            searchFeedback?.status === "no-change";
+        const showPrimarySelectionFrame =
+            isPrimarySelection &&
+            (!hasExpandedSelectionRange(selectionRange) || isSearchFocusedSelection);
+        const isActiveRow = isActiveHighlightRow(activeRowNumber, rowNumber);
+        const isActiveColumn = isActiveHighlightColumn(activeColumnNumber, columnNumber);
+        const isEditing =
+            activeEditingCell?.rowNumber === rowNumber &&
+            activeEditingCell.columnNumber === columnNumber;
 
-    return (
-        <div
-            aria-selected={isSelected}
-            className={classNames([
-                "editor-grid__item",
-                "grid__cell",
-                isSelected && "grid__cell--selected-range",
-                showPrimarySelectionFrame && "grid__cell--selected",
-                isActiveRow && "grid__cell--active-row",
-                isActiveColumn && "grid__cell--active-column",
-                !editable && "grid__cell--locked",
-                pendingEdit && "grid__cell--pending",
-                isEditing && "grid__cell--editing",
-                ...getSelectionOutlineClasses(rowNumber, columnNumber, selectionRange),
-            ])}
-            data-column-number={columnNumber}
-            data-editable={editable}
-            data-role="grid-cell"
-            data-row-number={rowNumber}
-            style={getEditorGridItemStyle({
-                top,
-                left,
-                width: EDITOR_VIRTUAL_COLUMN_WIDTH,
-                height: EDITOR_VIRTUAL_ROW_HEIGHT,
-            })}
-            title={getCellTooltip(cell.address, value, formula)}
-            onPointerDown={(event) => {
-                if (event.button !== 0) {
-                    return;
-                }
-
-                closeContextMenu({ refresh: false });
-                startSelectionDrag(event.pointerId, { rowNumber, columnNumber });
-                setSelectedCellLocal(
-                    { rowNumber, columnNumber },
-                    {
-                        syncHost: false,
-                        anchorCell: { rowNumber, columnNumber },
+        return (
+            <div
+                aria-selected={isSelected}
+                className={classNames([
+                    "editor-grid__item",
+                    "grid__cell",
+                    isSelected && "grid__cell--selected-range",
+                    showPrimarySelectionFrame && "grid__cell--selected",
+                    isActiveRow && "grid__cell--active-row",
+                    isActiveColumn && "grid__cell--active-column",
+                    !editable && "grid__cell--locked",
+                    pendingEdit && "grid__cell--pending",
+                    isEditing && "grid__cell--editing",
+                    ...getSelectionOutlineClasses(rowNumber, columnNumber, selectionRange),
+                ])}
+                data-column-number={columnNumber}
+                data-editable={editable}
+                data-role="grid-cell"
+                data-row-number={rowNumber}
+                style={getEditorGridItemStyle({
+                    top,
+                    left,
+                    width: EDITOR_VIRTUAL_COLUMN_WIDTH,
+                    height: EDITOR_VIRTUAL_ROW_HEIGHT,
+                })}
+                title={getCellTooltip(cell.address, value, formula)}
+                onPointerDown={(event) => {
+                    if (event.button !== 0) {
+                        return;
                     }
-                );
-            }}
-            onClick={(event) => {
-                if (suppressNextCellClick) {
-                    suppressNextCellClick = false;
+
+                    closeContextMenu({ refresh: false });
+                    startSelectionDrag(event.pointerId, { rowNumber, columnNumber });
+                    setSelectedCellLocal(
+                        { rowNumber, columnNumber },
+                        {
+                            syncHost: false,
+                            anchorCell: { rowNumber, columnNumber },
+                        }
+                    );
+                }}
+                onClick={(event) => {
+                    if (suppressNextCellClick) {
+                        suppressNextCellClick = false;
+                        event.preventDefault();
+                        return;
+                    }
+
+                    const forceRender = Boolean(editingCell);
+                    if (forceRender) {
+                        finishEdit({ mode: "commit", refresh: false });
+                    }
+
+                    setSelectedCellLocal(
+                        { rowNumber, columnNumber },
+                        {
+                            syncHost: true,
+                            anchorCell:
+                                event.shiftKey && selectedCell
+                                    ? (selectionAnchorCell ?? selectedCell)
+                                    : undefined,
+                            forceRender,
+                        }
+                    );
+                }}
+                onDoubleClick={(event) => {
+                    if (!currentModel.canEdit || !editable) {
+                        return;
+                    }
+
                     event.preventDefault();
-                    return;
-                }
-
-                const forceRender = Boolean(editingCell);
-                if (forceRender) {
-                    finishEdit({ mode: "commit", refresh: false });
-                }
-
-                setSelectedCellLocal(
-                    { rowNumber, columnNumber },
-                    {
-                        syncHost: true,
-                        anchorCell:
-                            event.shiftKey && selectedCell
-                                ? (selectionAnchorCell ?? selectedCell)
-                                : undefined,
-                        forceRender,
-                    }
-                );
-            }}
-            onDoubleClick={(event) => {
-                if (!currentModel.canEdit || !editable) {
-                    return;
-                }
-
-                event.preventDefault();
-                startEditCell(rowNumber, columnNumber, value);
-            }}
-        >
-            <div className="grid__cell-content">
-                {isEditing && activeEditingCell?.sheetKey === currentModel.activeSheet.key ? (
-                    <CellEditor edit={activeEditingCell} />
-                ) : (
-                    <CellValue formula={formula} value={value} />
-                )}
+                    startEditCell(rowNumber, columnNumber, value);
+                }}
+            >
+                <div className="grid__cell-content">
+                    {isEditing && activeEditingCell?.sheetKey === currentModel.activeSheet.key ? (
+                        <CellEditor edit={activeEditingCell} />
+                    ) : (
+                        <CellValue formula={formula} value={value} />
+                    )}
+                </div>
             </div>
-        </div>
-    );
-},
-(previous, next) =>
-    previous.currentModel.activeSheet.key === next.currentModel.activeSheet.key &&
-    previous.currentModel.activeSheet.cells === next.currentModel.activeSheet.cells &&
-    previous.currentModel.canEdit === next.currentModel.canEdit &&
-    previous.rowNumber === next.rowNumber &&
-    previous.columnNumber === next.columnNumber &&
-    previous.top === next.top &&
-    previous.left === next.left &&
-    previous.activeRowNumber === next.activeRowNumber &&
-    previous.activeColumnNumber === next.activeColumnNumber &&
-    areSelectionRangesEqual(previous.selectionRange, next.selectionRange) &&
-    areCellPositionsEqual(previous.currentSelection, next.currentSelection) &&
-    areEditingCellsEqual(previous.activeEditingCell, next.activeEditingCell) &&
-    arePendingEditsEqual(previous.pendingEdit, next.pendingEdit)
+        );
+    },
+    (previous, next) =>
+        previous.currentModel.activeSheet.key === next.currentModel.activeSheet.key &&
+        previous.currentModel.activeSheet.cells === next.currentModel.activeSheet.cells &&
+        previous.currentModel.canEdit === next.currentModel.canEdit &&
+        previous.rowNumber === next.rowNumber &&
+        previous.columnNumber === next.columnNumber &&
+        previous.top === next.top &&
+        previous.left === next.left &&
+        previous.activeRowNumber === next.activeRowNumber &&
+        previous.activeColumnNumber === next.activeColumnNumber &&
+        areSelectionRangesEqual(previous.selectionRange, next.selectionRange) &&
+        areCellPositionsEqual(previous.currentSelection, next.currentSelection) &&
+        areEditingCellsEqual(previous.activeEditingCell, next.activeEditingCell) &&
+        arePendingEditsEqual(previous.pendingEdit, next.pendingEdit)
 );
 
 function EditorVirtualGrid({
@@ -3873,10 +3853,7 @@ function EditorVirtualGrid({
     const topItems: React.ReactElement[] = [];
     const leftItems: React.ReactElement[] = [];
     const cornerItems: React.ReactElement[] = [
-        <EditorCornerHeader
-            key="corner"
-            rowHeaderWidth={metrics.rowHeaderWidth}
-        />,
+        <EditorCornerHeader key="corner" rowHeaderWidth={metrics.rowHeaderWidth} />,
     ];
     const createGridCellItem = (
         keyPrefix: "body" | "left" | "top" | "corner",
@@ -4184,7 +4161,11 @@ function Tabs({
     const [measuredTabWidths, setMeasuredTabWidths] = React.useState<Record<string, number>>({});
     const viewportWidth = useObservedElementWidth(viewportRef);
     const pendingSheetKeySignature = Array.from(pendingSummary.sheetKeys).sort().join("\0");
-    const maxVisibleTabs = getMaxVisibleSheetTabs(currentModel.sheets, viewportWidth, measuredTabWidths);
+    const maxVisibleTabs = getMaxVisibleSheetTabs(
+        currentModel.sheets,
+        viewportWidth,
+        measuredTabWidths
+    );
     const tabLayout = partitionSheetTabs(currentModel.sheets, maxVisibleTabs);
 
     React.useLayoutEffect(() => {
@@ -4194,7 +4175,9 @@ function Tabs({
         }
 
         const nextMeasuredTabWidths: Record<string, number> = {};
-        for (const element of measureRoot.querySelectorAll<HTMLElement>('[data-role="sheet-tab-measure"]')) {
+        for (const element of measureRoot.querySelectorAll<HTMLElement>(
+            '[data-role="sheet-tab-measure"]'
+        )) {
             const sheetKey = element.dataset.sheetKey;
             if (!sheetKey) {
                 continue;
@@ -4211,11 +4194,7 @@ function Tabs({
                 ? currentWidths
                 : nextMeasuredTabWidths
         );
-    }, [
-        currentModel.sheets,
-        currentModel.activeSheet.key,
-        pendingSheetKeySignature,
-    ]);
+    }, [currentModel.sheets, currentModel.activeSheet.key, pendingSheetKeySignature]);
 
     React.useEffect(() => {
         setIsOverflowOpen(false);
@@ -4458,6 +4437,14 @@ function TabContextMenu({
                     <span>{STRINGS.insertRowAbove}</span>
                 </button>
                 <button
+                    className="context-menu__item"
+                    type="button"
+                    onClick={() => requestInsertRow(menu.rowNumber + 1)}
+                >
+                    <span className="codicon codicon-add context-menu__icon" aria-hidden />
+                    <span>{STRINGS.insertRowBelow}</span>
+                </button>
+                <button
                     className="context-menu__item context-menu__item--danger"
                     disabled={currentModel.activeSheet.rowCount <= 1}
                     type="button"
@@ -4479,6 +4466,14 @@ function TabContextMenu({
             >
                 <span className="codicon codicon-add context-menu__icon" aria-hidden />
                 <span>{STRINGS.insertColumnLeft}</span>
+            </button>
+            <button
+                className="context-menu__item"
+                type="button"
+                onClick={() => requestInsertColumn(menu.columnNumber + 1)}
+            >
+                <span className="codicon codicon-add context-menu__icon" aria-hidden />
+                <span>{STRINGS.insertColumnRight}</span>
             </button>
             <button
                 className="context-menu__item context-menu__item--danger"
@@ -4515,11 +4510,7 @@ function EditorApp({ view }: { view: Extract<ViewState, { kind: "app" }> }): Rea
             <EditorToolbar currentModel={view.model} />
             <SearchPanel currentModel={view.model} />
             <section className="panes panes--single">
-                <EditorPane
-                    currentModel={view.model}
-                    pendingSummary={pendingSummary}
-                    view={view}
-                />
+                <EditorPane currentModel={view.model} pendingSummary={pendingSummary} view={view} />
             </section>
             <Status currentModel={view.model} pendingSummary={pendingSummary} />
             <TabContextMenu currentModel={view.model} />

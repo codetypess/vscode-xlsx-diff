@@ -79,9 +79,11 @@ export interface EditorPanelStrings {
     searchFind: string;
     searchReplace: string;
     searchReplaceComingSoon: string;
+    searchScopeLabel: string;
     searchScopeSheet: string;
     searchScopeSelection: string;
     searchScopeSelectionDisabled: string;
+    searchScopeWholeSheet: string;
     searchClose: string;
     loading: string;
     reload: string;
@@ -93,8 +95,10 @@ export interface EditorPanelStrings {
     deleteSheet: string;
     renameSheet: string;
     insertRowAbove: string;
+    insertRowBelow: string;
     deleteRow: string;
     insertColumnLeft: string;
+    insertColumnRight: string;
     deleteColumn: string;
     renameSheetPrompt: string;
     renameSheetTitle: string;
