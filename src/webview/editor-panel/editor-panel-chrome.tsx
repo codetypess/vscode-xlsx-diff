@@ -1050,6 +1050,7 @@ export function TabContextMenu({
     onRequestDeleteRow,
     onRequestInsertColumn,
     onRequestDeleteColumn,
+    onRequestPromptColumnWidth,
 }: {
     strings: EditorPanelStrings;
     currentModel: EditorRenderModel;
@@ -1061,14 +1062,17 @@ export function TabContextMenu({
     onRequestDeleteRow(rowNumber: number): void;
     onRequestInsertColumn(columnNumber: number): void;
     onRequestDeleteColumn(columnNumber: number): void;
+    onRequestPromptColumnWidth(columnNumber: number): void;
 }): React.ReactElement | null {
     if (!contextMenu || !currentModel.canEdit) {
         return null;
     }
 
+    const estimatedMenuHeight =
+        contextMenu.kind === "column" ? 168 : contextMenu.kind === "row" ? 132 : 132;
     const menuStyle: React.CSSProperties = {
         left: Math.max(8, Math.min(contextMenu.x, window.innerWidth - 188)),
-        top: Math.max(8, Math.min(contextMenu.y, window.innerHeight - 132)),
+        top: Math.max(8, Math.min(contextMenu.y, window.innerHeight - estimatedMenuHeight)),
     };
 
     if (contextMenu.kind === "tab") {
@@ -1134,6 +1138,14 @@ export function TabContextMenu({
 
     return (
         <div className="context-menu" data-role="context-menu" style={menuStyle}>
+            <button
+                className="context-menu__item"
+                type="button"
+                onClick={() => onRequestPromptColumnWidth(contextMenu.columnNumber)}
+            >
+                <span className="codicon codicon-symbol-number context-menu__icon" aria-hidden />
+                <span>{strings.setColumnWidth}</span>
+            </button>
             <button
                 className="context-menu__item"
                 type="button"

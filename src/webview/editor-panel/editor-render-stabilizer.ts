@@ -24,6 +24,11 @@ export function stabilizeIncomingRenderModel(
         previousModel.activeSheet.columns.every(
             (label, index) => label === nextModel.activeSheet.columns[index]
         );
+    const previousColumnWidths = previousModel.activeSheet.columnWidths ?? [];
+    const nextColumnWidths = nextModel.activeSheet.columnWidths ?? [];
+    const reusedActiveSheetColumnWidths =
+        previousColumnWidths.length === nextColumnWidths.length &&
+        previousColumnWidths.every((width, index) => width === nextColumnWidths[index]);
 
     return {
         ...nextModel,
@@ -33,6 +38,9 @@ export function stabilizeIncomingRenderModel(
             columns: reusedActiveSheetColumns
                 ? previousModel.activeSheet.columns
                 : nextModel.activeSheet.columns,
+            columnWidths: reusedActiveSheetColumnWidths
+                ? previousModel.activeSheet.columnWidths
+                : nextModel.activeSheet.columnWidths,
         },
     };
 }

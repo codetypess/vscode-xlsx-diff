@@ -56,6 +56,7 @@ export interface DiffPanelColumnView {
     columnNumber: number;
     leftColumnNumber: number | null;
     rightColumnNumber: number | null;
+    columnWidth: number | null;
     leftLabel: string;
     rightLabel: string;
 }

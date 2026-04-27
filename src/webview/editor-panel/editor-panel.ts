@@ -23,13 +23,16 @@ import {
 } from "./editor-panel-logic";
 import {
     applyGridSheetEditToSheet,
+    areColumnWidthsEquivalent,
     areFreezePaneCountsEqual,
     captureStructuralSnapshot,
+    cloneColumnWidths,
     createCommittedWorkbookState,
     createFreezePaneSnapshot,
     createPendingWorkbookEditState,
     isGridSheetEdit,
     restorePendingWorkbookState,
+    setSheetColumnWidthSnapshot,
     createWorkingSheetEntries,
     createWorkingWorkbook,
     mapPendingCellEditsToWebview,
@@ -57,6 +60,10 @@ import { XlsxEditorDocument } from "./xlsx-editor-document";
 
 function getWebviewStrings(): EditorPanelStrings {
     return getRuntimeMessages().editorPanel;
+}
+
+function normalizeWorkbookColumnWidth(columnWidth: number): number {
+    return Math.round(columnWidth * 256) / 256;
 }
 
 export class XlsxEditorPanel {
@@ -468,6 +475,9 @@ export class XlsxEditorPanel {
                 case "deleteColumn":
                     await this.deletePendingColumn(message.columnNumber);
                     return;
+                case "promptColumnWidth":
+                    await this.promptPendingColumnWidth(message.columnNumber);
+                    return;
                 case "search": {
                     if (!this.getWorkingWorkbook()) {
                         return;
@@ -856,21 +866,39 @@ export class XlsxEditorPanel {
         });
     }
 
-    private getOriginalSheetSnapshot(
+    private getStructuralBaselineSheetSnapshot(
         sheetKey: string
     ): WorkbookSnapshot["sheets"][number] | undefined {
-        return this.workbook?.sheets.find((_sheet, index) => `sheet:${index}` === sheetKey);
+        if (!this.workbook) {
+            return undefined;
+        }
+
+        return restorePendingWorkbookState(this.workbook, {
+            cellEdits: [],
+            sheetEdits: this.pendingSheetEdits,
+            viewEdits: [],
+        }).sheetEntries.find((entry) => entry.key === sheetKey)?.sheet;
     }
 
-    private updatePendingViewLock(
-        sheetKey: string,
-        sheetName: string,
-        freezePane: WorkbookSnapshot["sheets"][number]["freezePane"]
-    ): void {
-        const originalFreezePane = this.getOriginalSheetSnapshot(sheetKey)?.freezePane ?? null;
-        const nextFreezePane = freezePane ?? null;
+    private syncPendingSheetViewEdit(sheetKey: string): void {
+        const entry = this.findSheetEntry(sheetKey);
+        if (!entry) {
+            this.pendingViewEdits = this.pendingViewEdits.filter(
+                (edit) => edit.sheetKey !== sheetKey
+            );
+            return;
+        }
 
-        if (areFreezePaneCountsEqual(originalFreezePane, nextFreezePane)) {
+        const baselineSheet = this.getStructuralBaselineSheetSnapshot(sheetKey);
+        const hasFreezePaneChange = !areFreezePaneCountsEqual(
+            baselineSheet?.freezePane ?? null,
+            entry.sheet.freezePane ?? null
+        );
+        const hasColumnWidthChange = !areColumnWidthsEquivalent(
+            baselineSheet?.columnWidths,
+            entry.sheet.columnWidths
+        );
+        if (!hasFreezePaneChange && !hasColumnWidthChange) {
             this.pendingViewEdits = this.pendingViewEdits.filter(
                 (edit) => edit.sheetKey !== sheetKey
             );
@@ -879,13 +907,18 @@ export class XlsxEditorPanel {
 
         const nextEdit: SheetViewEdit = {
             sheetKey,
-            sheetName,
-            freezePane: nextFreezePane
+            sheetName: entry.sheet.name,
+            freezePane: entry.sheet.freezePane
                 ? {
-                      columnCount: nextFreezePane.columnCount,
-                      rowCount: nextFreezePane.rowCount,
+                      columnCount: entry.sheet.freezePane.columnCount,
+                      rowCount: entry.sheet.freezePane.rowCount,
                   }
                 : null,
+            ...(hasColumnWidthChange
+                ? {
+                      columnWidths: cloneColumnWidths(entry.sheet.columnWidths),
+                  }
+                : {}),
         };
 
         const existingIndex = this.pendingViewEdits.findIndex((edit) => edit.sheetKey === sheetKey);
@@ -922,6 +955,20 @@ export class XlsxEditorPanel {
         );
     }
 
+    private validateColumnWidth(value: string): string | undefined {
+        const trimmedValue = value.trim();
+        if (trimmedValue.length === 0) {
+            return undefined;
+        }
+
+        const nextWidth = Number(trimmedValue);
+        if (!Number.isFinite(nextWidth) || nextWidth <= 0) {
+            return getWebviewStrings().invalidColumnWidth;
+        }
+
+        return undefined;
+    }
+
     private updatePendingRename(sheetKey: string, previousName: string, nextName: string): void {
         const addSheetEdit = this.pendingSheetEdits.find(
             (edit) => edit.type === "addSheet" && edit.sheetKey === sheetKey
@@ -951,12 +998,6 @@ export class XlsxEditorPanel {
                 nextSheetName: nextName,
             },
         ];
-    }
-
-    private updatePendingViewRename(sheetKey: string, nextName: string): void {
-        this.pendingViewEdits = this.pendingViewEdits.map((edit) =>
-            edit.sheetKey === sheetKey ? { ...edit, sheetName: nextName } : edit
-        );
     }
 
     private updatePendingGridEditRename(sheetKey: string, nextName: string): void {
@@ -989,6 +1030,90 @@ export class XlsxEditorPanel {
         );
     }
 
+    private async promptPendingColumnWidth(columnNumber: number): Promise<void> {
+        const workbook = this.getWorkingWorkbook();
+        const activeEntry = this.getActiveSheetEntry();
+        if (
+            !workbook ||
+            workbook.isReadonly ||
+            !activeEntry ||
+            !Number.isInteger(columnNumber) ||
+            columnNumber < 1 ||
+            columnNumber > activeEntry.sheet.columnCount
+        ) {
+            return;
+        }
+
+        const strings = getWebviewStrings();
+        const currentWidth = activeEntry.sheet.columnWidths?.[columnNumber - 1] ?? null;
+        const nextValue = await vscode.window.showInputBox({
+            prompt: strings.setColumnWidthPrompt,
+            title: strings.setColumnWidthTitle,
+            value: currentWidth === null ? "" : String(currentWidth),
+            validateInput: (value) => this.validateColumnWidth(value),
+        });
+        if (nextValue === undefined) {
+            return;
+        }
+
+        const trimmedValue = nextValue.trim();
+        await this.setPendingColumnWidth(
+            columnNumber,
+            trimmedValue.length === 0 ? null : normalizeWorkbookColumnWidth(Number(trimmedValue))
+        );
+    }
+
+    private async setPendingColumnWidth(
+        columnNumber: number,
+        nextWidth: number | null
+    ): Promise<void> {
+        const workbook = this.getWorkingWorkbook();
+        const activeEntry = this.getActiveSheetEntry();
+        if (
+            !workbook ||
+            workbook.isReadonly ||
+            !activeEntry ||
+            !Number.isInteger(columnNumber) ||
+            columnNumber < 1 ||
+            columnNumber > activeEntry.sheet.columnCount
+        ) {
+            return;
+        }
+
+        const normalizedWidth =
+            nextWidth === null ? null : normalizeWorkbookColumnWidth(nextWidth);
+        if (normalizedWidth !== null && (!Number.isFinite(normalizedWidth) || normalizedWidth <= 0)) {
+            return;
+        }
+
+        const currentWidth = activeEntry.sheet.columnWidths?.[columnNumber - 1] ?? null;
+        if (currentWidth === normalizedWidth) {
+            return;
+        }
+
+        await this.commitStructuralMutation(
+            () => {
+                const entry = this.getActiveSheetEntry();
+                if (!entry) {
+                    return;
+                }
+
+                entry.sheet = {
+                    ...entry.sheet,
+                    columnWidths: setSheetColumnWidthSnapshot(
+                        entry.sheet.columnWidths,
+                        columnNumber,
+                        normalizedWidth
+                    ),
+                };
+                this.syncPendingSheetViewEdit(entry.key);
+            },
+            {
+                resetPendingHistory: false,
+            }
+        );
+    }
+
     private async toggleViewLock(columnCount: number, rowCount: number): Promise<void> {
         const workbook = this.getWorkingWorkbook();
         const activeEntry = this.getActiveSheetEntry();
@@ -1014,17 +1139,23 @@ export class XlsxEditorPanel {
         const nextFreezePane = isLocked
             ? null
             : createFreezePaneSnapshot(nextColumnCount, nextRowCount);
-        activeEntry.sheet = {
-            ...activeEntry.sheet,
-            freezePane: nextFreezePane,
-        };
-        this.updatePendingViewLock(activeEntry.key, activeEntry.sheet.name, nextFreezePane);
+        await this.commitStructuralMutation(
+            () => {
+                const entry = this.getActiveSheetEntry();
+                if (!entry) {
+                    return;
+                }
 
-        await this.syncPendingState();
-        await this.render(undefined, {
-            useModelSelection: true,
-            replacePendingEdits: this.pendingCellEdits,
-        });
+                entry.sheet = {
+                    ...entry.sheet,
+                    freezePane: nextFreezePane,
+                };
+                this.syncPendingSheetViewEdit(entry.key);
+            },
+            {
+                resetPendingHistory: false,
+            }
+        );
     }
 
     private async undoStructuralEdit(): Promise<void> {
@@ -1105,6 +1236,7 @@ export class XlsxEditorPanel {
                     columnCount: 26,
                     visibility: "visible",
                     mergedRanges: [],
+                    columnWidths: [],
                     cells: {},
                     freezePane: null,
                     signature: `pending:${sheetKey}:${sheetName}`,
@@ -1233,7 +1365,7 @@ export class XlsxEditorPanel {
             );
             this.updatePendingRename(sheetKey, previousName, trimmedName);
             this.updatePendingGridEditRename(sheetKey, trimmedName);
-            this.updatePendingViewRename(sheetKey, trimmedName);
+            this.syncPendingSheetViewEdit(sheetKey);
             this.state = setActiveEditorSheet(
                 this.getWorkingWorkbook()!,
                 {
@@ -1366,6 +1498,7 @@ export class XlsxEditorPanel {
                 edit
             );
             this.pendingSheetEdits = [...this.pendingSheetEdits, edit];
+            this.syncPendingSheetViewEdit(entry.key);
             this.setActiveSheetSelection(
                 Math.min(
                     Math.max(this.state.selectedCell?.rowNumber ?? 1, 1),
@@ -1410,6 +1543,7 @@ export class XlsxEditorPanel {
                 edit
             );
             this.pendingSheetEdits = [...this.pendingSheetEdits, edit];
+            this.syncPendingSheetViewEdit(entry.key);
             this.setActiveSheetSelection(
                 Math.min(
                     Math.max(this.state.selectedCell?.rowNumber ?? 1, 1),

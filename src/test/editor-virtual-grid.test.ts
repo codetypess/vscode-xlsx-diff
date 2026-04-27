@@ -8,8 +8,11 @@ import {
     EDITOR_VIRTUAL_ROW_HEIGHT,
     clampEditorScrollPosition,
     createEditorColumnWindow,
+    createEditorPixelColumnLayout,
     createEditorRowWindow,
+    getEditorDisplayColumnLayout,
     getEditorDisplayGridDimensions,
+    getEditorFrozenColumnsWidth,
     getEditorContentSize,
     getEditorRowHeaderWidth,
     getEditorScrollPositionForCell,
@@ -33,8 +36,10 @@ suite("Editor virtual grid helpers", () => {
     });
 
     test("creates a scrollable column window after frozen columns", () => {
+        const sheetColumnLayout = createEditorPixelColumnLayout({ columnCount: 200 });
+        const columnLayout = getEditorDisplayColumnLayout(sheetColumnLayout, 200);
         const window = createEditorColumnWindow({
-            totalColumns: 200,
+            columnLayout,
             frozenColumnCount: 1,
             scrollLeft: 120 * 20,
             viewportWidth: 900,
@@ -48,9 +53,11 @@ suite("Editor virtual grid helpers", () => {
 
     test("computes content size and target scroll positions for a cell", () => {
         const rowHeaderWidth = getEditorRowHeaderWidth(1000);
+        const sheetColumnLayout = createEditorPixelColumnLayout({ columnCount: 50 });
+        const columnLayout = getEditorDisplayColumnLayout(sheetColumnLayout, 50);
         const contentSize = getEditorContentSize({
             rowCount: 1000,
-            columnCount: 50,
+            columnLayout,
             rowHeaderWidth,
         });
         const target = getEditorScrollPositionForCell({
@@ -61,6 +68,7 @@ suite("Editor virtual grid helpers", () => {
             viewportHeight: 600,
             viewportWidth: 900,
             rowHeaderWidth,
+            columnLayout,
         });
 
         assert.strictEqual(
@@ -89,6 +97,7 @@ suite("Editor virtual grid helpers", () => {
     });
 
     test("clips rendered frozen panes to the current viewport", () => {
+        const columnLayout = createEditorPixelColumnLayout({ columnCount: 20 });
         assert.deepStrictEqual(
             getVisibleFrozenEditorCounts({
                 frozenRowCount: 200,
@@ -96,21 +105,24 @@ suite("Editor virtual grid helpers", () => {
                 viewportHeight: 600,
                 viewportWidth: 900,
                 rowHeaderWidth: 56,
+                columnLayout,
             }),
             {
                 rowCount: 20,
-                columnCount: 7,
+                columnCount: 8,
             }
         );
     });
 
     test("pads displayed rows and columns to fill the viewport", () => {
+        const columnLayout = createEditorPixelColumnLayout({ columnCount: 3 });
         assert.deepStrictEqual(
             getEditorDisplayGridDimensions({
                 rowCount: 5,
                 columnCount: 3,
                 viewportHeight: 600,
                 viewportWidth: 960,
+                columnLayout,
             }),
             {
                 rowCount: 29,
@@ -121,18 +133,41 @@ suite("Editor virtual grid helpers", () => {
     });
 
     test("adds extra editable rows and columns even when the sheet already fills the viewport", () => {
+        const columnLayout = createEditorPixelColumnLayout({ columnCount: 12 });
         assert.deepStrictEqual(
             getEditorDisplayGridDimensions({
                 rowCount: 40,
                 columnCount: 12,
                 viewportHeight: 600,
                 viewportWidth: 960,
+                columnLayout,
             }),
             {
                 rowCount: 48,
                 columnCount: 15,
                 rowHeaderWidth: 56,
             }
+        );
+    });
+
+    test("honors workbook-backed variable column widths", () => {
+        const sheetColumnLayout = createEditorPixelColumnLayout({
+            columnCount: 4,
+            columnWidths: [8.7109375, 20, null, 12],
+            maximumDigitWidth: 7,
+        });
+        const columnLayout = getEditorDisplayColumnLayout(sheetColumnLayout, 4);
+
+        assert.strictEqual(getEditorFrozenColumnsWidth(columnLayout, 2), 201);
+        assert.strictEqual(
+            getEditorDisplayGridDimensions({
+                rowCount: 10,
+                columnCount: 4,
+                viewportHeight: 600,
+                viewportWidth: 960,
+                columnLayout: sheetColumnLayout,
+            }).columnCount,
+            12
         );
     });
 });

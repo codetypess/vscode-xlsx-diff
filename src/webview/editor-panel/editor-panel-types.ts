@@ -54,6 +54,7 @@ export type EditorWebviewMessage =
     | { type: "deleteRow"; rowNumber: number }
     | { type: "insertColumn"; columnNumber: number }
     | { type: "deleteColumn"; columnNumber: number }
+    | { type: "promptColumnWidth"; columnNumber: number }
     | ({ type: "search" } & EditorSearchRequest)
     | { type: "gotoCell"; reference: string }
     | { type: "selectCell"; rowNumber: number; columnNumber: number }
@@ -100,6 +101,10 @@ export interface EditorPanelStrings {
     insertColumnLeft: string;
     insertColumnRight: string;
     deleteColumn: string;
+    setColumnWidth: string;
+    setColumnWidthPrompt: string;
+    setColumnWidthTitle: string;
+    invalidColumnWidth: string;
     renameSheetPrompt: string;
     renameSheetTitle: string;
     sheetNameEmpty: string;

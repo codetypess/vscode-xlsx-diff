@@ -1,7 +1,18 @@
 import { DEFAULT_EDITOR_WINDOW_OVERSCAN } from "../../constants";
+import {
+    DEFAULT_COLUMN_PIXEL_WIDTH,
+    DEFAULT_MAXIMUM_DIGIT_WIDTH_PX,
+    type PixelColumnLayout,
+    createPixelColumnLayout,
+    extendPixelColumnLayout,
+    findColumnIndexForOffset,
+    getPixelColumnLeft,
+    getPixelColumnOffset,
+    getPixelColumnWidth,
+} from "../column-layout";
 
 export const EDITOR_VIRTUAL_ROW_HEIGHT = 28;
-export const EDITOR_VIRTUAL_COLUMN_WIDTH = 120;
+export const EDITOR_VIRTUAL_COLUMN_WIDTH = DEFAULT_COLUMN_PIXEL_WIDTH;
 export const EDITOR_VIRTUAL_HEADER_HEIGHT = 28;
 export const EDITOR_VIRTUAL_COLUMN_OVERSCAN = 8;
 export const EDITOR_EXTRA_PADDING_ROWS = 8;
@@ -16,6 +27,45 @@ export function getEditorRowHeaderWidth(totalRows: number): number {
     return Math.max(56, digits * 9 + 24);
 }
 
+export function createEditorPixelColumnLayout({
+    columnCount,
+    columnWidths,
+    maximumDigitWidth = DEFAULT_MAXIMUM_DIGIT_WIDTH_PX,
+}: {
+    columnCount: number;
+    columnWidths?: readonly (number | null)[];
+    maximumDigitWidth?: number;
+}): PixelColumnLayout {
+    return createPixelColumnLayout({
+        columnWidths: (columnWidths ?? []).slice(0, columnCount),
+        totalColumnCount: columnCount,
+        maximumDigitWidth,
+        fallbackPixelWidth: EDITOR_VIRTUAL_COLUMN_WIDTH,
+    });
+}
+
+export function getEditorDisplayColumnLayout(
+    layout: PixelColumnLayout,
+    totalColumnCount: number
+): PixelColumnLayout {
+    return extendPixelColumnLayout(layout, totalColumnCount);
+}
+
+export function getEditorColumnLeft(layout: PixelColumnLayout, columnNumber: number): number {
+    return getPixelColumnLeft(layout, columnNumber);
+}
+
+export function getEditorColumnWidth(layout: PixelColumnLayout, columnNumber: number): number {
+    return getPixelColumnWidth(layout, columnNumber);
+}
+
+export function getEditorFrozenColumnsWidth(
+    layout: PixelColumnLayout,
+    frozenColumnCount: number
+): number {
+    return getPixelColumnOffset(layout, frozenColumnCount);
+}
+
 export function getMinimumVisibleEditorRowCount(viewportHeight: number): number {
     return Math.max(
         1,
@@ -28,14 +78,25 @@ export function getMinimumVisibleEditorRowCount(viewportHeight: number): number 
 export function getMinimumVisibleEditorColumnCount({
     viewportWidth,
     rowHeaderWidth,
+    columnLayout,
 }: {
     viewportWidth: number;
     rowHeaderWidth: number;
+    columnLayout: PixelColumnLayout;
 }): number {
-    return Math.max(
-        1,
-        Math.ceil(Math.max(0, viewportWidth - rowHeaderWidth) / EDITOR_VIRTUAL_COLUMN_WIDTH)
-    );
+    const availableWidth = Math.max(0, viewportWidth - rowHeaderWidth);
+    if (availableWidth <= 0) {
+        return 1;
+    }
+
+    let visibleWidth = 0;
+    let visibleColumnCount = 0;
+    while (visibleWidth < availableWidth) {
+        visibleColumnCount += 1;
+        visibleWidth += getEditorColumnWidth(columnLayout, visibleColumnCount);
+    }
+
+    return Math.max(1, visibleColumnCount);
 }
 
 export function getEditorDisplayGridDimensions({
@@ -43,11 +104,13 @@ export function getEditorDisplayGridDimensions({
     columnCount,
     viewportHeight,
     viewportWidth,
+    columnLayout,
 }: {
     rowCount: number;
     columnCount: number;
     viewportHeight: number;
     viewportWidth: number;
+    columnLayout: PixelColumnLayout;
 }): { rowCount: number; columnCount: number; rowHeaderWidth: number } {
     const displayRowCount =
         Math.max(rowCount, getMinimumVisibleEditorRowCount(viewportHeight)) +
@@ -62,6 +125,7 @@ export function getEditorDisplayGridDimensions({
                 getMinimumVisibleEditorColumnCount({
                     viewportWidth,
                     rowHeaderWidth,
+                    columnLayout,
                 })
             ) + EDITOR_EXTRA_PADDING_COLUMNS,
         rowHeaderWidth,
@@ -98,12 +162,14 @@ export function getVisibleFrozenEditorCounts({
     viewportHeight,
     viewportWidth,
     rowHeaderWidth,
+    columnLayout,
 }: {
     frozenRowCount: number;
     frozenColumnCount: number;
     viewportHeight: number;
     viewportWidth: number;
     rowHeaderWidth: number;
+    columnLayout: PixelColumnLayout;
 }): { rowCount: number; columnCount: number } {
     const visibleFrozenRowCount = Math.max(
         0,
@@ -111,12 +177,17 @@ export function getVisibleFrozenEditorCounts({
             Math.max(0, viewportHeight - EDITOR_VIRTUAL_HEADER_HEIGHT) / EDITOR_VIRTUAL_ROW_HEIGHT
         )
     );
-    const visibleFrozenColumnCount = Math.max(
-        0,
-        Math.floor(
-            Math.max(0, viewportWidth - rowHeaderWidth) / EDITOR_VIRTUAL_COLUMN_WIDTH
-        )
-    );
+
+    const availableFrozenWidth = Math.max(0, viewportWidth - rowHeaderWidth);
+    let visibleFrozenColumnCount = 0;
+    let consumedFrozenWidth = 0;
+    while (
+        visibleFrozenColumnCount < frozenColumnCount &&
+        consumedFrozenWidth < availableFrozenWidth
+    ) {
+        visibleFrozenColumnCount += 1;
+        consumedFrozenWidth += getEditorColumnWidth(columnLayout, visibleFrozenColumnCount);
+    }
 
     return {
         rowCount: Math.min(frozenRowCount, visibleFrozenRowCount),
@@ -184,14 +255,14 @@ export function createEditorRowWindow({
 }
 
 export function createEditorColumnWindow({
-    totalColumns,
+    columnLayout,
     frozenColumnCount,
     scrollLeft,
     viewportWidth,
     rowHeaderWidth,
     overscan = EDITOR_VIRTUAL_COLUMN_OVERSCAN,
 }: {
-    totalColumns: number;
+    columnLayout: PixelColumnLayout;
     frozenColumnCount: number;
     scrollLeft: number;
     viewportWidth: number;
@@ -204,7 +275,7 @@ export function createEditorColumnWindow({
     leadingSpacerWidth: number;
     trailingSpacerWidth: number;
 } {
-    const scrollableColumnCount = Math.max(0, totalColumns - frozenColumnCount);
+    const scrollableColumnCount = Math.max(0, columnLayout.totalColumnCount - frozenColumnCount);
     if (scrollableColumnCount <= 0) {
         return {
             columnNumbers: [],
@@ -215,47 +286,55 @@ export function createEditorColumnWindow({
         };
     }
 
-    const stickyWidth =
-        rowHeaderWidth + frozenColumnCount * EDITOR_VIRTUAL_COLUMN_WIDTH;
+    const frozenColumnsWidth = getEditorFrozenColumnsWidth(columnLayout, frozenColumnCount);
+    const stickyWidth = rowHeaderWidth + frozenColumnsWidth;
     const scrollableViewportWidth = Math.max(
         EDITOR_VIRTUAL_COLUMN_WIDTH,
         viewportWidth - stickyWidth
     );
-    const startIndex = Math.max(
-        0,
-        Math.floor(scrollLeft / EDITOR_VIRTUAL_COLUMN_WIDTH) - overscan
+    const startVisibleIndex = Math.max(
+        frozenColumnCount,
+        findColumnIndexForOffset(columnLayout, frozenColumnsWidth + scrollLeft)
     );
-    const visibleColumnCount =
-        Math.ceil(scrollableViewportWidth / EDITOR_VIRTUAL_COLUMN_WIDTH) + overscan * 2;
-    const endIndex = Math.min(scrollableColumnCount, startIndex + visibleColumnCount);
+    const endVisibleIndex = Math.max(
+        frozenColumnCount,
+        findColumnIndexForOffset(
+            columnLayout,
+            frozenColumnsWidth + Math.max(scrollLeft, scrollLeft + scrollableViewportWidth - 1)
+        )
+    );
+    const startIndex = Math.max(frozenColumnCount, startVisibleIndex - overscan);
+    const endIndex = Math.min(columnLayout.totalColumnCount, endVisibleIndex + overscan + 1);
     const columnNumbers = Array.from(
         { length: Math.max(0, endIndex - startIndex) },
-        (_, index) => frozenColumnCount + startIndex + index + 1
+        (_, index) => startIndex + index + 1
     );
 
     return {
         columnNumbers,
         startColumnNumber: columnNumbers[0] ?? frozenColumnCount + 1,
         endColumnNumber: columnNumbers[columnNumbers.length - 1] ?? frozenColumnCount,
-        leadingSpacerWidth: startIndex * EDITOR_VIRTUAL_COLUMN_WIDTH,
+        leadingSpacerWidth: Math.max(0, getPixelColumnOffset(columnLayout, startIndex) - frozenColumnsWidth),
         trailingSpacerWidth: Math.max(
             0,
-            (scrollableColumnCount - endIndex) * EDITOR_VIRTUAL_COLUMN_WIDTH
+            columnLayout.totalWidth -
+                getPixelColumnOffset(columnLayout, endIndex) -
+                frozenColumnsWidth
         ),
     };
 }
 
 export function getEditorContentSize({
     rowCount,
-    columnCount,
+    columnLayout,
     rowHeaderWidth,
 }: {
     rowCount: number;
-    columnCount: number;
+    columnLayout: PixelColumnLayout;
     rowHeaderWidth: number;
 }): { width: number; height: number } {
     return {
-        width: rowHeaderWidth + columnCount * EDITOR_VIRTUAL_COLUMN_WIDTH,
+        width: rowHeaderWidth + columnLayout.totalWidth,
         height: EDITOR_VIRTUAL_HEADER_HEIGHT + rowCount * EDITOR_VIRTUAL_ROW_HEIGHT,
     };
 }
@@ -268,6 +347,7 @@ export function getEditorScrollPositionForCell({
     viewportHeight,
     viewportWidth,
     rowHeaderWidth,
+    columnLayout,
 }: {
     rowNumber: number;
     columnNumber: number;
@@ -276,10 +356,12 @@ export function getEditorScrollPositionForCell({
     viewportHeight: number;
     viewportWidth: number;
     rowHeaderWidth: number;
+    columnLayout: PixelColumnLayout;
 }): { top: number | null; left: number | null } {
     const stickyTop =
         EDITOR_VIRTUAL_HEADER_HEIGHT + frozenRowCount * EDITOR_VIRTUAL_ROW_HEIGHT;
-    const stickyLeft = rowHeaderWidth + frozenColumnCount * EDITOR_VIRTUAL_COLUMN_WIDTH;
+    const frozenColumnsWidth = getEditorFrozenColumnsWidth(columnLayout, frozenColumnCount);
+    const stickyLeft = rowHeaderWidth + frozenColumnsWidth;
 
     return {
         top:
@@ -298,10 +380,13 @@ export function getEditorScrollPositionForCell({
                 ? null
                 : Math.max(
                       0,
-                      (columnNumber - frozenColumnCount - 1) * EDITOR_VIRTUAL_COLUMN_WIDTH -
+                      getEditorColumnLeft(columnLayout, columnNumber) -
+                          frozenColumnsWidth -
                           Math.max(
                               0,
-                              viewportWidth - stickyLeft - EDITOR_VIRTUAL_COLUMN_WIDTH
+                              viewportWidth -
+                                  stickyLeft -
+                                  getEditorColumnWidth(columnLayout, columnNumber)
                           )
                   ),
     };

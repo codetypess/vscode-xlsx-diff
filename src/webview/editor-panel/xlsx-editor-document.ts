@@ -103,6 +103,10 @@ function compareViewEdits(left: SheetViewEdit, right: SheetViewEdit): number {
         return left.sheetKey.localeCompare(right.sheetKey);
     }
 
+    if (left.sheetName !== right.sheetName) {
+        return left.sheetName.localeCompare(right.sheetName);
+    }
+
     const leftColumnCount = left.freezePane?.columnCount ?? -1;
     const rightColumnCount = right.freezePane?.columnCount ?? -1;
     if (leftColumnCount !== rightColumnCount) {
@@ -111,7 +115,37 @@ function compareViewEdits(left: SheetViewEdit, right: SheetViewEdit): number {
 
     const leftRowCount = left.freezePane?.rowCount ?? -1;
     const rightRowCount = right.freezePane?.rowCount ?? -1;
-    return leftRowCount - rightRowCount;
+    if (leftRowCount !== rightRowCount) {
+        return leftRowCount - rightRowCount;
+    }
+
+    const maxColumnWidthCount = Math.max(
+        left.columnWidths?.length ?? 0,
+        right.columnWidths?.length ?? 0
+    );
+    for (let index = 0; index < maxColumnWidthCount; index += 1) {
+        const leftWidth = left.columnWidths?.[index] ?? null;
+        const rightWidth = right.columnWidths?.[index] ?? null;
+        if (leftWidth === rightWidth) {
+            continue;
+        }
+
+        return (leftWidth ?? -1) - (rightWidth ?? -1);
+    }
+
+    return 0;
+}
+
+function cloneViewEdit(edit: SheetViewEdit): SheetViewEdit {
+    return {
+        ...edit,
+        freezePane: edit.freezePane ? { ...edit.freezePane } : null,
+        ...(edit.columnWidths
+            ? {
+                  columnWidths: edit.columnWidths.map((columnWidth) => columnWidth ?? null),
+              }
+            : {}),
+    };
 }
 
 function areViewEditsEqual(
@@ -128,7 +162,12 @@ function areViewEditsEqual(
             edit.sheetKey === other.sheetKey &&
             edit.sheetName === other.sheetName &&
             (edit.freezePane?.columnCount ?? null) === (other.freezePane?.columnCount ?? null) &&
-            (edit.freezePane?.rowCount ?? null) === (other.freezePane?.rowCount ?? null)
+            (edit.freezePane?.rowCount ?? null) === (other.freezePane?.rowCount ?? null) &&
+            (edit.columnWidths?.length ?? 0) === (other.columnWidths?.length ?? 0) &&
+            (edit.columnWidths ?? []).every(
+                (columnWidth, columnIndex) =>
+                    columnWidth === (other.columnWidths?.[columnIndex] ?? null)
+            )
         );
     });
 }
@@ -186,14 +225,16 @@ export class XlsxEditorDocument implements vscode.CustomDocument {
         return {
             cellEdits: this.getPendingEdits(),
             sheetEdits: [...this.pendingSheetEdits],
-            viewEdits: [...this.pendingViewEdits],
+            viewEdits: this.pendingViewEdits.map(cloneViewEdit),
         };
     }
 
     public replacePendingState(state: Readonly<WorkbookEditState>): boolean {
         const normalizedEdits = [...state.cellEdits].sort(compareCellEdits);
         const normalizedSheetEdits = [...state.sheetEdits];
-        const normalizedViewEdits = [...(state.viewEdits ?? [])].sort(compareViewEdits);
+        const normalizedViewEdits = (state.viewEdits ?? [])
+            .map(cloneViewEdit)
+            .sort(compareViewEdits);
         const currentState = this.getPendingState();
         if (
             areCellEditsEqual(currentState.cellEdits, normalizedEdits) &&

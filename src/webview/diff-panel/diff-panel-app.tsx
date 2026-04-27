@@ -5,6 +5,18 @@ import { RUNTIME_MESSAGES } from "../../i18n/catalog";
 import { getDiffRowHeaderWidth } from "./diff-grid-layout";
 import { getMaxVisibleSheetTabsForWidth, partitionSheetTabs } from "../editor-sheet-tabs";
 import { getSelectionPreviewInlineDiff } from "./selection-preview-diff";
+import {
+    DEFAULT_COLUMN_PIXEL_WIDTH,
+    DEFAULT_MAXIMUM_DIGIT_WIDTH_PX,
+    getFontShorthand,
+    measureMaximumDigitWidth,
+    createPixelColumnLayout,
+    getPixelColumnLeft,
+    getPixelColumnRight,
+    getPixelColumnWidth,
+    getPixelColumnWindow,
+    type PixelColumnLayout,
+} from "../column-layout";
 import type {
     DiffPanelRenderModel,
     DiffPanelRowView,
@@ -98,7 +110,6 @@ type DiffMarkerTone = CellDiffStatus | "pending" | null;
 
 const ROW_HEIGHT = 27;
 const ROW_OVERSCAN = 8;
-const COLUMN_WIDTH = 120;
 const COLUMN_OVERSCAN = 2;
 const DIFF_SHEET_TAB_ITEM_GAP = 1;
 const DIFF_SHEET_TAB_ESTIMATED_WIDTH = 120;
@@ -130,6 +141,29 @@ function areSheetTabWidthsEqual(
     }
 
     return leftKeys.every((key) => left[key] === right[key]);
+}
+
+function useMeasuredMaximumDigitWidth(target: Element | null): number {
+    const [maximumDigitWidth, setMaximumDigitWidth] = React.useState(
+        DEFAULT_MAXIMUM_DIGIT_WIDTH_PX
+    );
+
+    React.useLayoutEffect(() => {
+        const updateMaximumDigitWidth = (): void => {
+            setMaximumDigitWidth(measureMaximumDigitWidth(getFontShorthand(target)));
+        };
+
+        updateMaximumDigitWidth();
+        window.addEventListener("resize", updateMaximumDigitWidth);
+        window.visualViewport?.addEventListener("resize", updateMaximumDigitWidth);
+
+        return () => {
+            window.removeEventListener("resize", updateMaximumDigitWidth);
+            window.visualViewport?.removeEventListener("resize", updateMaximumDigitWidth);
+        };
+    }, [target]);
+
+    return maximumDigitWidth;
 }
 
 function getMaxVisibleDiffSheetTabs(
@@ -421,10 +455,11 @@ function getDefaultSelectionForFilter(
 
 function createColumnWindow(
     sheet: DiffPanelSheetView | null,
+    columnLayout: PixelColumnLayout | null,
     scrollLeft: number,
     viewportWidth: number
 ): ColumnWindow {
-    if (!sheet || sheet.columnCount === 0) {
+    if (!sheet || !columnLayout || sheet.columnCount === 0) {
         return {
             columns: [],
             leadingSpacerWidth: 0,
@@ -434,18 +469,13 @@ function createColumnWindow(
         };
     }
 
-    const totalWidth = sheet.columnCount * COLUMN_WIDTH;
-    const effectiveViewportWidth = Math.max(viewportWidth, COLUMN_WIDTH);
-    const startColumnIndex = Math.max(0, Math.floor(scrollLeft / COLUMN_WIDTH) - COLUMN_OVERSCAN);
-    const visibleColumnCount =
-        Math.ceil(effectiveViewportWidth / COLUMN_WIDTH) + COLUMN_OVERSCAN * 2;
-    const endColumnIndex = Math.min(sheet.columnCount, startColumnIndex + visibleColumnCount);
+    const window = getPixelColumnWindow(columnLayout, scrollLeft, viewportWidth, COLUMN_OVERSCAN);
 
     return {
-        columns: sheet.columns.slice(startColumnIndex, endColumnIndex),
-        leadingSpacerWidth: startColumnIndex * COLUMN_WIDTH,
-        trailingSpacerWidth: Math.max(0, totalWidth - endColumnIndex * COLUMN_WIDTH),
-        totalWidth,
+        columns: sheet.columns.slice(window.startIndex, window.endIndex),
+        leadingSpacerWidth: window.leadingSpacerWidth,
+        trailingSpacerWidth: window.trailingSpacerWidth,
+        totalWidth: columnLayout.totalWidth,
         viewportWidth,
     };
 }
@@ -991,6 +1021,7 @@ function getEffectiveMarkerTone(
 
 function PaneHeader({
     side,
+    columnLayout,
     columnWindow,
     columnDiffTones,
     pendingColumns,
@@ -999,6 +1030,7 @@ function PaneHeader({
     viewportRef,
 }: {
     side: Side;
+    columnLayout: PixelColumnLayout;
     columnWindow: ColumnWindow;
     columnDiffTones: Array<CellDiffStatus | null>;
     pendingColumns: ReadonlySet<number>;
@@ -1031,6 +1063,7 @@ function PaneHeader({
                     {columnWindow.columns.map((column) => {
                         const columnLabel = side === "left" ? column.leftLabel : column.rightLabel;
                         const columnNumber = column.columnNumber;
+                        const columnWidth = getPixelColumnWidth(columnLayout!, columnNumber);
                         const diffTone = columnDiffTones[columnNumber - 1] ?? null;
                         const hasPending = pendingColumns.has(columnNumber);
                         const markerTone = getEffectiveMarkerTone(diffTone, hasPending);
@@ -1046,6 +1079,11 @@ function PaneHeader({
                                     selectedColumnNumber === columnNumber &&
                                         "diff-headerCell--active",
                                 ])}
+                                style={{
+                                    width: columnWidth,
+                                    flexBasis: columnWidth,
+                                    "--diff-column-width": `${columnWidth}px`,
+                                } as React.CSSProperties}
                             >
                                 <span className="diff-headerLabel">
                                     <DiffMarker tone={markerTone} />
@@ -1273,6 +1311,7 @@ function SideRow({
     side,
     rowNumber,
     row,
+    columnLayout,
     columnWindow,
     scrollLeft,
     selectedCell,
@@ -1290,6 +1329,7 @@ function SideRow({
     side: Side;
     rowNumber: number;
     row: DiffPanelRowView | null;
+    columnLayout: PixelColumnLayout;
     columnWindow: ColumnWindow;
     scrollLeft: number;
     selectedCell: CellSelection | null;
@@ -1344,6 +1384,7 @@ function SideRow({
                     {columnWindow.columns.map((column) => {
                         const columnNumber = column.columnNumber;
                         const columnLabel = side === "left" ? column.leftLabel : column.rightLabel;
+                        const columnWidth = getPixelColumnWidth(columnLayout!, columnNumber);
                         const cell = sparseByColumn.get(columnNumber) ?? null;
                         const modelDisplay = getCellDisplay(cell, side);
                         const pendingKey = getPendingEditKey(
@@ -1398,6 +1439,11 @@ function SideRow({
                                     display.value,
                                     display.formula
                                 )}
+                                style={{
+                                    width: columnWidth,
+                                    flexBasis: columnWidth,
+                                    "--diff-column-width": `${columnWidth}px`,
+                                } as React.CSSProperties}
                                 onClick={() => {
                                     onSelect(
                                         createSelection(
@@ -1556,6 +1602,7 @@ function App(): React.JSX.Element {
 
     const model = viewState.kind === "app" ? viewState.model : null;
     const activeSheet = model?.activeSheet ?? null;
+    const maximumDigitWidth = useMeasuredMaximumDigitWidth(document.body);
     const activeSheetViewKey =
         model && activeSheet
             ? `${model.leftFile.path}::${model.rightFile.path}::${activeSheet.key}`
@@ -1597,10 +1644,21 @@ function App(): React.JSX.Element {
         () => (activeSheet ? createSheetRuntime(activeSheet) : null),
         [activeSheet]
     );
+    const columnLayout = React.useMemo(
+        () =>
+            activeSheet
+                ? createPixelColumnLayout({
+                      columnWidths: activeSheet.columns.map((column) => column.columnWidth),
+                      maximumDigitWidth,
+                      fallbackPixelWidth: DEFAULT_COLUMN_PIXEL_WIDTH,
+                  })
+                : null,
+        [activeSheet, maximumDigitWidth]
+    );
     const columnViewportWidth = Math.max(leftHeaderViewportWidth, rightHeaderViewportWidth);
     const columnWindow = React.useMemo(
-        () => createColumnWindow(activeSheet, horizontalScrollLeft, columnViewportWidth),
-        [activeSheet, columnViewportWidth, horizontalScrollLeft]
+        () => createColumnWindow(activeSheet, columnLayout, horizontalScrollLeft, columnViewportWidth),
+        [activeSheet, columnLayout, columnViewportWidth, horizontalScrollLeft]
     );
     const totalRowCount = activeSheet ? getFilteredRowCount(activeSheet, filter) : 0;
     const startIndex = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - ROW_OVERSCAN);
@@ -1815,12 +1873,12 @@ function App(): React.JSX.Element {
     }, [activeDiffIndex, activeSheet, runtime, selectedCell]);
 
     const ensureColumnVisible = React.useEffectEvent((columnNumber: number) => {
-        if (!activeSheet || columnWindow.viewportWidth <= 0) {
+        if (!activeSheet || !columnLayout || columnWindow.viewportWidth <= 0) {
             return;
         }
 
-        const cellLeft = (columnNumber - 1) * COLUMN_WIDTH;
-        const cellRight = cellLeft + COLUMN_WIDTH;
+        const cellLeft = getPixelColumnLeft(columnLayout, columnNumber);
+        const cellRight = getPixelColumnRight(columnLayout, columnNumber);
         const viewportLeft = horizontalScrollLeft;
         const viewportRight = viewportLeft + columnWindow.viewportWidth;
 
@@ -2353,6 +2411,7 @@ function App(): React.JSX.Element {
                                     <div className="diff-pane">
                                         <PaneHeader
                                             side="left"
+                                            columnLayout={columnLayout!}
                                             columnWindow={columnWindow}
                                             columnDiffTones={runtime?.columnDiffTones ?? []}
                                             pendingColumns={pendingSummary.columnsBySide.left}
@@ -2365,6 +2424,7 @@ function App(): React.JSX.Element {
                                     <div className="diff-pane">
                                         <PaneHeader
                                             side="right"
+                                            columnLayout={columnLayout!}
                                             columnWindow={columnWindow}
                                             columnDiffTones={runtime?.columnDiffTones ?? []}
                                             pendingColumns={pendingSummary.columnsBySide.right}
@@ -2424,6 +2484,7 @@ function App(): React.JSX.Element {
                                                             side="left"
                                                             rowNumber={rowNumber}
                                                             row={row}
+                                                            columnLayout={columnLayout!}
                                                             columnWindow={columnWindow}
                                                             scrollLeft={horizontalScrollLeft}
                                                             selectedCell={selectedCell}
@@ -2451,6 +2512,7 @@ function App(): React.JSX.Element {
                                                             side="right"
                                                             rowNumber={rowNumber}
                                                             row={row}
+                                                            columnLayout={columnLayout!}
                                                             columnWindow={columnWindow}
                                                             scrollLeft={horizontalScrollLeft}
                                                             selectedCell={selectedCell}

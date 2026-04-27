@@ -14,6 +14,7 @@ function createWorkbook(overrides: Partial<WorkbookSnapshot>): WorkbookSnapshot 
         columnCount: 1,
         visibility: "visible",
         mergedRanges: [],
+        columnWidths: [],
         freezePane: null,
         cells: {},
         signature: "Sheet1",
@@ -45,7 +46,11 @@ suite("Diff panel render model", () => {
             formula: null,
             styleId: null,
         });
-        const createGridSheet = (name: string, rows: string[][]): SheetSnapshot => {
+        const createGridSheet = (
+            name: string,
+            rows: string[][],
+            columnWidths: SheetSnapshot["columnWidths"] = []
+        ): SheetSnapshot => {
             const cells: Record<string, CellSnapshot> = {};
             let columnCount = 0;
 
@@ -67,6 +72,7 @@ suite("Diff panel render model", () => {
                 columnCount,
                 visibility: "visible",
                 mergedRanges: [],
+                columnWidths,
                 freezePane: null,
                 cells,
                 signature: `${name}:${rows.map((row) => row.join("|")).join("/")}`,
@@ -105,6 +111,93 @@ suite("Diff panel render model", () => {
                 ["B", "C"],
                 ["C", "D"],
             ]
+        );
+        assert.deepStrictEqual(activeSheet.columns.map((column) => column.columnWidth), [null, null, null, null]);
+    });
+
+    test("uses the wider workbook column width for aligned diff columns", () => {
+        const leftNameCell: CellSnapshot = {
+            key: createCellKey(1, 1),
+            rowNumber: 1,
+            columnNumber: 1,
+            address: getCellAddress(1, 1),
+            displayValue: "Name",
+            formula: null,
+            styleId: null,
+        };
+        const leftScoreCell: CellSnapshot = {
+            key: createCellKey(1, 2),
+            rowNumber: 1,
+            columnNumber: 2,
+            address: getCellAddress(1, 2),
+            displayValue: "Score",
+            formula: null,
+            styleId: null,
+        };
+        const rightNameCell: CellSnapshot = {
+            key: createCellKey(1, 1),
+            rowNumber: 1,
+            columnNumber: 1,
+            address: getCellAddress(1, 1),
+            displayValue: "Name",
+            formula: null,
+            styleId: null,
+        };
+        const rightScoreCell: CellSnapshot = {
+            key: createCellKey(1, 2),
+            rowNumber: 1,
+            columnNumber: 2,
+            address: getCellAddress(1, 2),
+            displayValue: "Score",
+            formula: null,
+            styleId: null,
+        };
+        const diff = buildWorkbookDiff(
+            createWorkbook({
+                sheets: [
+                    {
+                        name: "Sheet1",
+                        rowCount: 1,
+                        columnCount: 2,
+                        visibility: "visible",
+                        mergedRanges: [],
+                        columnWidths: [8.7109375, 12],
+                        freezePane: null,
+                        cells: {
+                            [leftNameCell.key]: leftNameCell,
+                            [leftScoreCell.key]: leftScoreCell,
+                        },
+                        signature: "left",
+                    },
+                ],
+            }),
+            createWorkbook({
+                filePath: "/tmp/item-next.xlsx",
+                fileName: "item-next.xlsx",
+                sheets: [
+                    {
+                        name: "Sheet1",
+                        rowCount: 1,
+                        columnCount: 2,
+                        visibility: "visible",
+                        mergedRanges: [],
+                        columnWidths: [20, 10],
+                        freezePane: null,
+                        cells: {
+                            [rightNameCell.key]: rightNameCell,
+                            [rightScoreCell.key]: rightScoreCell,
+                        },
+                        signature: "right",
+                    },
+                ],
+            })
+        );
+
+        const renderModel = createDiffPanelRenderModel(diff, null);
+
+        assert.deepStrictEqual(
+            renderModel.activeSheet?.columns.map((column) => column.columnWidth),
+            [20, 12]
         );
     });
 

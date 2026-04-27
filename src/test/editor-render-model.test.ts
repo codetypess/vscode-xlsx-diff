@@ -28,7 +28,8 @@ function createSheet(
     rowCount = 1,
     columnCount = 1,
     mergedRanges: string[] = [],
-    freezePane: SheetSnapshot["freezePane"] = null
+    freezePane: SheetSnapshot["freezePane"] = null,
+    columnWidths: SheetSnapshot["columnWidths"] = []
 ): SheetSnapshot {
     return {
         name,
@@ -36,6 +37,7 @@ function createSheet(
         columnCount,
         visibility: "visible",
         mergedRanges,
+        columnWidths,
         freezePane,
         cells: Object.fromEntries(cells.map((cell) => [cell.key, cell])),
         signature: `${name}-signature`,
@@ -101,7 +103,15 @@ suite("Editor render model", () => {
 
     test("surfaces full active sheet columns and sparse cells", () => {
         const workbook = createWorkbook({}, [
-            createSheet("Sheet1", [createCell(2, 2, "value"), createCell(4, 3, "tail")], 400, 3),
+            createSheet(
+                "Sheet1",
+                [createCell(2, 2, "value"), createCell(4, 3, "tail")],
+                400,
+                3,
+                [],
+                null,
+                [8.7109375, null, 12]
+            ),
         ]);
         const renderModel = createEditorRenderModel(
             workbook,
@@ -109,6 +119,7 @@ suite("Editor render model", () => {
         );
 
         assert.deepStrictEqual(renderModel.activeSheet.columns, ["A", "B", "C"]);
+        assert.deepStrictEqual(renderModel.activeSheet.columnWidths, [8.7109375, null, 12]);
         assert.strictEqual(renderModel.activeSheet.cells["2:2"]?.displayValue, "value");
         assert.strictEqual(renderModel.activeSheet.cells["4:3"]?.displayValue, "tail");
     });

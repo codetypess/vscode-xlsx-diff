@@ -80,6 +80,7 @@ export interface SheetViewEdit {
         columnCount: number;
         rowCount: number;
     } | null;
+    columnWidths?: Array<number | null>;
 }
 
 export interface WorkbookEditState {
@@ -211,10 +212,13 @@ export async function writeWorkbookEditsToDestination(
                 (edit.freezePane.columnCount === 0 && edit.freezePane.rowCount === 0)
             ) {
                 sheet.unfreezePane();
-                continue;
+            } else {
+                sheet.freezePane(edit.freezePane.columnCount, edit.freezePane.rowCount);
             }
 
-            sheet.freezePane(edit.freezePane.columnCount, edit.freezePane.rowCount);
+            for (let columnIndex = 0; columnIndex < (edit.columnWidths?.length ?? 0); columnIndex += 1) {
+                sheet.setColumnWidth(columnIndex + 1, edit.columnWidths?.[columnIndex] ?? null);
+            }
         }
     });
 

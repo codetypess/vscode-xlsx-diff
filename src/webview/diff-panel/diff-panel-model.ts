@@ -133,6 +133,17 @@ function mergeDiffTone(current: CellDiffStatus, next: CellDiffStatus): CellDiffS
     return getDiffTonePriority(next) > getDiffTonePriority(current) ? next : current;
 }
 
+function getSheetColumnWidth(
+    sheet: WorkbookSnapshot["sheets"][number] | null | undefined,
+    columnNumber: number | null
+): number | null {
+    if (!sheet || columnNumber === null || columnNumber < 1) {
+        return null;
+    }
+
+    return sheet.columnWidths?.[columnNumber - 1] ?? null;
+}
+
 function createFileView(workbook: WorkbookSnapshot): DiffPanelFileView {
     const detailFacts = getWorkbookDetailFacts(workbook);
 
@@ -344,6 +355,11 @@ function createSheetView(sheet: SheetDiffModel): DiffPanelSheetView {
             columnNumber: alignedColumn.columnNumber,
             leftColumnNumber: alignedColumn.leftColumnNumber,
             rightColumnNumber: alignedColumn.rightColumnNumber,
+            columnWidth:
+                Math.max(
+                    getSheetColumnWidth(sheet.leftSheet, alignedColumn.leftColumnNumber) ?? 0,
+                    getSheetColumnWidth(sheet.rightSheet, alignedColumn.rightColumnNumber) ?? 0
+                ) || null,
             leftLabel:
                 alignedColumn.leftColumnNumber === null
                     ? ""

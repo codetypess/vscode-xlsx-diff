@@ -27,10 +27,62 @@ export function cloneSheetEdit(edit: SheetEdit): SheetEdit {
     return { ...edit };
 }
 
+export function cloneColumnWidths(
+    columnWidths: readonly (number | null | undefined)[] | undefined
+): Array<number | null> {
+    return (columnWidths ?? []).map((columnWidth) => columnWidth ?? null);
+}
+
+function normalizeColumnWidthsForComparison(
+    columnWidths: readonly (number | null | undefined)[] | undefined
+): Array<number | null> {
+    const normalizedWidths = cloneColumnWidths(columnWidths);
+    while (
+        normalizedWidths.length > 0 &&
+        normalizedWidths[normalizedWidths.length - 1] === null
+    ) {
+        normalizedWidths.pop();
+    }
+
+    return normalizedWidths;
+}
+
+export function areColumnWidthsEquivalent(
+    left: readonly (number | null | undefined)[] | undefined,
+    right: readonly (number | null | undefined)[] | undefined
+): boolean {
+    const normalizedLeft = normalizeColumnWidthsForComparison(left);
+    const normalizedRight = normalizeColumnWidthsForComparison(right);
+    if (normalizedLeft.length !== normalizedRight.length) {
+        return false;
+    }
+
+    return normalizedLeft.every((columnWidth, index) => columnWidth === normalizedRight[index]);
+}
+
+export function setSheetColumnWidthSnapshot(
+    columnWidths: readonly (number | null | undefined)[] | undefined,
+    columnNumber: number,
+    nextWidth: number | null
+): Array<number | null> {
+    const nextColumnWidths = cloneColumnWidths(columnWidths);
+    while (nextColumnWidths.length < columnNumber) {
+        nextColumnWidths.push(null);
+    }
+
+    nextColumnWidths[columnNumber - 1] = nextWidth;
+    return nextColumnWidths;
+}
+
 export function cloneViewEdit(edit: SheetViewEdit): SheetViewEdit {
     return {
         ...edit,
         freezePane: edit.freezePane ? { ...edit.freezePane } : null,
+        ...(edit.columnWidths
+            ? {
+                  columnWidths: cloneColumnWidths(edit.columnWidths),
+              }
+            : {}),
     };
 }
 
@@ -40,6 +92,7 @@ export function cloneSheetSnapshot(
     return {
         ...sheet,
         mergedRanges: [...sheet.mergedRanges],
+        columnWidths: cloneColumnWidths(sheet.columnWidths),
         freezePane: sheet.freezePane ? { ...sheet.freezePane } : null,
         cells: { ...sheet.cells },
     };
@@ -214,6 +267,28 @@ function transformCellPosition(
     };
 }
 
+function transformColumnWidths(
+    columnWidths: WorkbookSnapshot["sheets"][number]["columnWidths"],
+    edit: GridSheetEdit
+): WorkbookSnapshot["sheets"][number]["columnWidths"] {
+    if (edit.type !== "insertColumn" && edit.type !== "deleteColumn") {
+        return cloneColumnWidths(columnWidths);
+    }
+
+    const nextWidths = cloneColumnWidths(columnWidths);
+    if (edit.type === "insertColumn") {
+        nextWidths.splice(
+            edit.columnNumber - 1,
+            0,
+            ...Array.from({ length: edit.count }, () => null)
+        );
+        return nextWidths;
+    }
+
+    nextWidths.splice(edit.columnNumber - 1, edit.count);
+    return nextWidths;
+}
+
 export function shiftPendingCellEditsForGridSheetEdit(
     pendingCellEdits: CellEdit[],
     edit: GridSheetEdit
@@ -292,6 +367,7 @@ export function applyGridSheetEditToSheet(
         ...sheet,
         rowCount,
         columnCount,
+        columnWidths: transformColumnWidths(sheet.columnWidths, edit),
         cells: nextCells,
         signature: createPendingSheetSignature(
             sheet.name,
@@ -406,6 +482,7 @@ export function restorePendingWorkbookState(
                     columnCount: 26,
                     visibility: "visible",
                     mergedRanges: [],
+                    columnWidths: [],
                     cells: {},
                     freezePane: null,
                     signature: `pending:${edit.sheetKey}:${edit.sheetName}`,
@@ -466,6 +543,9 @@ export function restorePendingWorkbookState(
                       ...entry,
                       sheet: {
                           ...entry.sheet,
+                          columnWidths: edit.columnWidths
+                              ? cloneColumnWidths(edit.columnWidths)
+                              : cloneColumnWidths(entry.sheet.columnWidths),
                           freezePane: edit.freezePane
                               ? createFreezePaneSnapshot(
                                     edit.freezePane.columnCount,

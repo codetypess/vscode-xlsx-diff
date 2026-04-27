@@ -53,6 +53,7 @@ export interface SheetSnapshot {
     columnCount: number;
     visibility: SheetVisibility;
     mergedRanges: string[];
+    columnWidths?: Array<number | null>;
     freezePane?: SheetFreezePaneSnapshot | null;
     cells: Record<string, CellSnapshot>;
     signature: string;
@@ -108,6 +109,7 @@ export interface EditorActiveSheetView {
     rowCount: number;
     columnCount: number;
     columns: string[];
+    columnWidths?: Array<number | null>;
     cells: Record<string, CellSnapshot>;
     freezePane: SheetFreezePaneSnapshot | null;
 }
