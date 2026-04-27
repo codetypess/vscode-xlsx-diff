@@ -4,6 +4,7 @@
 import * as assert from "assert";
 import {
     buildFillChanges,
+    createAutoFillDownPreviewRange,
     createFillPreviewRange,
 } from "../webview/editor-panel/editor-fill-drag";
 
@@ -183,6 +184,178 @@ suite("Editor fill drag helpers", () => {
                 }
             ),
             null
+        );
+    });
+
+    test("creates an auto-fill-down preview range from adjacent data", () => {
+        assert.deepStrictEqual(
+            createAutoFillDownPreviewRange({
+                sourceRange: {
+                    startRow: 2,
+                    endRow: 3,
+                    startColumn: 2,
+                    endColumn: 2,
+                },
+                bounds: {
+                    minRow: 1,
+                    maxRow: 12,
+                    minColumn: 1,
+                    maxColumn: 6,
+                },
+                getCellValue: createValueGetter({
+                    "4:1": "x",
+                    "5:1": "y",
+                    "6:1": "z",
+                }),
+            }),
+            {
+                startRow: 2,
+                endRow: 6,
+                startColumn: 2,
+                endColumn: 2,
+            }
+        );
+    });
+
+    test("uses the longer adjacent data column for auto-fill-down", () => {
+        assert.deepStrictEqual(
+            createAutoFillDownPreviewRange({
+                sourceRange: {
+                    startRow: 2,
+                    endRow: 3,
+                    startColumn: 3,
+                    endColumn: 4,
+                },
+                bounds: {
+                    minRow: 1,
+                    maxRow: 12,
+                    minColumn: 1,
+                    maxColumn: 8,
+                },
+                getCellValue: createValueGetter({
+                    "4:2": "left-1",
+                    "5:2": "left-2",
+                    "6:2": "left-3",
+                    "4:5": "right-1",
+                    "5:5": "right-2",
+                    "6:5": "right-3",
+                    "7:5": "right-4",
+                    "8:5": "right-5",
+                }),
+            }),
+            {
+                startRow: 2,
+                endRow: 8,
+                startColumn: 3,
+                endColumn: 4,
+            }
+        );
+    });
+
+    test("falls back to the display bounds when auto-fill-down has no adjacent data below", () => {
+        assert.deepStrictEqual(
+            createAutoFillDownPreviewRange({
+                sourceRange: {
+                    startRow: 4,
+                    endRow: 5,
+                    startColumn: 1,
+                    endColumn: 1,
+                },
+                bounds: {
+                    minRow: 1,
+                    maxRow: 10,
+                    minColumn: 1,
+                    maxColumn: 4,
+                },
+                getCellValue: createValueGetter({
+                    "6:2": "",
+                    "7:2": "later-value",
+                }),
+            }),
+            {
+                startRow: 4,
+                endRow: 10,
+                startColumn: 1,
+                endColumn: 1,
+            }
+        );
+    });
+
+    test("returns null when auto-fill-down is already at the bottom bound", () => {
+        assert.strictEqual(
+            createAutoFillDownPreviewRange({
+                sourceRange: {
+                    startRow: 9,
+                    endRow: 10,
+                    startColumn: 1,
+                    endColumn: 1,
+                },
+                bounds: {
+                    minRow: 1,
+                    maxRow: 10,
+                    minColumn: 1,
+                    maxColumn: 4,
+                },
+                getCellValue: createValueGetter({}),
+            }),
+            null
+        );
+    });
+
+    test("auto-fill-down reuses the fill algorithm for arithmetic series", () => {
+        const previewRange = createAutoFillDownPreviewRange({
+            sourceRange: {
+                startRow: 2,
+                endRow: 3,
+                startColumn: 2,
+                endColumn: 2,
+            },
+            bounds: {
+                minRow: 1,
+                maxRow: 12,
+                minColumn: 1,
+                maxColumn: 6,
+            },
+            getCellValue: createValueGetter({
+                "2:2": "4",
+                "3:2": "5",
+                "4:1": "row-4",
+                "5:1": "row-5",
+                "6:1": "row-6",
+            }),
+        });
+
+        const changes = buildFillChanges({
+            sheetKey: "sheet:1",
+            sourceRange: {
+                startRow: 2,
+                endRow: 3,
+                startColumn: 2,
+                endColumn: 2,
+            },
+            previewRange,
+            getCellValue: createValueGetter({
+                "2:2": "4",
+                "3:2": "5",
+                "4:2": "",
+                "5:2": "",
+                "6:2": "",
+            }),
+            getModelValue: createValueGetter({}),
+            canEditCell: () => true,
+        });
+
+        assert.deepStrictEqual(
+            changes.map(({ rowNumber, columnNumber, afterValue }) => ({
+                rowNumber,
+                columnNumber,
+                afterValue,
+            })),
+            [
+                { rowNumber: 4, columnNumber: 2, afterValue: "6" },
+                { rowNumber: 5, columnNumber: 2, afterValue: "7" },
+                { rowNumber: 6, columnNumber: 2, afterValue: "8" },
+            ]
         );
     });
 

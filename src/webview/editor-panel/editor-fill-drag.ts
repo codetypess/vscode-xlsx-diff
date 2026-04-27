@@ -21,6 +21,12 @@ export interface BuildFillChangesOptions {
     canEditCell(rowNumber: number, columnNumber: number): boolean;
 }
 
+export interface AutoFillDownPreviewRangeOptions {
+    sourceRange: SelectionRange;
+    bounds: FillBounds;
+    getCellValue(rowNumber: number, columnNumber: number): string;
+}
+
 interface NumericProgression {
     firstValue: number;
     step: number;
@@ -48,6 +54,10 @@ function getRangeHeight(range: SelectionRange): number {
 
 function getRangeWidth(range: SelectionRange): number {
     return range.endColumn - range.startColumn + 1;
+}
+
+function hasCellContent(value: string): boolean {
+    return value !== "";
 }
 
 function modulo(value: number, divisor: number): number {
@@ -193,6 +203,78 @@ export function createFillPreviewRange(
     };
 
     return isRangeExpandedBeyondSource(sourceRange, previewRange) ? previewRange : null;
+}
+
+function getContiguousFilledEndRow(
+    startRow: number,
+    columnNumber: number,
+    maxRow: number,
+    getCellValue: (rowNumber: number, columnNumber: number) => string
+): number {
+    let endRow = startRow - 1;
+
+    for (let rowNumber = startRow; rowNumber <= maxRow; rowNumber += 1) {
+        if (!hasCellContent(getCellValue(rowNumber, columnNumber))) {
+            break;
+        }
+
+        endRow = rowNumber;
+    }
+
+    return endRow;
+}
+
+export function createAutoFillDownPreviewRange({
+    sourceRange,
+    bounds,
+    getCellValue,
+}: AutoFillDownPreviewRangeOptions): SelectionRange | null {
+    const startRow = sourceRange.endRow + 1;
+    if (startRow > bounds.maxRow) {
+        return null;
+    }
+
+    const leftColumnNumber =
+        sourceRange.startColumn > bounds.minColumn ? sourceRange.startColumn - 1 : null;
+    const rightColumnNumber =
+        sourceRange.endColumn < bounds.maxColumn ? sourceRange.endColumn + 1 : null;
+    const leftEndRow =
+        leftColumnNumber === null
+            ? null
+            : getContiguousFilledEndRow(startRow, leftColumnNumber, bounds.maxRow, getCellValue);
+    const rightEndRow =
+        rightColumnNumber === null
+            ? null
+            : getContiguousFilledEndRow(startRow, rightColumnNumber, bounds.maxRow, getCellValue);
+    let previewEndRow = sourceRange.endRow;
+
+    if (leftEndRow !== null) {
+        previewEndRow = Math.max(previewEndRow, leftEndRow);
+    }
+
+    if (rightEndRow !== null) {
+        previewEndRow = Math.max(previewEndRow, rightEndRow);
+    }
+
+    if (previewEndRow > sourceRange.endRow) {
+        return {
+            startRow: sourceRange.startRow,
+            endRow: previewEndRow,
+            startColumn: sourceRange.startColumn,
+            endColumn: sourceRange.endColumn,
+        };
+    }
+
+    if (bounds.maxRow > sourceRange.endRow) {
+        return {
+            startRow: sourceRange.startRow,
+            endRow: bounds.maxRow,
+            startColumn: sourceRange.startColumn,
+            endColumn: sourceRange.endColumn,
+        };
+    }
+
+    return null;
 }
 
 export function isCellWithinFillPreviewArea(

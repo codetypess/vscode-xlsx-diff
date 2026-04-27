@@ -31,6 +31,7 @@ import {
 } from "./editor-selection-range";
 import {
     buildFillChanges,
+    createAutoFillDownPreviewRange,
     createFillPreviewRange,
     isCellWithinFillPreviewArea,
 } from "./editor-fill-drag";
@@ -212,6 +213,12 @@ interface FillDragState {
     previewRange: CellRange | null;
 }
 
+interface FillHandleClickState {
+    rowNumber: number;
+    columnNumber: number;
+    timeStamp: number;
+}
+
 type GridLayerKind = "body" | "top" | "left" | "corner";
 
 interface SearchPanelPosition {
@@ -264,6 +271,7 @@ let setViewState: React.Dispatch<React.SetStateAction<ViewState>> | null = null;
 let contextMenu: ContextMenuState | null = null;
 let selectionDragState: SelectionDragState | null = null;
 let fillDragState: FillDragState | null = null;
+let lastFillHandleClickState: FillHandleClickState | null = null;
 let searchPanelDragState: SearchPanelDragState | null = null;
 let suppressNextCellClick = false;
 let suppressNextRowHeaderClick = false;
@@ -274,6 +282,7 @@ const WHEEL_DELTA_PAGE_MODE = 2;
 const WHEEL_LINE_SCROLL_PIXELS = 40;
 const DEFAULT_EDITOR_VIEWPORT_HEIGHT = 480;
 const DEFAULT_EDITOR_VIEWPORT_WIDTH = 960;
+const FILL_HANDLE_DOUBLE_CLICK_MS = 400;
 const SHEET_TAB_ITEM_GAP = 1;
 const SHEET_TAB_ESTIMATED_WIDTH = 120;
 const SHEET_TAB_VISIBLE_MAX_WIDTH = 144;
@@ -1000,6 +1009,28 @@ function clearFillDragState(): void {
     fillDragState = null;
 }
 
+function clearFillHandleClickState(): void {
+    lastFillHandleClickState = null;
+}
+
+function rememberFillHandleClick(sourceRange: CellRange, timeStamp: number): void {
+    lastFillHandleClickState = {
+        rowNumber: sourceRange.endRow,
+        columnNumber: sourceRange.endColumn,
+        timeStamp,
+    };
+}
+
+function isRepeatedFillHandleClick(sourceRange: CellRange, timeStamp: number): boolean {
+    return Boolean(
+        lastFillHandleClickState &&
+            lastFillHandleClickState.rowNumber === sourceRange.endRow &&
+            lastFillHandleClickState.columnNumber === sourceRange.endColumn &&
+            timeStamp >= lastFillHandleClickState.timeStamp &&
+            timeStamp - lastFillHandleClickState.timeStamp <= FILL_HANDLE_DOUBLE_CLICK_MS
+    );
+}
+
 function hasEditableCellInRange(range: CellRange): boolean {
     for (let rowNumber = range.startRow; rowNumber <= range.endRow; rowNumber += 1) {
         for (
@@ -1063,9 +1094,36 @@ function updateFillDrag(targetCell: CellPosition): void {
     renderApp({ commitEditing: false });
 }
 
+function applyFillChanges(sourceRange: CellRange, previewRange: CellRange | null): boolean {
+    if (!model || !previewRange) {
+        return false;
+    }
+
+    const changes = buildFillChanges({
+        sheetKey: model.activeSheet.key,
+        sourceRange,
+        previewRange,
+        getCellValue: getEffectiveCellValue,
+        getModelValue: getCellModelValue,
+        canEditCell: canEditCellAt,
+    });
+    if (changes.length === 0) {
+        return false;
+    }
+
+    applyEditChanges(changes, { revealSelection: true });
+    return true;
+}
+
 function stopFillDrag(
     pointerId?: number,
-    { commit = false }: { commit?: boolean } = {}
+    {
+        commit = false,
+        timeStamp,
+    }: {
+        commit?: boolean;
+        timeStamp?: number;
+    } = {}
 ): void {
     if (!fillDragState) {
         return;
@@ -1078,24 +1136,56 @@ function stopFillDrag(
     const currentFillDrag = fillDragState;
     fillDragState = null;
 
-    if (commit && model && currentFillDrag.previewRange) {
-        const changes = buildFillChanges({
-            sheetKey: model.activeSheet.key,
-            sourceRange: currentFillDrag.sourceRange,
-            previewRange: currentFillDrag.previewRange,
-            getCellValue: getEffectiveCellValue,
-            getModelValue: getCellModelValue,
-            canEditCell: canEditCellAt,
-        });
-        if (changes.length > 0) {
-            applyEditChanges(changes, { revealSelection: true });
+    if (!currentFillDrag.previewRange) {
+        if (commit && typeof timeStamp === "number") {
+            if (isRepeatedFillHandleClick(currentFillDrag.sourceRange, timeStamp)) {
+                clearFillHandleClickState();
+                handleFillHandleAutoFill(currentFillDrag.sourceRange);
+                return;
+            }
+
+            rememberFillHandleClick(currentFillDrag.sourceRange, timeStamp);
             return;
         }
+
+        clearFillHandleClickState();
+        return;
+    }
+
+    clearFillHandleClickState();
+
+    if (commit && applyFillChanges(currentFillDrag.sourceRange, currentFillDrag.previewRange)) {
+        return;
     }
 
     if (currentFillDrag.previewRange) {
         renderApp({ commitEditing: false });
     }
+}
+
+function commitAutoFillDown(sourceRange: CellRange): void {
+    const bounds = getSelectionBounds();
+    if (!bounds) {
+        return;
+    }
+
+    const previewRange = createAutoFillDownPreviewRange({
+        sourceRange,
+        bounds,
+        getCellValue: getEffectiveCellValue,
+    });
+    if (!previewRange) {
+        return;
+    }
+
+    applyFillChanges(sourceRange, previewRange);
+}
+
+function handleFillHandleAutoFill(sourceRange: CellRange): void {
+    clearFillDragState();
+    clearFillHandleClickState();
+    closeContextMenu({ refresh: false });
+    commitAutoFillDown(sourceRange);
 }
 
 function startSelectionDrag(pointerId: number, anchorCell: CellPosition): void {
@@ -4150,12 +4240,14 @@ function EditorFillHandle({
     rowHeaderWidth,
     isActive,
     onPointerDown,
+    onDoubleClick,
 }: {
     rowNumber: number;
     columnNumber: number;
     rowHeaderWidth: number;
     isActive: boolean;
     onPointerDown(event: React.PointerEvent<HTMLSpanElement>): void;
+    onDoubleClick(event: React.MouseEvent<HTMLSpanElement>): void;
 }): React.ReactElement {
     return (
         <span
@@ -4175,10 +4267,7 @@ function EditorFillHandle({
                 event.preventDefault();
                 event.stopPropagation();
             }}
-            onDoubleClick={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-            }}
+            onDoubleClick={onDoubleClick}
         />
     );
 }
@@ -4518,6 +4607,15 @@ function EditorVirtualGrid({
                     event.stopPropagation();
                     closeContextMenu({ refresh: false });
                     startFillDrag(event.pointerId, fillSourceRange);
+                }}
+                onDoubleClick={(event) => {
+                    if (!fillSourceRange) {
+                        return;
+                    }
+
+                    event.preventDefault();
+                    event.stopPropagation();
+                    handleFillHandleAutoFill(fillSourceRange);
                 }}
             />
         ) : null;
@@ -5400,7 +5498,7 @@ document.addEventListener("pointermove", (event: PointerEvent) => {
 
     if (fillDragState && fillDragState.pointerId === event.pointerId) {
         if ((event.buttons & 1) === 0) {
-            stopFillDrag(event.pointerId, { commit: true });
+            stopFillDrag(event.pointerId, { commit: true, timeStamp: event.timeStamp });
             return;
         }
 
@@ -5463,7 +5561,7 @@ document.addEventListener("pointermove", (event: PointerEvent) => {
 
 document.addEventListener("pointerup", (event: PointerEvent) => {
     stopSearchPanelDrag(event.pointerId);
-    stopFillDrag(event.pointerId, { commit: true });
+    stopFillDrag(event.pointerId, { commit: true, timeStamp: event.timeStamp });
     stopSelectionDrag(event.pointerId);
     scheduleSuppressedSelectionClickReset();
 });
