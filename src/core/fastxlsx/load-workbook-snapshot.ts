@@ -14,6 +14,7 @@ import {
     type CellSnapshot,
     type SheetFreezePaneSnapshot,
     type SheetSnapshot,
+    type SheetVisibility,
     type WorkbookSnapshot,
 } from "../model/types";
 import {
@@ -40,6 +41,7 @@ interface SheetReader {
 interface WorkbookReader {
     getSheet(sheetName: string): SheetReader;
     getSheetNames(): string[];
+    getSheetVisibility(sheetName: string): SheetVisibility;
 }
 
 interface WorkbookSnapshotMetadata {
@@ -71,6 +73,7 @@ function createSheetSignature(sheet: SheetSnapshot): string {
 
     hash.update(`${sheet.name}\n`);
     hash.update(`${comparableRowCount}:${comparableColumnCount}\n`);
+    hash.update(`visibility:${sheet.visibility}\n`);
 
     for (const mergedRange of sheet.mergedRanges) {
         hash.update(`merge:${mergedRange}\n`);
@@ -97,6 +100,7 @@ function loadSheetSnapshot(workbook: WorkbookReader, sheetName: string): SheetSn
     const sheet = workbook.getSheet(sheetName);
     const cells: Record<string, CellSnapshot> = {};
     const freezePane = sheet.getFreezePane();
+    const visibility = workbook.getSheetVisibility(sheetName);
 
     for (let rowNumber = 1; rowNumber <= sheet.rowCount; rowNumber += 1) {
         for (let columnNumber = 1; columnNumber <= sheet.columnCount; columnNumber += 1) {
@@ -125,6 +129,7 @@ function loadSheetSnapshot(workbook: WorkbookReader, sheetName: string): SheetSn
         name: sheet.name,
         rowCount: sheet.rowCount,
         columnCount: sheet.columnCount,
+        visibility,
         mergedRanges: [...sheet.getMergedRanges()].sort((left, right) => left.localeCompare(right)),
         freezePane: freezePane ? { ...freezePane } : null,
         cells,

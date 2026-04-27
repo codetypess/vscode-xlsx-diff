@@ -1,3 +1,5 @@
+import type { SheetVisibility } from "../core/model/types.js";
+
 export type FixtureWorkbookOperation =
     | {
           type: "setText";
@@ -13,16 +15,24 @@ export type FixtureWorkbookOperation =
           type: "setFreezePane";
           columnCount: number;
           rowCount: number;
+      }
+    | {
+          type: "setSheetVisibility";
+          visibility: SheetVisibility;
       };
 
 export interface FixtureRegressionCase {
     name: string;
     sheetName: string;
+    extraSheetNames?: string[];
     focusCellAddress: string;
     focusCellRowNumber: number;
     focusCellColumnNumber: number;
+    expectedSheetNames?: string[];
     expectedBaseDisplayValue: string | undefined;
     expectedHeadDisplayValue: string | undefined;
+    expectedBaseVisibility?: SheetVisibility;
+    expectedHeadVisibility?: SheetVisibility;
     expectedBaseFreezePane?: {
         columnCount: number;
         rowCount: number;
@@ -44,6 +54,7 @@ export interface FixtureRegressionCase {
         totalDiffCells: number;
         mergedRangesChanged: boolean;
         freezePaneChanged: boolean;
+        visibilityChanged: boolean;
     };
 }
 
@@ -59,6 +70,8 @@ export const fixtureRegressionCases: FixtureRegressionCase[] = [
         focusCellColumnNumber: 6,
         expectedBaseDisplayValue: lfValue,
         expectedHeadDisplayValue: crlfValue,
+        expectedBaseVisibility: "visible",
+        expectedHeadVisibility: "visible",
         expectedBaseFreezePane: null,
         expectedHeadFreezePane: null,
         baseOperations: [
@@ -81,6 +94,7 @@ export const fixtureRegressionCases: FixtureRegressionCase[] = [
             totalDiffCells: 0,
             mergedRangesChanged: false,
             freezePaneChanged: false,
+            visibilityChanged: false,
         },
     },
     {
@@ -91,6 +105,8 @@ export const fixtureRegressionCases: FixtureRegressionCase[] = [
         focusCellColumnNumber: 6,
         expectedBaseDisplayValue: undefined,
         expectedHeadDisplayValue: "",
+        expectedBaseVisibility: "visible",
+        expectedHeadVisibility: "visible",
         expectedBaseFreezePane: null,
         expectedHeadFreezePane: null,
         baseOperations: [],
@@ -107,6 +123,7 @@ export const fixtureRegressionCases: FixtureRegressionCase[] = [
             totalDiffCells: 0,
             mergedRangesChanged: false,
             freezePaneChanged: false,
+            visibilityChanged: false,
         },
     },
     {
@@ -117,6 +134,8 @@ export const fixtureRegressionCases: FixtureRegressionCase[] = [
         focusCellColumnNumber: 6,
         expectedBaseDisplayValue: "same",
         expectedHeadDisplayValue: "same",
+        expectedBaseVisibility: "visible",
+        expectedHeadVisibility: "visible",
         expectedBaseFreezePane: null,
         expectedHeadFreezePane: null,
         expectStyleDifference: true,
@@ -145,6 +164,7 @@ export const fixtureRegressionCases: FixtureRegressionCase[] = [
             totalDiffCells: 0,
             mergedRangesChanged: false,
             freezePaneChanged: false,
+            visibilityChanged: false,
         },
     },
     {
@@ -155,6 +175,8 @@ export const fixtureRegressionCases: FixtureRegressionCase[] = [
         focusCellColumnNumber: 6,
         expectedBaseDisplayValue: "same",
         expectedHeadDisplayValue: "same",
+        expectedBaseVisibility: "visible",
+        expectedHeadVisibility: "visible",
         expectedBaseFreezePane: null,
         expectedHeadFreezePane: {
             columnCount: 1,
@@ -187,6 +209,48 @@ export const fixtureRegressionCases: FixtureRegressionCase[] = [
             totalDiffCells: 0,
             mergedRangesChanged: false,
             freezePaneChanged: true,
+            visibilityChanged: false,
+        },
+    },
+    {
+        name: "sheet-visibility-only-structure-change",
+        sheetName: "define",
+        extraSheetNames: ["helper"],
+        focusCellAddress: "F5",
+        focusCellRowNumber: 5,
+        focusCellColumnNumber: 6,
+        expectedSheetNames: ["define", "helper"],
+        expectedBaseDisplayValue: "same",
+        expectedHeadDisplayValue: "same",
+        expectedBaseVisibility: "visible",
+        expectedHeadVisibility: "hidden",
+        expectedBaseFreezePane: null,
+        expectedHeadFreezePane: null,
+        baseOperations: [
+            {
+                type: "setText",
+                cellAddress: "F5",
+                value: "same",
+            },
+        ],
+        headOperations: [
+            {
+                type: "setText",
+                cellAddress: "F5",
+                value: "same",
+            },
+            {
+                type: "setSheetVisibility",
+                visibility: "hidden",
+            },
+        ],
+        expectedDiff: {
+            totalDiffSheets: 1,
+            totalDiffRows: 0,
+            totalDiffCells: 0,
+            mergedRangesChanged: false,
+            freezePaneChanged: false,
+            visibilityChanged: true,
         },
     },
 ];

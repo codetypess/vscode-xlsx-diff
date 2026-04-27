@@ -141,34 +141,66 @@ suite("SCM workbook regressions", () => {
                     fixtureCase.focusCellRowNumber,
                     fixtureCase.focusCellColumnNumber
                 );
+                const expectedSheetNames = fixtureCase.expectedSheetNames ?? [
+                    fixtureCase.sheetName,
+                ];
+                const baseSheet = headResourceSnapshot.sheets.find(
+                    (sheet) => sheet.name === fixtureCase.sheetName
+                );
+                const localSheet = localSnapshot.sheets.find(
+                    (sheet) => sheet.name === fixtureCase.sheetName
+                );
 
                 assert.strictEqual(headResourceSnapshot.isReadonly, true);
                 assert.strictEqual(localSnapshot.isReadonly, false);
+                assert.deepStrictEqual(
+                    headResourceSnapshot.sheets.map((sheet) => sheet.name),
+                    expectedSheetNames
+                );
+                assert.deepStrictEqual(
+                    localSnapshot.sheets.map((sheet) => sheet.name),
+                    expectedSheetNames
+                );
+                assert.ok(baseSheet);
+                assert.ok(localSheet);
                 assert.strictEqual(
-                    headResourceSnapshot.sheets[0]?.cells[cellKey]?.displayValue,
+                    baseSheet?.cells[cellKey]?.displayValue,
                     fixtureCase.expectedBaseDisplayValue
                 );
                 assert.strictEqual(
-                    localSnapshot.sheets[0]?.cells[cellKey]?.displayValue,
+                    localSheet?.cells[cellKey]?.displayValue,
                     fixtureCase.expectedHeadDisplayValue
                 );
+                assert.strictEqual(
+                    baseSheet?.visibility,
+                    fixtureCase.expectedBaseVisibility ?? "visible"
+                );
+                assert.strictEqual(
+                    localSheet?.visibility,
+                    fixtureCase.expectedHeadVisibility ?? "visible"
+                );
                 assert.deepStrictEqual(
-                    headResourceSnapshot.sheets[0]?.freezePane ?? null,
+                    baseSheet?.freezePane ?? null,
                     fixtureCase.expectedBaseFreezePane ?? null
                 );
                 assert.deepStrictEqual(
-                    localSnapshot.sheets[0]?.freezePane ?? null,
+                    localSheet?.freezePane ?? null,
                     fixtureCase.expectedHeadFreezePane ?? null
                 );
                 if (fixtureCase.expectStyleDifference) {
                     assert.notStrictEqual(
-                        headResourceSnapshot.sheets[0]?.cells[cellKey]?.styleId ?? null,
-                        localSnapshot.sheets[0]?.cells[cellKey]?.styleId ?? null
+                        baseSheet?.cells[cellKey]?.styleId ?? null,
+                        localSheet?.cells[cellKey]?.styleId ?? null
                     );
                 }
 
                 const diff = buildWorkbookDiff(headResourceSnapshot, localSnapshot);
-                const sheet = assertNoWorkbookDiff(diff);
+                const sheet =
+                    diff.sheets.find(
+                        (entry) =>
+                            entry.leftSheetName === fixtureCase.sheetName ||
+                            entry.rightSheetName === fixtureCase.sheetName
+                    ) ?? assertNoWorkbookDiff(diff);
                 assert.deepStrictEqual(sheet.diffRows, []);
                 assert.deepStrictEqual(sheet.diffCells, []);
                 assert.strictEqual(
@@ -178,6 +210,10 @@ suite("SCM workbook regressions", () => {
                 assert.strictEqual(
                     sheet.freezePaneChanged,
                     fixtureCase.expectedDiff.freezePaneChanged
+                );
+                assert.strictEqual(
+                    sheet.visibilityChanged,
+                    fixtureCase.expectedDiff.visibilityChanged
                 );
                 assert.strictEqual(diff.totalDiffCells, fixtureCase.expectedDiff.totalDiffCells);
                 assert.strictEqual(diff.totalDiffRows, fixtureCase.expectedDiff.totalDiffRows);
@@ -213,34 +249,66 @@ suite("SCM workbook regressions", () => {
                     fixtureCase.focusCellRowNumber,
                     fixtureCase.focusCellColumnNumber
                 );
+                const expectedSheetNames = fixtureCase.expectedSheetNames ?? [
+                    fixtureCase.sheetName,
+                ];
+                const baseSheet = baseResourceSnapshot.sheets.find(
+                    (sheet) => sheet.name === fixtureCase.sheetName
+                );
+                const localSheet = localSnapshot.sheets.find(
+                    (sheet) => sheet.name === fixtureCase.sheetName
+                );
 
                 assert.strictEqual(baseResourceSnapshot.isReadonly, true);
                 assert.strictEqual(localSnapshot.isReadonly, false);
+                assert.deepStrictEqual(
+                    baseResourceSnapshot.sheets.map((sheet) => sheet.name),
+                    expectedSheetNames
+                );
+                assert.deepStrictEqual(
+                    localSnapshot.sheets.map((sheet) => sheet.name),
+                    expectedSheetNames
+                );
+                assert.ok(baseSheet);
+                assert.ok(localSheet);
                 assert.strictEqual(
-                    baseResourceSnapshot.sheets[0]?.cells[cellKey]?.displayValue,
+                    baseSheet?.cells[cellKey]?.displayValue,
                     fixtureCase.expectedBaseDisplayValue
                 );
                 assert.strictEqual(
-                    localSnapshot.sheets[0]?.cells[cellKey]?.displayValue,
+                    localSheet?.cells[cellKey]?.displayValue,
                     fixtureCase.expectedHeadDisplayValue
                 );
+                assert.strictEqual(
+                    baseSheet?.visibility,
+                    fixtureCase.expectedBaseVisibility ?? "visible"
+                );
+                assert.strictEqual(
+                    localSheet?.visibility,
+                    fixtureCase.expectedHeadVisibility ?? "visible"
+                );
                 assert.deepStrictEqual(
-                    baseResourceSnapshot.sheets[0]?.freezePane ?? null,
+                    baseSheet?.freezePane ?? null,
                     fixtureCase.expectedBaseFreezePane ?? null
                 );
                 assert.deepStrictEqual(
-                    localSnapshot.sheets[0]?.freezePane ?? null,
+                    localSheet?.freezePane ?? null,
                     fixtureCase.expectedHeadFreezePane ?? null
                 );
                 if (fixtureCase.expectStyleDifference) {
                     assert.notStrictEqual(
-                        baseResourceSnapshot.sheets[0]?.cells[cellKey]?.styleId ?? null,
-                        localSnapshot.sheets[0]?.cells[cellKey]?.styleId ?? null
+                        baseSheet?.cells[cellKey]?.styleId ?? null,
+                        localSheet?.cells[cellKey]?.styleId ?? null
                     );
                 }
 
                 const diff = buildWorkbookDiff(baseResourceSnapshot, localSnapshot);
-                const sheet = assertNoWorkbookDiff(diff);
+                const sheet =
+                    diff.sheets.find(
+                        (entry) =>
+                            entry.leftSheetName === fixtureCase.sheetName ||
+                            entry.rightSheetName === fixtureCase.sheetName
+                    ) ?? assertNoWorkbookDiff(diff);
                 assert.deepStrictEqual(sheet.diffRows, []);
                 assert.deepStrictEqual(sheet.diffCells, []);
                 assert.strictEqual(
@@ -250,6 +318,10 @@ suite("SCM workbook regressions", () => {
                 assert.strictEqual(
                     sheet.freezePaneChanged,
                     fixtureCase.expectedDiff.freezePaneChanged
+                );
+                assert.strictEqual(
+                    sheet.visibilityChanged,
+                    fixtureCase.expectedDiff.visibilityChanged
                 );
                 assert.strictEqual(diff.totalDiffCells, fixtureCase.expectedDiff.totalDiffCells);
                 assert.strictEqual(diff.totalDiffRows, fixtureCase.expectedDiff.totalDiffRows);

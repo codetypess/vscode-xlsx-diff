@@ -481,7 +481,17 @@ function DiffMarker({
     );
 }
 
-function getSheetTooltip(sheet: DiffPanelSheetTabView): string {
+function getStructuralChangeLabels(
+    sheet:
+        | Pick<
+              DiffPanelSheetTabView,
+              "mergedRangesChanged" | "freezePaneChanged" | "visibilityChanged"
+          >
+        | Pick<
+              NonNullable<DiffPanelRenderModel["activeSheet"]>,
+              "mergedRangesChanged" | "freezePaneChanged" | "visibilityChanged"
+          >
+): string[] {
     const structuralChanges: string[] = [];
 
     if (sheet.mergedRangesChanged) {
@@ -492,6 +502,15 @@ function getSheetTooltip(sheet: DiffPanelSheetTabView): string {
         structuralChanges.push(STRINGS.freezePanes);
     }
 
+    if (sheet.visibilityChanged) {
+        structuralChanges.push(STRINGS.sheetVisibility);
+    }
+
+    return structuralChanges;
+}
+
+function getSheetTooltip(sheet: DiffPanelSheetTabView): string {
+    const structuralChanges = getStructuralChangeLabels(sheet);
     const tooltip = `${sheet.label} · ${sheet.diffCellCount} ${STRINGS.diffCells} · ${sheet.diffRowCount} ${STRINGS.diffRows}`;
     return structuralChanges.length > 0 ? `${tooltip} · ${structuralChanges.join(", ")}` : tooltip;
 }
@@ -2492,13 +2511,9 @@ function App(): React.JSX.Element {
 
             <footer className="diff-statusBar">
                 {(() => {
-                    const structuralChanges: string[] = [];
-                    if (activeSheet?.mergedRangesChanged) {
-                        structuralChanges.push(STRINGS.mergedRanges);
-                    }
-                    if (activeSheet?.freezePaneChanged) {
-                        structuralChanges.push(STRINGS.freezePanes);
-                    }
+                    const structuralChanges = activeSheet
+                        ? getStructuralChangeLabels(activeSheet)
+                        : [];
 
                     return (
                         <>

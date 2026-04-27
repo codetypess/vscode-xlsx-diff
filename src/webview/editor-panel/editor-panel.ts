@@ -1103,8 +1103,10 @@ export class XlsxEditorPanel {
                     name: sheetName,
                     rowCount: DEFAULT_PAGE_SIZE,
                     columnCount: 26,
+                    visibility: "visible",
                     mergedRanges: [],
                     cells: {},
+                    freezePane: null,
                     signature: `pending:${sheetKey}:${sheetName}`,
                 },
             };

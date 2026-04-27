@@ -34,6 +34,7 @@ function createSheet(
         name,
         rowCount,
         columnCount,
+        visibility: "visible",
         mergedRanges,
         freezePane,
         cells: Object.fromEntries(cells.map((cell) => [cell.key, cell])),
@@ -162,10 +163,10 @@ suite("Editor render model", () => {
                 4,
                 [],
                 {
-                columnCount: 1,
-                rowCount: 2,
-                topLeftCell: "B3",
-                activePane: "bottomRight",
+                    columnCount: 1,
+                    rowCount: 2,
+                    topLeftCell: "B3",
+                    activePane: "bottomRight",
                 }
             ),
         ]);

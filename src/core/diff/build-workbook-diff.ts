@@ -94,6 +94,17 @@ function areFreezePanesEqual(
     );
 }
 
+function areSheetVisibilitiesEqual(
+    leftSheet: SheetSnapshot | null,
+    rightSheet: SheetSnapshot | null
+): boolean {
+    if (!leftSheet || !rightSheet) {
+        return false;
+    }
+
+    return leftSheet.visibility === rightSheet.visibility;
+}
+
 function areCellsEqual(
     leftCell: CellSnapshot | undefined,
     rightCell: CellSnapshot | undefined
@@ -946,6 +957,7 @@ function createSheetDiff(
         diffCellCount: diffCells.length,
         mergedRangesChanged: !areMergedRangesEqual(leftSheet, rightSheet),
         freezePaneChanged: !areFreezePanesEqual(leftSheet, rightSheet),
+        visibilityChanged: !areSheetVisibilitiesEqual(leftSheet, rightSheet),
     };
 }
 
@@ -1014,7 +1026,8 @@ export function buildWorkbookDiff(
             sheet.diffRows.length > 0 ||
             sheet.diffCellCount > 0 ||
             sheet.mergedRangesChanged ||
-            sheet.freezePaneChanged
+            sheet.freezePaneChanged ||
+            sheet.visibilityChanged
     );
 
     return {

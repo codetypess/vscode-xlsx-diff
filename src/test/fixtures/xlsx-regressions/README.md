@@ -41,6 +41,8 @@
   说明：`define!F5` 值相同，只改了背景色样式，不应继续报 diff
 - `freeze-pane-only-view-change`
   说明：`define!F5` 值相同，但冻结窗格发生变化，应作为结构性差异显示
+- `sheet-visibility-only-structure-change`
+  说明：`define!F5` 值相同，但工作表显示状态发生变化，应作为结构性差异显示
 
 生成命令：
 

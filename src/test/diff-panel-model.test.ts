@@ -12,6 +12,7 @@ function createWorkbook(overrides: Partial<WorkbookSnapshot>): WorkbookSnapshot 
         name: "Sheet1",
         rowCount: 1,
         columnCount: 1,
+        visibility: "visible",
         mergedRanges: [],
         freezePane: null,
         cells: {},
@@ -63,6 +64,7 @@ suite("Diff panel render model", () => {
                 name,
                 rowCount: rows.length,
                 columnCount,
+                visibility: "visible",
                 mergedRanges: [],
                 freezePane: null,
                 cells,
@@ -200,6 +202,7 @@ suite("Diff panel render model", () => {
                         name: "Sheet1",
                         rowCount: 5,
                         columnCount: 6,
+                        visibility: "visible",
                         mergedRanges: [],
                         freezePane: null,
                         cells: {
@@ -225,6 +228,7 @@ suite("Diff panel render model", () => {
                         name: "Sheet1",
                         rowCount: 5,
                         columnCount: 6,
+                        visibility: "visible",
                         mergedRanges: [],
                         freezePane: {
                             columnCount: 1,
@@ -255,6 +259,70 @@ suite("Diff panel render model", () => {
         assert.strictEqual(renderModel.sheets[0]?.freezePaneChanged, true);
         assert.strictEqual(renderModel.sheets[0]?.mergedRangesChanged, false);
         assert.strictEqual(renderModel.activeSheet?.freezePaneChanged, true);
+        assert.strictEqual(renderModel.activeSheet?.diffCellCount, 0);
+        assert.strictEqual(renderModel.activeSheet?.diffRowCount, 0);
+    });
+
+    test("surfaces sheet-visibility-only changes as structural diffs", () => {
+        const diff = buildWorkbookDiff(
+            createWorkbook({
+                sheets: [
+                    {
+                        name: "Sheet1",
+                        rowCount: 5,
+                        columnCount: 6,
+                        visibility: "visible",
+                        mergedRanges: [],
+                        freezePane: null,
+                        cells: {
+                            "5:6": {
+                                key: "5:6",
+                                rowNumber: 5,
+                                columnNumber: 6,
+                                address: "F5",
+                                displayValue: "same",
+                                formula: null,
+                                styleId: null,
+                            },
+                        },
+                        signature: "Sheet1:visibility:visible",
+                    },
+                ],
+            }),
+            createWorkbook({
+                filePath: "/tmp/item-next.xlsx",
+                fileName: "item-next.xlsx",
+                sheets: [
+                    {
+                        name: "Sheet1",
+                        rowCount: 5,
+                        columnCount: 6,
+                        visibility: "hidden",
+                        mergedRanges: [],
+                        freezePane: null,
+                        cells: {
+                            "5:6": {
+                                key: "5:6",
+                                rowNumber: 5,
+                                columnNumber: 6,
+                                address: "F5",
+                                displayValue: "same",
+                                formula: null,
+                                styleId: null,
+                            },
+                        },
+                        signature: "Sheet1:visibility:hidden",
+                    },
+                ],
+            })
+        );
+
+        const renderModel = createDiffPanelRenderModel(diff, null);
+
+        assert.strictEqual(renderModel.sheets[0]?.hasDiff, true);
+        assert.strictEqual(renderModel.sheets[0]?.visibilityChanged, true);
+        assert.strictEqual(renderModel.sheets[0]?.freezePaneChanged, false);
+        assert.strictEqual(renderModel.activeSheet?.visibilityChanged, true);
         assert.strictEqual(renderModel.activeSheet?.diffCellCount, 0);
         assert.strictEqual(renderModel.activeSheet?.diffRowCount, 0);
     });

@@ -19,40 +19,62 @@ suite("XLSX fixture regressions", () => {
                 fixtureCase.focusCellRowNumber,
                 fixtureCase.focusCellColumnNumber
             );
+            const expectedSheetNames = fixtureCase.expectedSheetNames ?? [fixtureCase.sheetName];
+            const baseSheet = baseSnapshot.sheets.find(
+                (sheet) => sheet.name === fixtureCase.sheetName
+            );
+            const headSheet = headSnapshot.sheets.find(
+                (sheet) => sheet.name === fixtureCase.sheetName
+            );
 
             assert.deepStrictEqual(
                 baseSnapshot.sheets.map((sheet) => sheet.name),
-                ["define"]
+                expectedSheetNames
             );
             assert.deepStrictEqual(
                 headSnapshot.sheets.map((sheet) => sheet.name),
-                ["define"]
+                expectedSheetNames
             );
+            assert.ok(baseSheet);
+            assert.ok(headSheet);
             assert.strictEqual(
-                baseSnapshot.sheets[0]?.cells[cellKey]?.displayValue,
+                baseSheet?.cells[cellKey]?.displayValue,
                 fixtureCase.expectedBaseDisplayValue
             );
             assert.strictEqual(
-                headSnapshot.sheets[0]?.cells[cellKey]?.displayValue,
+                headSheet?.cells[cellKey]?.displayValue,
                 fixtureCase.expectedHeadDisplayValue
             );
+            assert.strictEqual(
+                baseSheet?.visibility,
+                fixtureCase.expectedBaseVisibility ?? "visible"
+            );
+            assert.strictEqual(
+                headSheet?.visibility,
+                fixtureCase.expectedHeadVisibility ?? "visible"
+            );
             assert.deepStrictEqual(
-                baseSnapshot.sheets[0]?.freezePane ?? null,
+                baseSheet?.freezePane ?? null,
                 fixtureCase.expectedBaseFreezePane ?? null
             );
             assert.deepStrictEqual(
-                headSnapshot.sheets[0]?.freezePane ?? null,
+                headSheet?.freezePane ?? null,
                 fixtureCase.expectedHeadFreezePane ?? null
             );
             if (fixtureCase.expectStyleDifference) {
                 assert.notStrictEqual(
-                    baseSnapshot.sheets[0]?.cells[cellKey]?.styleId ?? null,
-                    headSnapshot.sheets[0]?.cells[cellKey]?.styleId ?? null
+                    baseSheet?.cells[cellKey]?.styleId ?? null,
+                    headSheet?.cells[cellKey]?.styleId ?? null
                 );
             }
 
             const diff = buildWorkbookDiff(baseSnapshot, headSnapshot);
-            const sheet = diff.sheets[0]!;
+            const sheet =
+                diff.sheets.find(
+                    (entry) =>
+                        entry.leftSheetName === fixtureCase.sheetName ||
+                        entry.rightSheetName === fixtureCase.sheetName
+                ) ?? diff.sheets[0]!;
 
             assert.deepStrictEqual(sheet.diffRows, []);
             assert.deepStrictEqual(sheet.diffCells, []);
@@ -61,6 +83,7 @@ suite("XLSX fixture regressions", () => {
                 fixtureCase.expectedDiff.mergedRangesChanged
             );
             assert.strictEqual(sheet.freezePaneChanged, fixtureCase.expectedDiff.freezePaneChanged);
+            assert.strictEqual(sheet.visibilityChanged, fixtureCase.expectedDiff.visibilityChanged);
             assert.strictEqual(diff.totalDiffCells, fixtureCase.expectedDiff.totalDiffCells);
             assert.strictEqual(diff.totalDiffRows, fixtureCase.expectedDiff.totalDiffRows);
             assert.strictEqual(diff.totalDiffSheets, fixtureCase.expectedDiff.totalDiffSheets);

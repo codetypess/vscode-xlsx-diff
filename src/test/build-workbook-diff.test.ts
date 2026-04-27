@@ -39,6 +39,7 @@ function createSheet(name: string, rowValues: string[]): SheetSnapshot {
         name,
         rowCount: rowValues.length,
         columnCount: 1,
+        visibility: "visible",
         mergedRanges: [],
         freezePane: null,
         cells,
@@ -66,6 +67,7 @@ function createGridSheet(name: string, rows: string[][]): SheetSnapshot {
         name,
         rowCount: rows.length,
         columnCount,
+        visibility: "visible",
         mergedRanges: [],
         freezePane: null,
         cells,
@@ -96,6 +98,7 @@ function createSparseSheet(
         name,
         rowCount: dimensions.rowCount,
         columnCount: dimensions.columnCount,
+        visibility: "visible",
         mergedRanges: [],
         freezePane: null,
         cells,
@@ -247,6 +250,7 @@ suite("Workbook diff row alignment", () => {
                     name: "Sheet1",
                     rowCount: 5,
                     columnCount: 6,
+                    visibility: "visible",
                     mergedRanges: [],
                     freezePane: null,
                     cells: {
@@ -272,6 +276,7 @@ suite("Workbook diff row alignment", () => {
                     name: "Sheet1",
                     rowCount: 5,
                     columnCount: 6,
+                    visibility: "visible",
                     mergedRanges: [],
                     freezePane: null,
                     cells: {
@@ -285,6 +290,7 @@ suite("Workbook diff row alignment", () => {
                     name: "Sheet1",
                     rowCount: 5,
                     columnCount: 6,
+                    visibility: "visible",
                     mergedRanges: [],
                     freezePane: {
                         columnCount: 1,
@@ -305,6 +311,49 @@ suite("Workbook diff row alignment", () => {
         assert.deepStrictEqual(sheet.diffCells, []);
         assert.strictEqual(sheet.mergedRangesChanged, false);
         assert.strictEqual(sheet.freezePaneChanged, true);
+        assert.strictEqual(diff.totalDiffCells, 0);
+        assert.strictEqual(diff.totalDiffRows, 0);
+        assert.strictEqual(diff.totalDiffSheets, 1);
+    });
+
+    test("marks sheet-visibility-only differences as structural diffs", () => {
+        const diff = buildWorkbookDiff(
+            createWorkbook("left.xlsx", [
+                {
+                    name: "Sheet1",
+                    rowCount: 5,
+                    columnCount: 6,
+                    visibility: "visible",
+                    mergedRanges: [],
+                    freezePane: null,
+                    cells: {
+                        [createCell(5, 6, "same").key]: createCell(5, 6, "same"),
+                    },
+                    signature: "Sheet1:visibility:visible",
+                },
+            ]),
+            createWorkbook("right.xlsx", [
+                {
+                    name: "Sheet1",
+                    rowCount: 5,
+                    columnCount: 6,
+                    visibility: "hidden",
+                    mergedRanges: [],
+                    freezePane: null,
+                    cells: {
+                        [createCell(5, 6, "same").key]: createCell(5, 6, "same"),
+                    },
+                    signature: "Sheet1:visibility:hidden",
+                },
+            ])
+        );
+        const sheet = diff.sheets[0]!;
+
+        assert.deepStrictEqual(sheet.diffRows, []);
+        assert.deepStrictEqual(sheet.diffCells, []);
+        assert.strictEqual(sheet.mergedRangesChanged, false);
+        assert.strictEqual(sheet.freezePaneChanged, false);
+        assert.strictEqual(sheet.visibilityChanged, true);
         assert.strictEqual(diff.totalDiffCells, 0);
         assert.strictEqual(diff.totalDiffRows, 0);
         assert.strictEqual(diff.totalDiffSheets, 1);

@@ -89,9 +89,17 @@ async function createFixtureWorkbook(
     fastxlsxCommand: FastxlsxCommand,
     workbookPath: string,
     sheetName: string,
+    extraSheetNames: string[],
     operations: FixtureWorkbookOperation[]
 ): Promise<void> {
     await runFastxlsx(fastxlsxCommand, ["create", workbookPath, "--sheet", sheetName]);
+    for (const extraSheetName of extraSheetNames) {
+        await runFastxlsx(
+            fastxlsxCommand,
+            ["add-sheet", workbookPath, "--sheet", extraSheetName, "--in-place"],
+            { quiet: true }
+        );
+    }
 
     for (const operation of operations) {
         if (operation.type === "setText") {
@@ -117,6 +125,25 @@ async function createFixtureWorkbook(
             const workbook = await Workbook.open(workbookPath);
             workbook.getSheet(sheetName).freezePane(operation.columnCount, operation.rowCount);
             await workbook.save(workbookPath);
+            continue;
+        }
+
+        if (operation.type === "setSheetVisibility") {
+            await runFastxlsx(
+                fastxlsxCommand,
+                [
+                    "workbook",
+                    "visibility",
+                    "set",
+                    workbookPath,
+                    "--sheet",
+                    sheetName,
+                    "--visibility",
+                    operation.visibility,
+                    "--in-place",
+                ],
+                { quiet: true }
+            );
             continue;
         }
 
@@ -166,12 +193,14 @@ async function main(): Promise<void> {
             fastxlsxCommand,
             path.join(caseDirectory, "base.xlsx"),
             fixtureCase.sheetName,
+            fixtureCase.extraSheetNames ?? [],
             fixtureCase.baseOperations
         );
         await createFixtureWorkbook(
             fastxlsxCommand,
             path.join(caseDirectory, "head.xlsx"),
             fixtureCase.sheetName,
+            fixtureCase.extraSheetNames ?? [],
             fixtureCase.headOperations
         );
 

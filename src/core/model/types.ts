@@ -38,10 +38,13 @@ export interface SheetFreezePaneSnapshot {
     activePane: "bottomLeft" | "topRight" | "bottomRight" | null;
 }
 
+export type SheetVisibility = "visible" | "hidden" | "veryHidden";
+
 export interface SheetSnapshot {
     name: string;
     rowCount: number;
     columnCount: number;
+    visibility: SheetVisibility;
     mergedRanges: string[];
     freezePane?: SheetFreezePaneSnapshot | null;
     cells: Record<string, CellSnapshot>;
@@ -128,6 +131,7 @@ export interface SheetDiffModel {
     diffCellCount: number;
     mergedRangesChanged: boolean;
     freezePaneChanged: boolean;
+    visibilityChanged: boolean;
 }
 
 export interface WorkbookDiffModel {

@@ -91,9 +91,7 @@ export function cloneEditorState(state: EditorPanelState): EditorPanelState {
     };
 }
 
-export function reindexWorkingSheetEntries(
-    sheetEntries: WorkingSheetEntry[]
-): WorkingSheetEntry[] {
+export function reindexWorkingSheetEntries(sheetEntries: WorkingSheetEntry[]): WorkingSheetEntry[] {
     return sheetEntries.map((entry, index) => ({
         ...entry,
         index,
@@ -212,8 +210,7 @@ function transformCellPosition(
 
     return {
         rowNumber,
-        columnNumber:
-            columnNumber > lastDeletedColumn ? columnNumber - edit.count : columnNumber,
+        columnNumber: columnNumber > lastDeletedColumn ? columnNumber - edit.count : columnNumber,
     };
 }
 
@@ -261,11 +258,7 @@ export function applyGridSheetEditToSheet(
     const nextCells = Object.fromEntries(
         Object.values(sheet.cells)
             .flatMap((cell) => {
-                const nextPosition = transformCellPosition(
-                    cell.rowNumber,
-                    cell.columnNumber,
-                    edit
-                );
+                const nextPosition = transformCellPosition(cell.rowNumber, cell.columnNumber, edit);
                 if (!nextPosition) {
                     return [];
                 }
@@ -360,7 +353,8 @@ export function createCommittedWorkbookState(
                     key,
                     rowNumber: edit.rowNumber,
                     columnNumber: edit.columnNumber,
-                    address: currentCell?.address ?? getCellAddress(edit.rowNumber, edit.columnNumber),
+                    address:
+                        currentCell?.address ?? getCellAddress(edit.rowNumber, edit.columnNumber),
                     displayValue: edit.value,
                     formula: null,
                     styleId: currentCell?.styleId ?? null,
@@ -410,6 +404,7 @@ export function restorePendingWorkbookState(
                     name: edit.sheetName,
                     rowCount: DEFAULT_PAGE_SIZE,
                     columnCount: 26,
+                    visibility: "visible",
                     mergedRanges: [],
                     cells: {},
                     freezePane: null,
@@ -427,8 +422,7 @@ export function restorePendingWorkbookState(
         if (edit.type === "deleteSheet") {
             sheetEntries = reindexWorkingSheetEntries(
                 sheetEntries.filter(
-                    (entry) =>
-                        entry.key !== edit.sheetKey && entry.sheet.name !== edit.sheetName
+                    (entry) => entry.key !== edit.sheetKey && entry.sheet.name !== edit.sheetName
                 )
             );
             continue;
@@ -527,9 +521,7 @@ export function captureStructuralSnapshot(
     };
 }
 
-export function restoreStructuralSnapshot(
-    snapshot: StructuralSnapshot
-): RestoredStructuralState {
+export function restoreStructuralSnapshot(snapshot: StructuralSnapshot): RestoredStructuralState {
     return {
         state: cloneEditorState(snapshot.state),
         sheetEntries: reindexWorkingSheetEntries(snapshot.sheetEntries.map(cloneSheetEntry)),
@@ -545,7 +537,8 @@ export function mapPendingCellEditsToWebview(
 ): EditorPendingEdit[] {
     return pendingCellEdits.map((edit) => ({
         sheetKey:
-            sheetEntries.find((entry) => entry.sheet.name === edit.sheetName)?.key ?? edit.sheetName,
+            sheetEntries.find((entry) => entry.sheet.name === edit.sheetName)?.key ??
+            edit.sheetName,
         rowNumber: edit.rowNumber,
         columnNumber: edit.columnNumber,
         value: edit.value,

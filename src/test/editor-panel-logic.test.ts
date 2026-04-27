@@ -58,6 +58,7 @@ function createSheet(
         name,
         rowCount,
         columnCount,
+        visibility: "visible",
         mergedRanges: [],
         freezePane: null,
         cells: Object.fromEntries(cells.map((cell) => [cell.key, cell])),

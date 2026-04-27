@@ -97,7 +97,8 @@ function getSheetHasDiff(sheet: SheetDiffModel): boolean {
         sheet.diffRows.length > 0 ||
         sheet.diffCellCount > 0 ||
         sheet.mergedRangesChanged ||
-        sheet.freezePaneChanged
+        sheet.freezePaneChanged ||
+        sheet.visibilityChanged
     );
 }
 
@@ -155,6 +156,7 @@ function createSheetTabView(
         diffCellCount: sheet.diffCellCount,
         mergedRangesChanged: sheet.mergedRangesChanged,
         freezePaneChanged: sheet.freezePaneChanged,
+        visibilityChanged: sheet.visibilityChanged,
         hasDiff: getSheetHasDiff(sheet),
         diffTone: getSheetDiffTone(sheet),
         isActive: sheet.key === activeSheetKey,
@@ -360,6 +362,7 @@ function createSheetView(sheet: SheetDiffModel): DiffPanelSheetView {
         diffCellCount: sheet.diffCellCount,
         mergedRangesChanged: sheet.mergedRangesChanged,
         freezePaneChanged: sheet.freezePaneChanged,
+        visibilityChanged: sheet.visibilityChanged,
     };
 }
 
