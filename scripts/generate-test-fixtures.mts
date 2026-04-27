@@ -8,16 +8,7 @@ import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(scriptDirectory, "..");
-const fixtureRoot = path.join(
-    repositoryRoot,
-    "src",
-    "test",
-    "fixtures",
-    "xlsx-regressions",
-    "newline-only-cell-diff"
-);
-const sheetName = "define";
-const cellAddress = "F5";
+const fixtureRoot = path.join(repositoryRoot, "src", "test", "fixtures", "xlsx-regressions");
 const lfValue = "$&key1=ARMY==#army.id\n$&key1=ASSET==#assets.id";
 const crlfValue = "$&key1=ARMY==#army.id\r\n$&key1=ASSET==#assets.id";
 
@@ -25,6 +16,48 @@ interface FastxlsxCommand {
     command: string;
     argsPrefix: string[];
 }
+
+interface FixtureCellEdit {
+    cellAddress: string;
+    value: string;
+}
+
+interface FixtureCase {
+    name: string;
+    sheetName: string;
+    baseEdits: FixtureCellEdit[];
+    headEdits: FixtureCellEdit[];
+}
+
+const fixtureCases: FixtureCase[] = [
+    {
+        name: "newline-only-cell-diff",
+        sheetName: "define",
+        baseEdits: [
+            {
+                cellAddress: "F5",
+                value: lfValue,
+            },
+        ],
+        headEdits: [
+            {
+                cellAddress: "F5",
+                value: crlfValue,
+            },
+        ],
+    },
+    {
+        name: "empty-string-vs-blank-cell",
+        sheetName: "define",
+        baseEdits: [],
+        headEdits: [
+            {
+                cellAddress: "F5",
+                value: "",
+            },
+        ],
+    },
+];
 
 async function pathExists(targetPath: string): Promise<boolean> {
     try {
@@ -94,40 +127,62 @@ async function runFastxlsx(
 async function createFixtureWorkbook(
     fastxlsxCommand: FastxlsxCommand,
     workbookPath: string,
-    cellValue: string
+    sheetName: string,
+    cellEdits: FixtureCellEdit[]
 ): Promise<void> {
     await runFastxlsx(fastxlsxCommand, ["create", workbookPath, "--sheet", sheetName]);
-    await runFastxlsx(
-        fastxlsxCommand,
-        [
-            "set",
-            workbookPath,
-            "--sheet",
-            sheetName,
-            "--cell",
-            cellAddress,
-            "--text",
-            cellValue,
-            "--in-place",
-        ],
-        { quiet: true }
-    );
+
+    for (const cellEdit of cellEdits) {
+        await runFastxlsx(
+            fastxlsxCommand,
+            [
+                "set",
+                workbookPath,
+                "--sheet",
+                sheetName,
+                "--cell",
+                cellEdit.cellAddress,
+                "--text",
+                cellEdit.value,
+                "--in-place",
+            ],
+            { quiet: true }
+        );
+    }
+
     await runFastxlsx(fastxlsxCommand, ["validate", workbookPath]);
-    await runFastxlsx(
-        fastxlsxCommand,
-        ["get", workbookPath, "--sheet", sheetName, "--cell", cellAddress],
-        { quiet: true }
-    );
+
+    for (const cellEdit of cellEdits) {
+        await runFastxlsx(
+            fastxlsxCommand,
+            ["get", workbookPath, "--sheet", sheetName, "--cell", cellEdit.cellAddress],
+            { quiet: true }
+        );
+    }
 }
 
 async function main(): Promise<void> {
     const fastxlsxCommand = await resolveFastxlsxCommand();
     await mkdir(fixtureRoot, { recursive: true });
 
-    await createFixtureWorkbook(fastxlsxCommand, path.join(fixtureRoot, "base.xlsx"), lfValue);
-    await createFixtureWorkbook(fastxlsxCommand, path.join(fixtureRoot, "head.xlsx"), crlfValue);
+    for (const fixtureCase of fixtureCases) {
+        const caseDirectory = path.join(fixtureRoot, fixtureCase.name);
+        await mkdir(caseDirectory, { recursive: true });
+        await createFixtureWorkbook(
+            fastxlsxCommand,
+            path.join(caseDirectory, "base.xlsx"),
+            fixtureCase.sheetName,
+            fixtureCase.baseEdits
+        );
+        await createFixtureWorkbook(
+            fastxlsxCommand,
+            path.join(caseDirectory, "head.xlsx"),
+            fixtureCase.sheetName,
+            fixtureCase.headEdits
+        );
 
-    console.log(`Fixtures generated in ${fixtureRoot}`);
+        console.log(`Fixtures generated in ${caseDirectory}`);
+    }
 }
 
 main().catch((error) => {

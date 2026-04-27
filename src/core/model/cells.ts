@@ -36,3 +36,13 @@ export function getCellAddress(rowNumber: number, columnNumber: number): string 
 export function normalizeCellTextLineEndings(value: string): string {
     return value.replace(/\r\n?/g, "\n");
 }
+
+export function hasComparableCellContent(
+    displayValue: string | null | undefined,
+    formula: string | null | undefined
+): boolean {
+    return (
+        (formula !== null && formula !== undefined) ||
+        (displayValue !== null && displayValue !== undefined && displayValue !== "")
+    );
+}

@@ -68,6 +68,36 @@ function createGridSheet(name: string, rows: string[][]): SheetSnapshot {
     };
 }
 
+function createSparseSheet(
+    name: string,
+    cellsInput: Array<{
+        rowNumber: number;
+        columnNumber: number;
+        value: string;
+    }>,
+    dimensions: {
+        rowCount: number;
+        columnCount: number;
+    }
+): SheetSnapshot {
+    const cells: Record<string, CellSnapshot> = {};
+
+    for (const cellInput of cellsInput) {
+        const cell = createCell(cellInput.rowNumber, cellInput.columnNumber, cellInput.value);
+        cells[cell.key] = cell;
+    }
+
+    return {
+        name,
+        rowCount: dimensions.rowCount,
+        columnCount: dimensions.columnCount,
+        mergedRanges: [],
+        freezePane: null,
+        cells,
+        signature: `${name}:sparse`,
+    };
+}
+
 function createWorkbook(fileName: string, sheets: SheetSnapshot[]): WorkbookSnapshot {
     return {
         filePath: `/tmp/${fileName}`,
@@ -146,6 +176,42 @@ suite("Workbook diff row alignment", () => {
 
         assert.deepStrictEqual(sheet.diffRows, []);
         assert.deepStrictEqual(sheet.diffCells, []);
+        assert.strictEqual(diff.totalDiffCells, 0);
+        assert.strictEqual(diff.totalDiffRows, 0);
+        assert.strictEqual(diff.totalDiffSheets, 0);
+    });
+
+    test("ignores blank versus explicit empty-string cell differences", () => {
+        const diff = buildWorkbookDiff(
+            createWorkbook("left.xlsx", [
+                createSparseSheet("Sheet1", [], {
+                    rowCount: 0,
+                    columnCount: 0,
+                }),
+            ]),
+            createWorkbook("right.xlsx", [
+                createSparseSheet(
+                    "Sheet1",
+                    [
+                        {
+                            rowNumber: 5,
+                            columnNumber: 6,
+                            value: "",
+                        },
+                    ],
+                    {
+                        rowCount: 5,
+                        columnCount: 6,
+                    }
+                ),
+            ])
+        );
+        const sheet = diff.sheets[0]!;
+
+        assert.deepStrictEqual(sheet.diffRows, []);
+        assert.deepStrictEqual(sheet.diffCells, []);
+        assert.strictEqual(sheet.rowCount, 0);
+        assert.strictEqual(sheet.columnCount, 0);
         assert.strictEqual(diff.totalDiffCells, 0);
         assert.strictEqual(diff.totalDiffRows, 0);
         assert.strictEqual(diff.totalDiffSheets, 0);

@@ -1,4 +1,9 @@
-import { createCellKey, getCellAddress, normalizeCellTextLineEndings } from "../model/cells";
+import {
+    createCellKey,
+    getCellAddress,
+    hasComparableCellContent,
+    normalizeCellTextLineEndings,
+} from "../model/cells";
 import {
     type CellSnapshot,
     type DiffCellLocation,
@@ -70,6 +75,14 @@ function areCellsEqual(
     leftCell: CellSnapshot | undefined,
     rightCell: CellSnapshot | undefined
 ): boolean {
+    if (leftCell && !hasComparableCellContent(leftCell.displayValue, leftCell.formula)) {
+        leftCell = undefined;
+    }
+
+    if (rightCell && !hasComparableCellContent(rightCell.displayValue, rightCell.formula)) {
+        rightCell = undefined;
+    }
+
     if (!leftCell && !rightCell) {
         return true;
     }
@@ -99,15 +112,25 @@ function buildRowSnapshots(sheet: SheetSnapshot | null): RowSnapshot[] {
     }
 
     const cellsByRow = new Map<number, CellSnapshot[]>();
+    let maxComparableRowNumber = 0;
 
     for (const cell of Object.values(sheet.cells)) {
+        if (!hasComparableCellContent(cell.displayValue, cell.formula)) {
+            continue;
+        }
+
         const bucket = cellsByRow.get(cell.rowNumber) ?? [];
         bucket.push(cell);
         cellsByRow.set(cell.rowNumber, bucket);
+        maxComparableRowNumber = Math.max(maxComparableRowNumber, cell.rowNumber);
+    }
+
+    if (maxComparableRowNumber <= 0) {
+        return [];
     }
 
     const rows: RowSnapshot[] = [];
-    for (let rowNumber = 1; rowNumber <= sheet.rowCount; rowNumber += 1) {
+    for (let rowNumber = 1; rowNumber <= maxComparableRowNumber; rowNumber += 1) {
         const cells = (cellsByRow.get(rowNumber) ?? []).sort(
             (left, right) => left.columnNumber - right.columnNumber
         );
@@ -141,15 +164,25 @@ function buildColumnSnapshots(
     }
 
     const cellsByColumn = new Map<number, CellSnapshot[]>();
+    let maxComparableColumnNumber = 0;
 
     for (const cell of Object.values(sheet.cells)) {
+        if (!hasComparableCellContent(cell.displayValue, cell.formula)) {
+            continue;
+        }
+
         const bucket = cellsByColumn.get(cell.columnNumber) ?? [];
         bucket.push(cell);
         cellsByColumn.set(cell.columnNumber, bucket);
+        maxComparableColumnNumber = Math.max(maxComparableColumnNumber, cell.columnNumber);
+    }
+
+    if (maxComparableColumnNumber <= 0) {
+        return [];
     }
 
     const columns: ColumnSnapshot[] = [];
-    for (let columnNumber = 1; columnNumber <= sheet.columnCount; columnNumber += 1) {
+    for (let columnNumber = 1; columnNumber <= maxComparableColumnNumber; columnNumber += 1) {
         const cells = (cellsByColumn.get(columnNumber) ?? []).sort((left, right) => {
             const leftRowNumber =
                 alignedRowNumbersBySourceRow.get(left.rowNumber) ?? left.rowNumber;

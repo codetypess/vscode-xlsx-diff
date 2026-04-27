@@ -14,10 +14,28 @@ import { createCellKey } from "../core/model/cells";
 import { getTestFixturePath } from "./fixture-paths";
 
 const execFile = promisify(execFileCallback);
-const newlineOnlyFixtureDirectory = ["xlsx-regressions", "newline-only-cell-diff"] as const;
 const cellKey = createCellKey(5, 6);
 const lfValue = "$&key1=ARMY==#army.id\n$&key1=ASSET==#assets.id";
 const crlfValue = "$&key1=ARMY==#army.id\r\n$&key1=ASSET==#assets.id";
+
+interface FixtureRegressionCase {
+    name: string;
+    expectedBaseDisplayValue: string | undefined;
+    expectedHeadDisplayValue: string | undefined;
+}
+
+const fixtureRegressionCases: FixtureRegressionCase[] = [
+    {
+        name: "newline-only-cell-diff",
+        expectedBaseDisplayValue: lfValue,
+        expectedHeadDisplayValue: crlfValue,
+    },
+    {
+        name: "empty-string-vs-blank-cell",
+        expectedBaseDisplayValue: undefined,
+        expectedHeadDisplayValue: "",
+    },
+];
 
 function createGitUri(resourcePath: string, ref = "HEAD") {
     return vscode.Uri.from({
@@ -122,61 +140,85 @@ function assertNoWorkbookDiff(diff: ReturnType<typeof buildWorkbookDiff>) {
 }
 
 suite("SCM workbook regressions", () => {
-    test("loads git HEAD snapshots from real workbooks and ignores newline-only diffs", async function () {
-        this.timeout(10000);
+    for (const fixtureCase of fixtureRegressionCases) {
+        test(`loads git HEAD snapshots for ${fixtureCase.name} and ignores invisible diffs`, async function () {
+            this.timeout(10000);
 
-        const baseWorkbookPath = getTestFixturePath(...newlineOnlyFixtureDirectory, "base.xlsx");
-        const headWorkbookPath = getTestFixturePath(...newlineOnlyFixtureDirectory, "head.xlsx");
-        const workspace = await createTempGitWorkspace(baseWorkbookPath, headWorkbookPath);
-
-        try {
-            const headResourceSnapshot = await loadWorkbookSnapshot(
-                createGitUri(workspace.workbookPath, "HEAD")
+            const baseWorkbookPath = getTestFixturePath(
+                "xlsx-regressions",
+                fixtureCase.name,
+                "base.xlsx"
             );
-            const localSnapshot = await loadWorkbookSnapshot(
-                vscode.Uri.file(workspace.workbookPath)
+            const headWorkbookPath = getTestFixturePath(
+                "xlsx-regressions",
+                fixtureCase.name,
+                "head.xlsx"
             );
+            const workspace = await createTempGitWorkspace(baseWorkbookPath, headWorkbookPath);
 
-            assert.strictEqual(headResourceSnapshot.isReadonly, true);
-            assert.strictEqual(localSnapshot.isReadonly, false);
-            assert.strictEqual(
-                headResourceSnapshot.sheets[0]?.cells[cellKey]?.displayValue,
-                lfValue
+            try {
+                const headResourceSnapshot = await loadWorkbookSnapshot(
+                    createGitUri(workspace.workbookPath, "HEAD")
+                );
+                const localSnapshot = await loadWorkbookSnapshot(
+                    vscode.Uri.file(workspace.workbookPath)
+                );
+
+                assert.strictEqual(headResourceSnapshot.isReadonly, true);
+                assert.strictEqual(localSnapshot.isReadonly, false);
+                assert.strictEqual(
+                    headResourceSnapshot.sheets[0]?.cells[cellKey]?.displayValue,
+                    fixtureCase.expectedBaseDisplayValue
+                );
+                assert.strictEqual(
+                    localSnapshot.sheets[0]?.cells[cellKey]?.displayValue,
+                    fixtureCase.expectedHeadDisplayValue
+                );
+
+                assertNoWorkbookDiff(buildWorkbookDiff(headResourceSnapshot, localSnapshot));
+            } finally {
+                await rm(workspace.tempDirectory, { recursive: true, force: true });
+            }
+        });
+
+        test(`loads svn BASE snapshots for ${fixtureCase.name} and ignores invisible diffs`, async function () {
+            this.timeout(10000);
+
+            const baseWorkbookPath = getTestFixturePath(
+                "xlsx-regressions",
+                fixtureCase.name,
+                "base.xlsx"
             );
-            assert.strictEqual(localSnapshot.sheets[0]?.cells[cellKey]?.displayValue, crlfValue);
-
-            assertNoWorkbookDiff(buildWorkbookDiff(headResourceSnapshot, localSnapshot));
-        } finally {
-            await rm(workspace.tempDirectory, { recursive: true, force: true });
-        }
-    });
-
-    test("loads svn BASE snapshots from real workbooks and ignores newline-only diffs", async function () {
-        this.timeout(10000);
-
-        const baseWorkbookPath = getTestFixturePath(...newlineOnlyFixtureDirectory, "base.xlsx");
-        const headWorkbookPath = getTestFixturePath(...newlineOnlyFixtureDirectory, "head.xlsx");
-        const workspace = await createTempSvnWorkspace(baseWorkbookPath, headWorkbookPath);
-
-        try {
-            const baseResourceSnapshot = await loadWorkbookSnapshot(
-                createSvnShowUri(workspace.workbookPath, "BASE")
+            const headWorkbookPath = getTestFixturePath(
+                "xlsx-regressions",
+                fixtureCase.name,
+                "head.xlsx"
             );
-            const localSnapshot = await loadWorkbookSnapshot(
-                vscode.Uri.file(workspace.workbookPath)
-            );
+            const workspace = await createTempSvnWorkspace(baseWorkbookPath, headWorkbookPath);
 
-            assert.strictEqual(baseResourceSnapshot.isReadonly, true);
-            assert.strictEqual(localSnapshot.isReadonly, false);
-            assert.strictEqual(
-                baseResourceSnapshot.sheets[0]?.cells[cellKey]?.displayValue,
-                lfValue
-            );
-            assert.strictEqual(localSnapshot.sheets[0]?.cells[cellKey]?.displayValue, crlfValue);
+            try {
+                const baseResourceSnapshot = await loadWorkbookSnapshot(
+                    createSvnShowUri(workspace.workbookPath, "BASE")
+                );
+                const localSnapshot = await loadWorkbookSnapshot(
+                    vscode.Uri.file(workspace.workbookPath)
+                );
 
-            assertNoWorkbookDiff(buildWorkbookDiff(baseResourceSnapshot, localSnapshot));
-        } finally {
-            await rm(workspace.tempDirectory, { recursive: true, force: true });
-        }
-    });
+                assert.strictEqual(baseResourceSnapshot.isReadonly, true);
+                assert.strictEqual(localSnapshot.isReadonly, false);
+                assert.strictEqual(
+                    baseResourceSnapshot.sheets[0]?.cells[cellKey]?.displayValue,
+                    fixtureCase.expectedBaseDisplayValue
+                );
+                assert.strictEqual(
+                    localSnapshot.sheets[0]?.cells[cellKey]?.displayValue,
+                    fixtureCase.expectedHeadDisplayValue
+                );
+
+                assertNoWorkbookDiff(buildWorkbookDiff(baseResourceSnapshot, localSnapshot));
+            } finally {
+                await rm(workspace.tempDirectory, { recursive: true, force: true });
+            }
+        });
+    }
 });

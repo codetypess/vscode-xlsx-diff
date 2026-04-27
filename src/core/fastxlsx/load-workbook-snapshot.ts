@@ -2,7 +2,12 @@ import { createHash } from "node:crypto";
 import { stat } from "node:fs/promises";
 import * as path from "node:path";
 import * as vscode from "vscode";
-import { createCellKey, getCellAddress, normalizeCellTextLineEndings } from "../model/cells";
+import {
+    createCellKey,
+    getCellAddress,
+    hasComparableCellContent,
+    normalizeCellTextLineEndings,
+} from "../model/cells";
 import { Workbook } from "./runtime";
 import {
     type WorkbookDetailFact,
@@ -52,16 +57,26 @@ interface WorkbookSnapshotMetadata {
 
 function createSheetSignature(sheet: SheetSnapshot): string {
     const hash = createHash("sha1");
+    const comparableCells = Object.values(sheet.cells)
+        .filter((cell) => hasComparableCellContent(cell.displayValue, cell.formula))
+        .sort((left, right) => left.key.localeCompare(right.key));
+    const comparableRowCount = comparableCells.reduce(
+        (maxRowNumber, cell) => Math.max(maxRowNumber, cell.rowNumber),
+        0
+    );
+    const comparableColumnCount = comparableCells.reduce(
+        (maxColumnNumber, cell) => Math.max(maxColumnNumber, cell.columnNumber),
+        0
+    );
+
     hash.update(`${sheet.name}\n`);
-    hash.update(`${sheet.rowCount}:${sheet.columnCount}\n`);
+    hash.update(`${comparableRowCount}:${comparableColumnCount}\n`);
 
     for (const mergedRange of sheet.mergedRanges) {
         hash.update(`merge:${mergedRange}\n`);
     }
 
-    for (const cell of Object.values(sheet.cells).sort((left, right) =>
-        left.key.localeCompare(right.key)
-    )) {
+    for (const cell of comparableCells) {
         hash.update(
             `${cell.address}\u0000${normalizeCellTextLineEndings(cell.displayValue)}\u0000${normalizeCellTextLineEndings(
                 cell.formula ?? ""
