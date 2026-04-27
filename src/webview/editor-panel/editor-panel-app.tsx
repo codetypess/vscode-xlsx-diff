@@ -1,7 +1,7 @@
 import * as React from "react";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
-import type { CellSnapshot, EditorRenderModel, EditorSheetTabView } from "../../core/model/types";
+import type { CellSnapshot, EditorRenderModel } from "../../core/model/types";
 import { createCellKey, getColumnLabel } from "../../core/model/cells";
 import { formatI18nMessage, RUNTIME_MESSAGES } from "../../i18n/catalog";
 import {
@@ -36,19 +36,29 @@ import {
     isCellWithinFillPreviewArea,
 } from "./editor-fill-drag";
 import {
-    getEditorToolbarSyncSnapshot,
-    notifyEditorToolbarSync,
-    subscribeEditorToolbarSync,
-} from "./editor-toolbar-sync";
+    CellValue,
+    EditorToolbar,
+    PendingMarker,
+    SearchPanel,
+    Shell,
+    TabContextMenu,
+    Tabs,
+} from "./editor-panel-chrome";
 import {
-    getToolbarCellEditTargetKey,
-    shouldResetToolbarCellValueDraft,
-    type ToolbarCellEditTarget,
-} from "./editor-toolbar-input";
-import { getMaxVisibleSheetTabsForWidth, partitionSheetTabs } from "../editor-sheet-tabs";
+    classNames,
+    type ContextMenuState,
+    type PendingSummary,
+    type SearchPanelFeedback,
+    type SearchPanelMode,
+    type SearchPanelPosition,
+} from "./editor-panel-ui-shared";
+import { notifyEditorToolbarSync } from "./editor-toolbar-sync";
+import { type ToolbarCellEditTarget } from "./editor-toolbar-input";
 import type {
+    EditorPanelStrings,
     EditorSearchResultMessage,
     EditorSearchScope,
+    EditorWebviewMessage,
     SearchOptions,
 } from "./editor-panel-types";
 import { resolveEditorReplaceResultInSheet } from "./editor-panel-logic";
@@ -61,46 +71,10 @@ import { stabilizeIncomingRenderModel } from "./editor-render-stabilizer";
 import { getFreezePaneCountsForCell, hasLockedView } from "../view-lock";
 
 interface VsCodeApi {
-    postMessage(message: OutgoingMessage): void;
+    postMessage(message: EditorWebviewMessage): void;
 }
 
 declare function acquireVsCodeApi(): VsCodeApi;
-
-type OutgoingMessage =
-    | { type: "ready" }
-    | { type: "setSheet"; sheetKey: string }
-    | { type: "addSheet" }
-    | { type: "deleteSheet"; sheetKey: string }
-    | { type: "renameSheet"; sheetKey: string }
-    | { type: "insertRow"; rowNumber: number }
-    | { type: "deleteRow"; rowNumber: number }
-    | { type: "insertColumn"; columnNumber: number }
-    | { type: "deleteColumn"; columnNumber: number }
-    | {
-          type: "search";
-          query: string;
-          direction: "next" | "prev";
-          options: SearchOptions;
-          scope: EditorSearchScope;
-          selectionRange?: CellRange;
-      }
-    | { type: "gotoCell"; reference: string }
-    | { type: "selectCell"; rowNumber: number; columnNumber: number }
-    | {
-          type: "setPendingEdits";
-          edits: Array<{
-              sheetKey: string;
-              rowNumber: number;
-              columnNumber: number;
-              value: string;
-          }>;
-      }
-    | { type: "requestSave" }
-    | { type: "pendingEditStateChanged"; hasPendingEdits: boolean }
-    | { type: "undoSheetEdit" }
-    | { type: "redoSheetEdit" }
-    | { type: "toggleViewLock"; rowCount: number; columnCount: number }
-    | { type: "reload" };
 
 type IncomingMessage =
     | { type: "loading"; message: string }
@@ -151,44 +125,10 @@ interface PendingSelection extends CellPosition {
     reveal: boolean;
 }
 
-interface PendingSummary {
-    sheetKeys: Set<string>;
-    rows: Set<number>;
-    columns: Set<number>;
-}
-
-type SearchPanelMode = "find" | "replace";
-type SearchPanelFeedbackStatus = EditorSearchResultMessage["status"] | "replaced" | "no-change";
-
-interface SearchPanelFeedback {
-    status: SearchPanelFeedbackStatus;
-    message?: string;
-}
-
 interface ScrollState {
     top: number;
     left: number;
 }
-
-type ContextMenuState =
-    | {
-          kind: "tab";
-          sheetKey: string;
-          x: number;
-          y: number;
-      }
-    | {
-          kind: "row";
-          rowNumber: number;
-          x: number;
-          y: number;
-      }
-    | {
-          kind: "column";
-          columnNumber: number;
-          x: number;
-          y: number;
-      };
 
 type SelectionDragState =
     | {
@@ -221,11 +161,6 @@ interface FillHandleClickState {
 
 type GridLayerKind = "body" | "top" | "left" | "corner";
 
-interface SearchPanelPosition {
-    left: number;
-    top: number;
-}
-
 interface SearchPanelDragState {
     pointerId: number;
     offsetX: number;
@@ -243,9 +178,8 @@ type ViewState =
           scrollState: ScrollState | null;
       };
 
-const DEFAULT_STRINGS = RUNTIME_MESSAGES.en.editorPanel;
-
-type Strings = typeof DEFAULT_STRINGS;
+const DEFAULT_STRINGS: EditorPanelStrings = RUNTIME_MESSAGES.en.editorPanel;
+type Strings = EditorPanelStrings;
 
 const STRINGS: Strings =
     ((globalThis as Record<string, unknown>).__XLSX_EDITOR_STRINGS__ as Strings | undefined) ??
@@ -283,10 +217,6 @@ const WHEEL_LINE_SCROLL_PIXELS = 40;
 const DEFAULT_EDITOR_VIEWPORT_HEIGHT = 480;
 const DEFAULT_EDITOR_VIEWPORT_WIDTH = 960;
 const FILL_HANDLE_DOUBLE_CLICK_MS = 400;
-const SHEET_TAB_ITEM_GAP = 1;
-const SHEET_TAB_ESTIMATED_WIDTH = 120;
-const SHEET_TAB_VISIBLE_MAX_WIDTH = 144;
-const SHEET_TAB_OVERFLOW_TRIGGER_WIDTH = 32;
 const DEFAULT_SEARCH_OPTIONS: SearchOptions = {
     isRegexp: false,
     matchCase: false,
@@ -353,12 +283,13 @@ function clampSearchPanelPosition(
     };
 }
 
-function syncSearchPanelShellPosition(): void {
+function syncSearchPanelShellPosition(
+    shell: HTMLElement | null = getSearchPanelShellElement()
+): void {
     if (!searchPanelPosition) {
         return;
     }
 
-    const shell = getSearchPanelShellElement();
     if (!shell) {
         return;
     }
@@ -448,10 +379,6 @@ function getPendingEditKey(sheetKey: string, rowNumber: number, columnNumber: nu
     return `${sheetKey}:${rowNumber}:${columnNumber}`;
 }
 
-function classNames(values: Array<string | false | null | undefined>): string {
-    return values.filter(Boolean).join(" ");
-}
-
 function serializePendingEdits(edits: PendingEdit[]): string {
     return JSON.stringify(
         [...edits]
@@ -503,11 +430,7 @@ function clearSuppressedSelectionClicks(): void {
 }
 
 function scheduleSuppressedSelectionClickReset(): void {
-    if (
-        !suppressNextCellClick &&
-        !suppressNextRowHeaderClick &&
-        !suppressNextColumnHeaderClick
-    ) {
+    if (!suppressNextCellClick && !suppressNextRowHeaderClick && !suppressNextColumnHeaderClick) {
         return;
     }
 
@@ -1024,10 +947,10 @@ function rememberFillHandleClick(sourceRange: CellRange, timeStamp: number): voi
 function isRepeatedFillHandleClick(sourceRange: CellRange, timeStamp: number): boolean {
     return Boolean(
         lastFillHandleClickState &&
-            lastFillHandleClickState.rowNumber === sourceRange.endRow &&
-            lastFillHandleClickState.columnNumber === sourceRange.endColumn &&
-            timeStamp >= lastFillHandleClickState.timeStamp &&
-            timeStamp - lastFillHandleClickState.timeStamp <= FILL_HANDLE_DOUBLE_CLICK_MS
+        lastFillHandleClickState.rowNumber === sourceRange.endRow &&
+        lastFillHandleClickState.columnNumber === sourceRange.endColumn &&
+        timeStamp >= lastFillHandleClickState.timeStamp &&
+        timeStamp - lastFillHandleClickState.timeStamp <= FILL_HANDLE_DOUBLE_CLICK_MS
     );
 }
 
@@ -1805,8 +1728,7 @@ function setSelectedCellLocal(
     const canUseLocalUpdate = canUseLocalSimpleSelectionUpdate(nextCell, {
         anchorCell: nextAnchorCell,
         selectionRange: nextSelectionRange,
-        forceRender:
-            forceRender || shouldClearSearchFeedback || shouldForceRenderForFillHandle,
+        forceRender: forceRender || shouldClearSearchFeedback || shouldForceRenderForFillHandle,
     });
 
     clearFillDragState();
@@ -2896,662 +2818,6 @@ function renderApp({
     );
 }
 
-function PendingMarker({ extraClass }: { extraClass?: string }): React.ReactElement {
-    return (
-        <span
-            className={classNames(["diff-marker", "diff-marker--pending", extraClass])}
-            aria-hidden
-        />
-    );
-}
-
-function CellValue({
-    value,
-    formula,
-}: {
-    value: string;
-    formula: string | null;
-}): React.ReactElement | null {
-    if (!value && !formula) {
-        return null;
-    }
-
-    return (
-        <>
-            {value ? <span className="grid__cell-value">{value}</span> : null}
-            {formula ? (
-                <span className="cell__formula" title={formula}>
-                    fx
-                </span>
-            ) : null}
-        </>
-    );
-}
-
-function ToolbarButton({
-    actionLabel,
-    icon,
-    className,
-    disabled = false,
-    isActive = false,
-    isLoading = false,
-    iconOnly = false,
-    iconMirrored = false,
-    onClick,
-}: {
-    actionLabel: string;
-    icon: string;
-    className?: string;
-    disabled?: boolean;
-    isActive?: boolean;
-    isLoading?: boolean;
-    iconOnly?: boolean;
-    iconMirrored?: boolean;
-    onClick(): void;
-}): React.ReactElement {
-    const displayedIcon = isLoading ? "codicon-loading" : icon;
-
-    return (
-        <button
-            aria-label={actionLabel}
-            className={classNames([
-                "toolbar__button",
-                className,
-                isActive && "is-active",
-                isLoading && "is-loading",
-                iconOnly && "toolbar__button--icon",
-            ])}
-            disabled={disabled}
-            title={actionLabel}
-            type="button"
-            onClick={onClick}
-        >
-            <span
-                className={classNames([
-                    "codicon",
-                    displayedIcon,
-                    "toolbar__button-icon",
-                    iconMirrored && "toolbar__button-icon--flip",
-                    isLoading && "toolbar__button-icon--spin",
-                ])}
-                aria-hidden
-            />
-            {iconOnly ? null : <span>{actionLabel}</span>}
-        </button>
-    );
-}
-
-function SearchPanel({
-    currentModel,
-}: {
-    currentModel: EditorRenderModel;
-}): React.ReactElement | null {
-    const shellRef = React.useRef<HTMLElement | null>(null);
-
-    React.useLayoutEffect(() => {
-        if (!isSearchPanelOpen) {
-            return;
-        }
-
-        const shell = shellRef.current;
-        if (!shell || !searchPanelPosition) {
-            return;
-        }
-
-        const nextPosition = clampSearchPanelPosition(searchPanelPosition, {
-            panelElement: shell,
-        });
-        if (
-            nextPosition.left !== searchPanelPosition.left ||
-            nextPosition.top !== searchPanelPosition.top
-        ) {
-            searchPanelPosition = nextPosition;
-            shell.style.left = `${nextPosition.left}px`;
-            shell.style.top = `${nextPosition.top}px`;
-            shell.style.right = "auto";
-        }
-    });
-
-    if (!isSearchPanelOpen) {
-        return null;
-    }
-
-    const currentSelectionRange = getExpandedSelectionRange();
-    const effectiveScope = getEffectiveSearchScope();
-    const selectionRange =
-        effectiveScope === "selection"
-            ? (searchSelectionRange ?? currentSelectionRange)
-            : null;
-    const isReplaceMode = searchMode === "replace";
-    const isQueryEmpty = searchQuery.trim().length === 0;
-    const hasSearchableGrid =
-        currentModel.activeSheet.rowCount > 0 && currentModel.activeSheet.columnCount > 0;
-    const canReplace = !isQueryEmpty && hasSearchableGrid && currentModel.canEdit;
-    const scopeSummary =
-        selectionRange ? getSelectionRangeAddress(selectionRange) : STRINGS.searchScopeWholeSheet;
-    const feedbackToneClass =
-        searchFeedback?.status === "matched" || searchFeedback?.status === "replaced"
-            ? "search-strip__feedback--success"
-            : searchFeedback?.status === "invalid-pattern"
-              ? "search-strip__feedback--error"
-              : searchFeedback?.status === "no-match" || searchFeedback?.status === "no-change"
-                ? "search-strip__feedback--warn"
-                : undefined;
-    const panelStyle: React.CSSProperties | undefined = searchPanelPosition
-        ? {
-              left: `${searchPanelPosition.left}px`,
-              top: `${searchPanelPosition.top}px`,
-              right: "auto",
-          }
-        : undefined;
-
-    return (
-        <section
-            ref={shellRef}
-            className="search-strip-shell"
-            data-role="search-panel-shell"
-            style={panelStyle}
-            onPointerDown={(event) => {
-                if (event.button !== 0 || isSearchPanelInteractiveTarget(event.target)) {
-                    return;
-                }
-
-                event.preventDefault();
-                closeContextMenu({ refresh: false });
-                beginSearchPanelDrag(event.pointerId, event.clientX, event.clientY);
-            }}
-        >
-            <div className="search-strip" data-role="search-panel" role="search">
-                <div className="search-strip__header">
-                    <div className="search-strip__tabs" role="tablist" aria-label={STRINGS.search}>
-                        <button
-                            aria-selected={!isReplaceMode}
-                            className={classNames([
-                                "search-strip__tab",
-                                !isReplaceMode && "is-active",
-                            ])}
-                            role="tab"
-                            tabIndex={!isReplaceMode ? 0 : -1}
-                            type="button"
-                            onClick={() => setSearchMode("find")}
-                        >
-                            <span
-                                className="codicon codicon-search search-strip__tab-icon"
-                                aria-hidden
-                            />
-                            <span>{STRINGS.searchFind}</span>
-                        </button>
-                        <button
-                            aria-selected={isReplaceMode}
-                            className={classNames([
-                                "search-strip__tab",
-                                isReplaceMode && "is-active",
-                            ])}
-                            role="tab"
-                            tabIndex={isReplaceMode ? 0 : -1}
-                            type="button"
-                            onClick={() => setSearchMode("replace")}
-                        >
-                            <span
-                                className="codicon codicon-replace search-strip__tab-icon"
-                                aria-hidden
-                            />
-                            <span>{STRINGS.searchReplace}</span>
-                        </button>
-                    </div>
-                    <div className="search-strip__header-tools">
-                        <ToolbarButton
-                            actionLabel={STRINGS.searchClose}
-                            className="search-strip__close-button"
-                            icon="codicon-close"
-                            iconOnly={true}
-                            onClick={closeSearchPanel}
-                        />
-                    </div>
-                </div>
-                <div className="search-strip__row search-strip__row--primary">
-                    <div
-                        className={classNames([
-                            "search-strip__input-wrap",
-                            searchFeedback?.status === "invalid-pattern" && "is-invalid",
-                        ])}
-                    >
-                        <span
-                            className="codicon codicon-search search-strip__input-icon"
-                            aria-hidden
-                        />
-                        <input
-                            aria-label={STRINGS.search}
-                            className="search-strip__input"
-                            data-role="search-input"
-                            placeholder={STRINGS.searchPlaceholder}
-                            type="text"
-                            value={searchQuery}
-                            onChange={(event) => {
-                                updateSearchQuery(event.currentTarget.value);
-                            }}
-                            onKeyDown={(event) => {
-                                if (event.key === "Enter") {
-                                    event.preventDefault();
-                                    submitSearch(event.shiftKey ? "prev" : "next");
-                                    return;
-                                }
-
-                                if (event.key === "Escape") {
-                                    event.preventDefault();
-                                    event.stopPropagation();
-                                    closeSearchPanel();
-                                }
-                            }}
-                        />
-                        <div
-                            className="search-strip__input-tools"
-                            role="group"
-                            aria-label={STRINGS.search}
-                        >
-                            <button
-                                aria-label={STRINGS.searchRegex}
-                                aria-pressed={searchOptions.isRegexp}
-                                className={classNames([
-                                    "search-strip__icon-toggle",
-                                    searchOptions.isRegexp && "is-active",
-                                ])}
-                                title={STRINGS.searchRegex}
-                                type="button"
-                                onMouseDown={(event) => event.preventDefault()}
-                                onClick={() => toggleSearchOption("isRegexp")}
-                            >
-                                <span className="codicon codicon-regex" aria-hidden />
-                            </button>
-                            <button
-                                aria-label={STRINGS.searchMatchCase}
-                                aria-pressed={searchOptions.matchCase}
-                                className={classNames([
-                                    "search-strip__icon-toggle",
-                                    searchOptions.matchCase && "is-active",
-                                ])}
-                                title={STRINGS.searchMatchCase}
-                                type="button"
-                                onMouseDown={(event) => event.preventDefault()}
-                                onClick={() => toggleSearchOption("matchCase")}
-                            >
-                                <span className="codicon codicon-case-sensitive" aria-hidden />
-                            </button>
-                            <button
-                                aria-label={STRINGS.searchWholeWord}
-                                aria-pressed={searchOptions.wholeWord}
-                                className={classNames([
-                                    "search-strip__icon-toggle",
-                                    searchOptions.wholeWord && "is-active",
-                                ])}
-                                title={STRINGS.searchWholeWord}
-                                type="button"
-                                onMouseDown={(event) => event.preventDefault()}
-                                onClick={() => toggleSearchOption("wholeWord")}
-                            >
-                                <span className="codicon codicon-whole-word" aria-hidden />
-                            </button>
-                        </div>
-                    </div>
-                    <div className="search-strip__actions">
-                        <ToolbarButton
-                            actionLabel={STRINGS.findPrev}
-                            disabled={isQueryEmpty || !hasSearchableGrid}
-                            icon="codicon-arrow-up"
-                            iconOnly={true}
-                            onClick={() => submitSearch("prev")}
-                        />
-                        <ToolbarButton
-                            actionLabel={STRINGS.findNext}
-                            disabled={isQueryEmpty || !hasSearchableGrid}
-                            icon="codicon-arrow-down"
-                            iconOnly={true}
-                            onClick={() => submitSearch("next")}
-                        />
-                    </div>
-                </div>
-                {isReplaceMode ? (
-                    <div className="search-strip__row search-strip__row--replace">
-                        <div className="search-strip__input-wrap">
-                            <span
-                                className="codicon codicon-replace search-strip__input-icon"
-                                aria-hidden
-                            />
-                            <input
-                                aria-label={STRINGS.searchReplace}
-                                className="search-strip__input"
-                                data-role="replace-input"
-                                placeholder={STRINGS.replacePlaceholder}
-                                type="text"
-                                value={replaceValue}
-                                onChange={(event) => {
-                                    updateReplaceValue(event.currentTarget.value);
-                                }}
-                                onKeyDown={(event) => {
-                                    if (event.key === "Enter") {
-                                        event.preventDefault();
-                                        submitReplace(
-                                            event.ctrlKey || event.metaKey ? "all" : "single"
-                                        );
-                                        return;
-                                    }
-
-                                    if (event.key === "Escape") {
-                                        event.preventDefault();
-                                        event.stopPropagation();
-                                        closeSearchPanel();
-                                    }
-                                }}
-                            />
-                        </div>
-                        <div className="search-strip__replace-actions">
-                            <ToolbarButton
-                                actionLabel={STRINGS.searchReplace}
-                                disabled={!canReplace}
-                                icon="codicon-replace"
-                                iconOnly={true}
-                                onClick={() => submitReplace("single")}
-                            />
-                            <ToolbarButton
-                                actionLabel={STRINGS.replaceAll}
-                                disabled={!canReplace}
-                                icon="codicon-replace-all"
-                                iconOnly={true}
-                                onClick={() => submitReplace("all")}
-                            />
-                        </div>
-                    </div>
-                ) : null}
-                <div className="search-strip__row search-strip__row--meta">
-                    <div className="search-strip__scope-summary">
-                        <span className="search-strip__scope-summary-label">
-                            {STRINGS.searchScopeLabel}
-                        </span>
-                        <span
-                            className={classNames([
-                                "search-strip__scope-summary-value",
-                                selectionRange && "is-selection",
-                            ])}
-                        >
-                            {scopeSummary}
-                        </span>
-                    </div>
-                </div>
-                {searchFeedback?.message ? (
-                    <div className={classNames(["search-strip__feedback", feedbackToneClass])}>
-                        {searchFeedback.message}
-                    </div>
-                ) : null}
-            </div>
-        </section>
-    );
-}
-
-function EditorToolbar({ currentModel }: { currentModel: EditorRenderModel }): React.ReactElement {
-    React.useSyncExternalStore(
-        subscribeEditorToolbarSync,
-        getEditorToolbarSyncSnapshot,
-        getEditorToolbarSyncSnapshot
-    );
-
-    const hasPendingEdits = pendingEdits.size > 0 || currentModel.hasPendingEdits;
-    const canUndo = undoStack.length > 0 || currentModel.canUndoStructuralEdits;
-    const canRedo = redoStack.length > 0 || currentModel.canRedoStructuralEdits;
-    const viewLocked = hasLockedView(currentModel.activeSheet.freezePane);
-    const viewLockActionLabel = viewLocked ? STRINGS.unlockView : STRINGS.lockView;
-    const activeCellAddress = getPositionInputValue();
-    const selectedCellValue = getCellValueInputValue();
-    const cellValuePlaceholder = getCellValueInputPlaceholder();
-    const selectedCellEditable = currentModel.canEdit && canEditSelectedCellValue();
-    const activeCellEditTarget: ToolbarCellEditTarget | null = selectedCell
-        ? {
-              sheetKey: currentModel.activeSheet.key,
-              rowNumber: selectedCell.rowNumber,
-              columnNumber: selectedCell.columnNumber,
-          }
-        : null;
-    const activeCellEditTargetKey = getToolbarCellEditTargetKey(activeCellEditTarget);
-    const [positionInputValue, setPositionInputValue] = React.useState(activeCellAddress);
-    const [cellValueInputValue, setCellValueInputValue] = React.useState(selectedCellValue);
-    const [isEditingPosition, setIsEditingPosition] = React.useState(false);
-    const [isEditingCellValue, setIsEditingCellValue] = React.useState(false);
-    const [cellValueEditTarget, setCellValueEditTarget] =
-        React.useState<ToolbarCellEditTarget | null>(null);
-    const cellValueEditTargetKey = getToolbarCellEditTargetKey(cellValueEditTarget);
-    const showCellValueActions =
-        isEditingCellValue &&
-        !shouldResetToolbarCellValueDraft(
-            cellValueEditTarget,
-            activeCellEditTarget,
-            selectedCellEditable
-        );
-
-    React.useEffect(() => {
-        if (!isEditingPosition) {
-            setPositionInputValue(activeCellAddress);
-        }
-    }, [activeCellAddress, isEditingPosition]);
-
-    React.useEffect(() => {
-        if (
-            isEditingCellValue &&
-            shouldResetToolbarCellValueDraft(
-                cellValueEditTarget,
-                activeCellEditTarget,
-                selectedCellEditable
-            )
-        ) {
-            setIsEditingCellValue(false);
-            setCellValueEditTarget(null);
-            setCellValueInputValue(selectedCellValue);
-            return;
-        }
-
-        if (!isEditingCellValue) {
-            setCellValueInputValue(selectedCellValue);
-        }
-    }, [
-        activeCellEditTargetKey,
-        cellValueEditTarget,
-        cellValueEditTargetKey,
-        isEditingCellValue,
-        selectedCellEditable,
-        selectedCellValue,
-    ]);
-
-    const resetPositionInput = () => {
-        setIsEditingPosition(false);
-        setPositionInputValue(activeCellAddress);
-    };
-
-    const commitPositionInput = () => {
-        const nextReference = positionInputValue.trim();
-        setIsEditingPosition(false);
-        if (!nextReference) {
-            setPositionInputValue(activeCellAddress);
-            return;
-        }
-
-        submitGotoSelection(nextReference);
-    };
-
-    const resetCellValueInput = () => {
-        setIsEditingCellValue(false);
-        setCellValueEditTarget(null);
-        setCellValueInputValue(selectedCellValue);
-    };
-
-    const commitCellValueInput = () => {
-        const target = cellValueEditTarget;
-        setIsEditingCellValue(false);
-        setCellValueEditTarget(null);
-        if (
-            !target ||
-            shouldResetToolbarCellValueDraft(target, activeCellEditTarget, selectedCellEditable)
-        ) {
-            setCellValueInputValue(selectedCellValue);
-            return;
-        }
-
-        commitToolbarCellValue(target, cellValueInputValue);
-    };
-
-    return (
-        <header className="toolbar toolbar--editor">
-            <div className="toolbar__group toolbar__group--grow">
-                <label className="toolbar__field toolbar__field--address">
-                    <span className="toolbar__field-label">#</span>
-                    <input
-                        className="toolbar__input"
-                        data-role="position-input"
-                        value={positionInputValue}
-                        placeholder={STRINGS.gotoPlaceholder}
-                        type="text"
-                        onFocus={(event) => {
-                            setIsEditingPosition(true);
-                            event.currentTarget.select();
-                        }}
-                        onChange={(event) => {
-                            setPositionInputValue(event.currentTarget.value);
-                        }}
-                        onBlur={() => {
-                            resetPositionInput();
-                        }}
-                        onKeyDown={(event) => {
-                            if (event.key === "Enter") {
-                                event.preventDefault();
-                                commitPositionInput();
-                                return;
-                            }
-
-                            if (event.key === "Escape") {
-                                event.preventDefault();
-                                resetPositionInput();
-                            }
-                        }}
-                    />
-                </label>
-                <label className="toolbar__field toolbar__field--cell-value">
-                    <span className="toolbar__field-label">T</span>
-                    <input
-                        className="toolbar__input"
-                        data-role="cell-value-input"
-                        value={cellValueInputValue}
-                        placeholder={cellValuePlaceholder}
-                        readOnly={!selectedCellEditable}
-                        type="text"
-                        onFocus={(event) => {
-                            if (editingCell) {
-                                finishEdit({ mode: "commit", refresh: false });
-                            }
-
-                            if (!selectedCellEditable || !activeCellEditTarget) {
-                                return;
-                            }
-
-                            setIsEditingCellValue(true);
-                            setCellValueEditTarget(activeCellEditTarget);
-                            event.currentTarget.select();
-                        }}
-                        onChange={(event) => {
-                            setCellValueInputValue(event.currentTarget.value);
-                        }}
-                        onKeyDown={(event) => {
-                            if (event.key === "Enter") {
-                                event.preventDefault();
-                                commitCellValueInput();
-                                return;
-                            }
-
-                            if (event.key === "Escape") {
-                                event.preventDefault();
-                                resetCellValueInput();
-                            }
-                        }}
-                    />
-                    {showCellValueActions ? (
-                        <span className="toolbar__field-actions" aria-label="Cell value actions">
-                            <button
-                                type="button"
-                                className="toolbar__toggle"
-                                aria-label={STRINGS.cancelInput}
-                                title={STRINGS.cancelInput}
-                                onMouseDown={(event) => event.preventDefault()}
-                                onClick={resetCellValueInput}
-                            >
-                                <span
-                                    className="codicon codicon-close toolbar__toggle-icon"
-                                    aria-hidden
-                                />
-                            </button>
-                            <button
-                                type="button"
-                                className="toolbar__toggle is-active"
-                                aria-label={STRINGS.confirmInput}
-                                title={STRINGS.confirmInput}
-                                onMouseDown={(event) => event.preventDefault()}
-                                onClick={commitCellValueInput}
-                            >
-                                <span
-                                    className="codicon codicon-check toolbar__toggle-icon"
-                                    aria-hidden
-                                />
-                            </button>
-                        </span>
-                    ) : null}
-                </label>
-            </div>
-            <div className="toolbar__group">
-                <ToolbarButton
-                    actionLabel={STRINGS.search}
-                    icon="codicon-search"
-                    iconOnly={true}
-                    isActive={isSearchPanelOpen}
-                    onClick={() => openSearchPanel("find")}
-                />
-                <ToolbarButton
-                    actionLabel={STRINGS.undo}
-                    disabled={!currentModel.canEdit || !canUndo || isSaving}
-                    icon="codicon-redo"
-                    iconMirrored
-                    iconOnly={true}
-                    onClick={undoPendingEdits}
-                />
-                <ToolbarButton
-                    actionLabel={STRINGS.redo}
-                    disabled={!currentModel.canEdit || !canRedo || isSaving}
-                    icon="codicon-redo"
-                    iconOnly={true}
-                    onClick={redoPendingEdits}
-                />
-                <ToolbarButton
-                    actionLabel={STRINGS.reload}
-                    icon="codicon-refresh"
-                    iconOnly={true}
-                    onClick={() => vscode.postMessage({ type: "reload" })}
-                />
-                <ToolbarButton
-                    actionLabel={viewLockActionLabel}
-                    disabled={!currentModel.canEdit || isSaving}
-                    icon={viewLocked ? "codicon-lock" : "codicon-unlock"}
-                    iconOnly={true}
-                    isActive={viewLocked}
-                    onClick={toggleViewLock}
-                />
-                <ToolbarButton
-                    actionLabel={STRINGS.save}
-                    disabled={!currentModel.canEdit || !hasPendingEdits || isSaving}
-                    icon="codicon-save"
-                    iconOnly={true}
-                    isActive={hasPendingEdits}
-                    isLoading={isSaving}
-                    onClick={triggerSave}
-                />
-            </div>
-        </header>
-    );
-}
-
 function CellEditor({ edit }: { edit: EditingCell }): React.ReactElement {
     const inputRef = React.useRef<HTMLInputElement | null>(null);
 
@@ -3674,10 +2940,10 @@ function isRowHeaderWithinSelectionRange(
 ): boolean {
     return Boolean(
         selectionRange &&
-            selectionRange.startColumn === 1 &&
-            selectionRange.endColumn === columnCount &&
-            rowNumber >= selectionRange.startRow &&
-            rowNumber <= selectionRange.endRow
+        selectionRange.startColumn === 1 &&
+        selectionRange.endColumn === columnCount &&
+        rowNumber >= selectionRange.startRow &&
+        rowNumber <= selectionRange.endRow
     );
 }
 
@@ -3688,10 +2954,10 @@ function isColumnHeaderWithinSelectionRange(
 ): boolean {
     return Boolean(
         selectionRange &&
-            selectionRange.startRow === 1 &&
-            selectionRange.endRow === rowCount &&
-            columnNumber >= selectionRange.startColumn &&
-            columnNumber <= selectionRange.endColumn
+        selectionRange.startRow === 1 &&
+        selectionRange.endRow === rowCount &&
+        columnNumber >= selectionRange.startColumn &&
+        columnNumber <= selectionRange.endColumn
     );
 }
 
@@ -4254,7 +3520,8 @@ function EditorFillHandle({
             aria-hidden
             className={classNames(["editor-grid__fill-handle", isActive && "is-active"])}
             style={getEditorGridItemStyle({
-                top: getEditorGridTop(rowNumber) + EDITOR_VIRTUAL_ROW_HEIGHT - FILL_HANDLE_HALF_SIZE,
+                top:
+                    getEditorGridTop(rowNumber) + EDITOR_VIRTUAL_ROW_HEIGHT - FILL_HANDLE_HALF_SIZE,
                 left:
                     getEditorGridLeft(rowHeaderWidth, columnNumber) +
                     EDITOR_VIRTUAL_COLUMN_WIDTH -
@@ -4329,12 +3596,7 @@ const EditorVirtualCell = React.memo(
             activeEditingCell.columnNumber === columnNumber;
         const isFillPreview = Boolean(
             fillSourceRange &&
-                isCellWithinFillPreviewArea(
-                    fillSourceRange,
-                    fillPreviewRange,
-                    rowNumber,
-                    columnNumber
-                )
+            isCellWithinFillPreviewArea(fillSourceRange, fillPreviewRange, rowNumber, columnNumber)
         );
 
         return (
@@ -4751,455 +4013,139 @@ function EditorPane({
     );
 }
 
-function areSheetTabWidthsEqual(
-    left: Record<string, number>,
-    right: Record<string, number>
-): boolean {
-    const leftKeys = Object.keys(left);
-    const rightKeys = Object.keys(right);
-    if (leftKeys.length !== rightKeys.length) {
-        return false;
+function closeContextMenuSilently(): void {
+    closeContextMenu({ refresh: false });
+}
+
+function requestSetSheet(sheetKey: string): void {
+    vscode.postMessage({ type: "setSheet", sheetKey });
+}
+
+function requestReload(): void {
+    vscode.postMessage({ type: "reload" });
+}
+
+function finishEditingFromToolbar(): void {
+    if (editingCell) {
+        finishEdit({ mode: "commit", refresh: false });
     }
-
-    return leftKeys.every((key) => left[key] === right[key]);
 }
 
-function getMaxVisibleSheetTabs(
-    tabs: readonly EditorSheetTabView[],
-    containerWidth: number,
-    measuredTabWidths: Record<string, number>
-): number {
-    return getMaxVisibleSheetTabsForWidth(tabs, {
-        containerWidth,
-        getTabWidth: (tab) => measuredTabWidths[tab.key] ?? SHEET_TAB_ESTIMATED_WIDTH,
-        itemGap: SHEET_TAB_ITEM_GAP,
-        overflowTriggerWidth: SHEET_TAB_OVERFLOW_TRIGGER_WIDTH,
-    });
-}
-
-function useObservedElementWidth<TElement extends HTMLElement>(
-    ref: React.RefObject<TElement | null>
-): number {
-    const [width, setWidth] = React.useState(0);
-
-    React.useLayoutEffect(() => {
-        const element = ref.current;
-        if (!element) {
-            return;
-        }
-
-        let frameId = 0;
-        const updateWidth = (): void => {
-            cancelAnimationFrame(frameId);
-            frameId = requestAnimationFrame(() => {
-                setWidth(Math.round(element.getBoundingClientRect().width));
-            });
-        };
-
-        updateWidth();
-
-        const observer = new ResizeObserver(() => {
-            updateWidth();
-        });
-        observer.observe(element);
-        window.addEventListener("resize", updateWidth);
-        window.visualViewport?.addEventListener("resize", updateWidth);
-
-        return () => {
-            cancelAnimationFrame(frameId);
-            observer.disconnect();
-            window.removeEventListener("resize", updateWidth);
-            window.visualViewport?.removeEventListener("resize", updateWidth);
-        };
-    }, [ref]);
-
-    return width;
-}
-
-function Tabs({
-    currentModel,
-    pendingSummary,
-}: {
-    currentModel: EditorRenderModel;
-    pendingSummary: PendingSummary;
-}): React.ReactElement {
-    const viewportRef = React.useRef<HTMLDivElement | null>(null);
-    const overflowRef = React.useRef<HTMLDivElement | null>(null);
-    const measureRef = React.useRef<HTMLDivElement | null>(null);
-    const [isOverflowOpen, setIsOverflowOpen] = React.useState(false);
-    const [measuredTabWidths, setMeasuredTabWidths] = React.useState<Record<string, number>>({});
-    const viewportWidth = useObservedElementWidth(viewportRef);
-    const pendingSheetKeySignature = Array.from(pendingSummary.sheetKeys).sort().join("\0");
-    const maxVisibleTabs = getMaxVisibleSheetTabs(
-        currentModel.sheets,
-        viewportWidth,
-        measuredTabWidths
-    );
-    const tabLayout = partitionSheetTabs(currentModel.sheets, maxVisibleTabs);
-
-    React.useLayoutEffect(() => {
-        const measureRoot = measureRef.current;
-        if (!measureRoot) {
-            return;
-        }
-
-        const nextMeasuredTabWidths: Record<string, number> = {};
-        for (const element of measureRoot.querySelectorAll<HTMLElement>(
-            '[data-role="sheet-tab-measure"]'
-        )) {
-            const sheetKey = element.dataset.sheetKey;
-            if (!sheetKey) {
-                continue;
-            }
-
-            nextMeasuredTabWidths[sheetKey] = Math.min(
-                SHEET_TAB_VISIBLE_MAX_WIDTH,
-                Math.ceil(element.getBoundingClientRect().width)
-            );
-        }
-
-        setMeasuredTabWidths((currentWidths) =>
-            areSheetTabWidthsEqual(currentWidths, nextMeasuredTabWidths)
-                ? currentWidths
-                : nextMeasuredTabWidths
-        );
-    }, [currentModel.sheets, currentModel.activeSheet.key, pendingSheetKeySignature]);
-
-    React.useEffect(() => {
-        setIsOverflowOpen(false);
-    }, [currentModel.activeSheet.key, currentModel.sheets.length, tabLayout.hasOverflow]);
-
-    React.useEffect(() => {
-        if (!isOverflowOpen) {
-            return;
-        }
-
-        const handlePointerDown = (event: PointerEvent): void => {
-            const target = event.target;
-            if (!(target instanceof HTMLElement)) {
-                setIsOverflowOpen(false);
-                return;
-            }
-
-            if (overflowRef.current?.contains(target)) {
-                return;
-            }
-
-            setIsOverflowOpen(false);
-        };
-
-        const handleKeyDown = (event: KeyboardEvent): void => {
-            if (event.key === "Escape") {
-                setIsOverflowOpen(false);
-            }
-        };
-
-        document.addEventListener("pointerdown", handlePointerDown);
-        document.addEventListener("keydown", handleKeyDown);
-
-        return () => {
-            document.removeEventListener("pointerdown", handlePointerDown);
-            document.removeEventListener("keydown", handleKeyDown);
-        };
-    }, [isOverflowOpen]);
-
-    const setSheet = (sheetKey: string): void => {
-        closeContextMenu({ refresh: false });
-        setIsOverflowOpen(false);
-        vscode.postMessage({ type: "setSheet", sheetKey });
-    };
-
-    return (
-        <div
-            className="tabs"
-            onContextMenu={(event) => {
-                const target = event.target;
-                if (
-                    target instanceof HTMLElement &&
-                    target.closest('[data-role="sheet-tab"], [data-role="sheet-tab-overflow"]')
-                ) {
-                    return;
-                }
-
-                event.preventDefault();
-                openTabContextMenu(currentModel.activeSheet.key, event.clientX, event.clientY);
-            }}
-        >
-            <div ref={viewportRef} className="tabs__viewport">
-                <div className="tabs__content">
-                    <div className="tabs__list">
-                        {tabLayout.visibleTabs.map((sheet: EditorSheetTabView) => {
-                            const hasPending = pendingSummary.sheetKeys.has(sheet.key);
-
-                            return (
-                                <button
-                                    key={sheet.key}
-                                    className={classNames(["tab", sheet.isActive && "is-active"])}
-                                    data-role="sheet-tab"
-                                    title={sheet.label}
-                                    type="button"
-                                    onClick={() => setSheet(sheet.key)}
-                                    onContextMenu={(event) => {
-                                        event.preventDefault();
-                                        setIsOverflowOpen(false);
-                                        openTabContextMenu(sheet.key, event.clientX, event.clientY);
-                                    }}
-                                >
-                                    {hasPending ? <PendingMarker extraClass="tab__marker" /> : null}
-                                    <span className="tab__label">{sheet.label}</span>
-                                </button>
-                            );
-                        })}
-                    </div>
-                    {tabLayout.hasOverflow ? (
-                        <div
-                            ref={overflowRef}
-                            className="tabs__overflow"
-                            data-role="sheet-tab-overflow"
-                            onContextMenu={(event) => {
-                                event.preventDefault();
-                            }}
-                        >
-                            <button
-                                aria-label={STRINGS.moreSheets}
-                                aria-expanded={isOverflowOpen}
-                                aria-haspopup="menu"
-                                className={classNames([
-                                    "tab",
-                                    "tab--overflowTrigger",
-                                    isOverflowOpen && "is-active",
-                                ])}
-                                title={STRINGS.moreSheets}
-                                type="button"
-                                onClick={() => {
-                                    closeContextMenu({ refresh: false });
-                                    setIsOverflowOpen((open) => !open);
-                                }}
-                            >
-                                <span className="codicon codicon-more tab__icon" aria-hidden />
-                                <span className="tabs__overflowCount" aria-hidden>
-                                    {tabLayout.overflowTabs.length}
-                                </span>
-                            </button>
-                            {isOverflowOpen ? (
-                                <div
-                                    className="tabs__overflowMenu"
-                                    data-role="sheet-tab-overflow"
-                                    role="menu"
-                                >
-                                    {tabLayout.overflowTabs.map((sheet: EditorSheetTabView) => {
-                                        const hasPending = pendingSummary.sheetKeys.has(sheet.key);
-
-                                        return (
-                                            <button
-                                                key={sheet.key}
-                                                className="context-menu__item tabs__overflowItem"
-                                                role="menuitem"
-                                                title={sheet.label}
-                                                type="button"
-                                                onClick={() => setSheet(sheet.key)}
-                                                onContextMenu={(event) => {
-                                                    event.preventDefault();
-                                                    setIsOverflowOpen(false);
-                                                    openTabContextMenu(
-                                                        sheet.key,
-                                                        event.clientX,
-                                                        event.clientY
-                                                    );
-                                                }}
-                                            >
-                                                {hasPending ? (
-                                                    <PendingMarker extraClass="tab__marker" />
-                                                ) : null}
-                                                <span className="tabs__overflowLabel">
-                                                    {sheet.label}
-                                                </span>
-                                            </button>
-                                        );
-                                    })}
-                                </div>
-                            ) : null}
-                        </div>
-                    ) : null}
-                </div>
-            </div>
-            <div ref={measureRef} aria-hidden className="tabs__measure">
-                {currentModel.sheets.map((sheet: EditorSheetTabView) => {
-                    const hasPending = pendingSummary.sheetKeys.has(sheet.key);
-
-                    return (
-                        <button
-                            key={sheet.key}
-                            className={classNames([
-                                "tab",
-                                "tabs__measureTab",
-                                sheet.isActive && "is-active",
-                            ])}
-                            data-role="sheet-tab-measure"
-                            data-sheet-key={sheet.key}
-                            tabIndex={-1}
-                            type="button"
-                        >
-                            {hasPending ? <PendingMarker extraClass="tab__marker" /> : null}
-                            <span className="tab__label">{sheet.label}</span>
-                        </button>
-                    );
-                })}
-            </div>
-        </div>
-    );
-}
-
-function TabContextMenu({
-    currentModel,
-}: {
-    currentModel: EditorRenderModel;
-}): React.ReactElement | null {
-    if (!contextMenu || !currentModel.canEdit) {
+function getActiveToolbarCellEditTarget(
+    currentModel: EditorRenderModel
+): ToolbarCellEditTarget | null {
+    if (!selectedCell) {
         return null;
     }
 
-    const menu = contextMenu;
-    const menuStyle: React.CSSProperties = {
-        left: Math.max(8, Math.min(menu.x, window.innerWidth - 188)),
-        top: Math.max(8, Math.min(menu.y, window.innerHeight - 132)),
+    return {
+        sheetKey: currentModel.activeSheet.key,
+        rowNumber: selectedCell.rowNumber,
+        columnNumber: selectedCell.columnNumber,
     };
-
-    if (menu.kind === "tab") {
-        const disableDelete = currentModel.sheets.length <= 1;
-        return (
-            <div className="context-menu" data-role="context-menu" style={menuStyle}>
-                <button className="context-menu__item" type="button" onClick={requestAddSheet}>
-                    <span className="codicon codicon-add context-menu__icon" aria-hidden />
-                    <span>{STRINGS.addSheet}</span>
-                </button>
-                <button
-                    className="context-menu__item"
-                    type="button"
-                    onClick={() => requestRenameSheet(menu.sheetKey)}
-                >
-                    <span className="codicon codicon-edit context-menu__icon" aria-hidden />
-                    <span>{STRINGS.renameSheet}</span>
-                </button>
-                <button
-                    className="context-menu__item context-menu__item--danger"
-                    disabled={disableDelete}
-                    type="button"
-                    onClick={() => requestDeleteSheet(menu.sheetKey)}
-                >
-                    <span className="codicon codicon-trash context-menu__icon" aria-hidden />
-                    <span>{STRINGS.deleteSheet}</span>
-                </button>
-            </div>
-        );
-    }
-
-    if (menu.kind === "row") {
-        return (
-            <div className="context-menu" data-role="context-menu" style={menuStyle}>
-                <button
-                    className="context-menu__item"
-                    type="button"
-                    onClick={() => requestInsertRow(menu.rowNumber)}
-                >
-                    <span className="codicon codicon-add context-menu__icon" aria-hidden />
-                    <span>{STRINGS.insertRowAbove}</span>
-                </button>
-                <button
-                    className="context-menu__item"
-                    type="button"
-                    onClick={() => requestInsertRow(menu.rowNumber + 1)}
-                >
-                    <span className="codicon codicon-add context-menu__icon" aria-hidden />
-                    <span>{STRINGS.insertRowBelow}</span>
-                </button>
-                <button
-                    className="context-menu__item context-menu__item--danger"
-                    disabled={currentModel.activeSheet.rowCount <= 1}
-                    type="button"
-                    onClick={() => requestDeleteRow(menu.rowNumber)}
-                >
-                    <span className="codicon codicon-trash context-menu__icon" aria-hidden />
-                    <span>{STRINGS.deleteRow}</span>
-                </button>
-            </div>
-        );
-    }
-
-    return (
-        <div className="context-menu" data-role="context-menu" style={menuStyle}>
-            <button
-                className="context-menu__item"
-                type="button"
-                onClick={() => requestInsertColumn(menu.columnNumber)}
-            >
-                <span className="codicon codicon-add context-menu__icon" aria-hidden />
-                <span>{STRINGS.insertColumnLeft}</span>
-            </button>
-            <button
-                className="context-menu__item"
-                type="button"
-                onClick={() => requestInsertColumn(menu.columnNumber + 1)}
-            >
-                <span className="codicon codicon-add context-menu__icon" aria-hidden />
-                <span>{STRINGS.insertColumnRight}</span>
-            </button>
-            <button
-                className="context-menu__item context-menu__item--danger"
-                disabled={currentModel.activeSheet.columnCount <= 1}
-                type="button"
-                onClick={() => requestDeleteColumn(menu.columnNumber)}
-            >
-                <span className="codicon codicon-trash context-menu__icon" aria-hidden />
-                <span>{STRINGS.deleteColumn}</span>
-            </button>
-        </div>
-    );
-}
-
-function Status({
-    currentModel,
-    pendingSummary,
-}: {
-    currentModel: EditorRenderModel;
-    pendingSummary: PendingSummary;
-}): React.ReactElement {
-    return (
-        <footer className="footer">
-            <Tabs currentModel={currentModel} pendingSummary={pendingSummary} />
-        </footer>
-    );
 }
 
 function EditorApp({ view }: { view: Extract<ViewState, { kind: "app" }> }): React.ReactElement {
-    const pendingSummary = getPendingSummary(view.model.activeSheet.key);
+    const currentModel = view.model;
+    const pendingSummary = getPendingSummary(currentModel.activeSheet.key);
+    const currentSelectionRange = getExpandedSelectionRange();
+    const effectiveScope = getEffectiveSearchScope();
+    const selectionRange =
+        effectiveScope === "selection" ? (searchSelectionRange ?? currentSelectionRange) : null;
+    const hasSearchableGrid =
+        currentModel.activeSheet.rowCount > 0 && currentModel.activeSheet.columnCount > 0;
+    const canReplace = searchQuery.trim().length > 0 && hasSearchableGrid && currentModel.canEdit;
+    const hasPendingEdits = pendingEdits.size > 0 || currentModel.hasPendingEdits;
+    const canUndo = undoStack.length > 0 || currentModel.canUndoStructuralEdits;
+    const canRedo = redoStack.length > 0 || currentModel.canRedoStructuralEdits;
+    const viewLocked = hasLockedView(currentModel.activeSheet.freezePane);
 
     return (
         <div className="app app--editor" data-role="editor-app">
-            <EditorToolbar currentModel={view.model} />
-            <SearchPanel currentModel={view.model} />
+            <EditorToolbar
+                strings={STRINGS}
+                currentModel={currentModel}
+                isSearchPanelOpen={isSearchPanelOpen}
+                isSaving={isSaving}
+                hasPendingEdits={hasPendingEdits}
+                canUndo={canUndo}
+                canRedo={canRedo}
+                viewLocked={viewLocked}
+                getPositionInputValue={getPositionInputValue}
+                getCellValueInputValue={getCellValueInputValue}
+                getCellValueInputPlaceholder={getCellValueInputPlaceholder}
+                canEditSelectedCellValue={canEditSelectedCellValue}
+                getActiveCellEditTarget={() => getActiveToolbarCellEditTarget(currentModel)}
+                onOpenSearch={openSearchPanel}
+                onUndo={undoPendingEdits}
+                onRedo={redoPendingEdits}
+                onReload={requestReload}
+                onToggleViewLock={toggleViewLock}
+                onSave={triggerSave}
+                onSubmitGoto={submitGotoSelection}
+                onCommitCellValue={commitToolbarCellValue}
+                onFinishGridEdit={finishEditingFromToolbar}
+            />
+            <SearchPanel
+                strings={STRINGS}
+                isOpen={isSearchPanelOpen}
+                mode={searchMode}
+                query={searchQuery}
+                replaceValue={replaceValue}
+                options={searchOptions}
+                feedback={searchFeedback}
+                scopeSummary={
+                    selectionRange
+                        ? getSelectionRangeAddress(selectionRange)
+                        : STRINGS.searchScopeWholeSheet
+                }
+                hasSelectionScope={Boolean(selectionRange)}
+                position={searchPanelPosition}
+                hasSearchableGrid={hasSearchableGrid}
+                canReplace={canReplace}
+                isInteractiveTarget={isSearchPanelInteractiveTarget}
+                onSyncPosition={syncSearchPanelShellPosition}
+                onBeginDrag={(pointerId, clientX, clientY) => {
+                    closeContextMenuSilently();
+                    beginSearchPanelDrag(pointerId, clientX, clientY);
+                }}
+                onClose={closeSearchPanel}
+                onModeChange={setSearchMode}
+                onQueryChange={updateSearchQuery}
+                onReplaceValueChange={updateReplaceValue}
+                onToggleOption={toggleSearchOption}
+                onSubmitSearch={submitSearch}
+                onSubmitReplace={submitReplace}
+            />
             <section className="panes panes--single">
-                <EditorPane currentModel={view.model} pendingSummary={pendingSummary} view={view} />
+                <EditorPane
+                    currentModel={currentModel}
+                    pendingSummary={pendingSummary}
+                    view={view}
+                />
             </section>
-            <Status currentModel={view.model} pendingSummary={pendingSummary} />
-            <TabContextMenu currentModel={view.model} />
-        </div>
-    );
-}
-
-function Shell({
-    kind,
-    message,
-}: {
-    kind: "loading" | "error";
-    message: string;
-}): React.ReactElement {
-    const className = kind === "loading" ? "loading-shell" : "empty-shell";
-    const messageClassName = kind === "loading" ? "loading-shell__message" : "empty-shell__message";
-
-    return (
-        <div className={className}>
-            <div className={messageClassName}>{message}</div>
+            <footer className="footer">
+                <Tabs
+                    strings={STRINGS}
+                    currentModel={currentModel}
+                    pendingSummary={pendingSummary}
+                    onSetSheet={requestSetSheet}
+                    onOpenTabContextMenu={openTabContextMenu}
+                    onCloseContextMenu={closeContextMenuSilently}
+                />
+            </footer>
+            <TabContextMenu
+                strings={STRINGS}
+                currentModel={currentModel}
+                contextMenu={contextMenu}
+                onRequestAddSheet={requestAddSheet}
+                onRequestDeleteSheet={requestDeleteSheet}
+                onRequestRenameSheet={requestRenameSheet}
+                onRequestInsertRow={requestInsertRow}
+                onRequestDeleteRow={requestDeleteRow}
+                onRequestInsertColumn={requestInsertColumn}
+                onRequestDeleteColumn={requestDeleteColumn}
+            />
         </div>
     );
 }
