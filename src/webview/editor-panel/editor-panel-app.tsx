@@ -649,6 +649,18 @@ function getActiveHighlightCell(): CellPosition | null {
     return selectionAnchorCell ?? selectedCell;
 }
 
+function getSelectionExtendAnchorCell(): CellPosition | null {
+    return selectionAnchorCell ?? selectedCell;
+}
+
+function getSelectionExtendAnchorRowNumber(): number | null {
+    return getSelectionExtendAnchorCell()?.rowNumber ?? null;
+}
+
+function getSelectionExtendAnchorColumnNumber(): number | null {
+    return getSelectionExtendAnchorCell()?.columnNumber ?? null;
+}
+
 function isActiveSelectionCell(rowNumber: number, columnNumber: number): boolean {
     return selectedCell?.rowNumber === rowNumber && selectedCell.columnNumber === columnNumber;
 }
@@ -2101,8 +2113,13 @@ function applyPastedGrid(grid: string[][]): void {
     }
 
     const pasteGrid = getPasteGridForSelection(grid, selectionRange);
-    const maxRow = model.activeSheet.rowCount;
-    const maxColumn = model.activeSheet.columnCount;
+    const bounds = getSelectionBounds();
+    if (!bounds) {
+        return;
+    }
+
+    const maxRow = bounds.maxRow;
+    const maxColumn = bounds.maxColumn;
     const changes: PendingEditChange[] = [];
 
     for (let rowOffset = 0; rowOffset < pasteGrid.length; rowOffset += 1) {
@@ -2182,11 +2199,19 @@ function getSelectionBounds(): {
         return null;
     }
 
+    const pane = getViewportElement();
+    const displayGrid = getEditorDisplayGridDimensions({
+        rowCount: model.activeSheet.rowCount,
+        columnCount: model.activeSheet.columnCount,
+        viewportHeight: pane?.clientHeight ?? DEFAULT_EDITOR_VIEWPORT_HEIGHT,
+        viewportWidth: pane?.clientWidth ?? DEFAULT_EDITOR_VIEWPORT_WIDTH,
+    });
+
     return {
         minRow: 1,
-        maxRow: model.activeSheet.rowCount,
+        maxRow: displayGrid.rowCount,
         minColumn: 1,
-        maxColumn: model.activeSheet.columnCount,
+        maxColumn: displayGrid.columnCount,
     };
 }
 
@@ -3968,7 +3993,15 @@ const EditorColumnHeaderCell = React.memo(
                     }
 
                     closeContextMenu({ refresh: false });
-                    startColumnSelectionDrag(event.pointerId, columnNumber);
+                    const anchorColumnNumber =
+                        event.shiftKey && getSelectionExtendAnchorColumnNumber() !== null
+                            ? getSelectionExtendAnchorColumnNumber()!
+                            : columnNumber;
+                    startColumnSelectionDrag(event.pointerId, anchorColumnNumber);
+                    setColumnSelectionLocal(columnNumber, {
+                        anchorColumnNumber,
+                        syncHost: false,
+                    });
                 }}
                 onClick={(event) => {
                     if (suppressNextColumnHeaderClick) {
@@ -3978,6 +4011,14 @@ const EditorColumnHeaderCell = React.memo(
                     }
 
                     closeContextMenu({ refresh: false });
+                    if (event.shiftKey && getSelectionExtendAnchorColumnNumber() !== null) {
+                        setColumnSelectionLocal(columnNumber, {
+                            anchorColumnNumber: getSelectionExtendAnchorColumnNumber()!,
+                            syncHost: true,
+                        });
+                        return;
+                    }
+
                     selectEntireColumn(columnNumber);
                 }}
                 onContextMenu={(event) => {
@@ -4049,7 +4090,15 @@ const EditorRowHeaderCell = React.memo(
                     }
 
                     closeContextMenu({ refresh: false });
-                    startRowSelectionDrag(event.pointerId, rowNumber);
+                    const anchorRowNumber =
+                        event.shiftKey && getSelectionExtendAnchorRowNumber() !== null
+                            ? getSelectionExtendAnchorRowNumber()!
+                            : rowNumber;
+                    startRowSelectionDrag(event.pointerId, anchorRowNumber);
+                    setRowSelectionLocal(rowNumber, {
+                        anchorRowNumber,
+                        syncHost: false,
+                    });
                 }}
                 onClick={(event) => {
                     if (suppressNextRowHeaderClick) {
@@ -4059,6 +4108,14 @@ const EditorRowHeaderCell = React.memo(
                     }
 
                     closeContextMenu({ refresh: false });
+                    if (event.shiftKey && getSelectionExtendAnchorRowNumber() !== null) {
+                        setRowSelectionLocal(rowNumber, {
+                            anchorRowNumber: getSelectionExtendAnchorRowNumber()!,
+                            syncHost: true,
+                        });
+                        return;
+                    }
+
                     selectEntireRow(rowNumber);
                 }}
                 onContextMenu={(event) => {
@@ -4224,12 +4281,16 @@ const EditorVirtualCell = React.memo(
                     }
 
                     closeContextMenu({ refresh: false });
-                    startSelectionDrag(event.pointerId, { rowNumber, columnNumber });
+                    const anchorCell =
+                        event.shiftKey && getSelectionExtendAnchorCell()
+                            ? getSelectionExtendAnchorCell()!
+                            : { rowNumber, columnNumber };
+                    startSelectionDrag(event.pointerId, anchorCell);
                     setSelectedCellLocal(
                         { rowNumber, columnNumber },
                         {
                             syncHost: false,
-                            anchorCell: { rowNumber, columnNumber },
+                            anchorCell,
                         }
                     );
                 }}
@@ -4250,8 +4311,8 @@ const EditorVirtualCell = React.memo(
                         {
                             syncHost: true,
                             anchorCell:
-                                event.shiftKey && selectedCell
-                                    ? (selectionAnchorCell ?? selectedCell)
+                                event.shiftKey && getSelectionExtendAnchorCell()
+                                    ? getSelectionExtendAnchorCell()
                                     : undefined,
                             forceRender,
                         }

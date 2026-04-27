@@ -349,6 +349,82 @@ suite("Editor fill drag helpers", () => {
         );
     });
 
+    test("extends arithmetic numeric column seeds forward", () => {
+        const changes = buildFillChanges({
+            sheetKey: "sheet:1",
+            sourceRange: {
+                startRow: 10,
+                endRow: 11,
+                startColumn: 1,
+                endColumn: 1,
+            },
+            previewRange: {
+                startRow: 10,
+                endRow: 14,
+                startColumn: 1,
+                endColumn: 1,
+            },
+            getCellValue: createValueGetter({
+                "10:1": "4",
+                "11:1": "5",
+            }),
+            getModelValue: createValueGetter({}),
+            canEditCell: () => true,
+        });
+
+        assert.deepStrictEqual(
+            changes.map(({ rowNumber, afterValue }) => ({
+                rowNumber,
+                afterValue,
+            })),
+            [
+                { rowNumber: 12, afterValue: "6" },
+                { rowNumber: 13, afterValue: "7" },
+                { rowNumber: 14, afterValue: "8" },
+            ]
+        );
+    });
+
+    test("keeps extending a vertical series when pointer drift also expands columns", () => {
+        const changes = buildFillChanges({
+            sheetKey: "sheet:1",
+            sourceRange: {
+                startRow: 10,
+                endRow: 11,
+                startColumn: 1,
+                endColumn: 1,
+            },
+            previewRange: {
+                startRow: 10,
+                endRow: 13,
+                startColumn: 1,
+                endColumn: 2,
+            },
+            getCellValue: createValueGetter({
+                "10:1": "4",
+                "11:1": "5",
+            }),
+            getModelValue: createValueGetter({}),
+            canEditCell: () => true,
+        });
+
+        assert.deepStrictEqual(
+            changes.map(({ rowNumber, columnNumber, afterValue }) => ({
+                rowNumber,
+                columnNumber,
+                afterValue,
+            })),
+            [
+                { rowNumber: 10, columnNumber: 2, afterValue: "4" },
+                { rowNumber: 11, columnNumber: 2, afterValue: "5" },
+                { rowNumber: 12, columnNumber: 1, afterValue: "6" },
+                { rowNumber: 12, columnNumber: 2, afterValue: "6" },
+                { rowNumber: 13, columnNumber: 1, afterValue: "7" },
+                { rowNumber: 13, columnNumber: 2, afterValue: "7" },
+            ]
+        );
+    });
+
     test("falls back to repeating for single numeric seeds", () => {
         const changes = buildFillChanges({
             sheetKey: "sheet:1",

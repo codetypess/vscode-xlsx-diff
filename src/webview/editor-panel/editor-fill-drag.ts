@@ -151,11 +151,7 @@ function createSeriesValueGetter(
         previewRange.startColumn < sourceRange.startColumn ||
         previewRange.endColumn > sourceRange.endColumn;
 
-    if (expandsRows && expandsColumns) {
-        return null;
-    }
-
-    if (sourceHeight === 1 && sourceWidth >= 2 && expandsColumns && !expandsRows) {
+    if (sourceHeight === 1 && sourceWidth >= 2 && expandsColumns) {
         const progression = getNumericProgression(seedValues[0] ?? []);
         if (!progression) {
             return null;
@@ -167,7 +163,7 @@ function createSeriesValueGetter(
             );
     }
 
-    if (sourceWidth === 1 && sourceHeight >= 2 && expandsRows && !expandsColumns) {
+    if (sourceWidth === 1 && sourceHeight >= 2 && expandsRows) {
         const progression = getNumericProgression(seedValues.map((rowValues) => rowValues[0] ?? ""));
         if (!progression) {
             return null;
