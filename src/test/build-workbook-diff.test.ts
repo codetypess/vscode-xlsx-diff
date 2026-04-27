@@ -112,6 +112,7 @@ function createWorkbook(fileName: string, sheets: SheetSnapshot[]): WorkbookSnap
         fileName,
         fileSize: 0,
         modifiedTime: new Date("2026-01-01T00:00:00.000Z").toISOString(),
+        definedNames: [],
         sheets,
         isReadonly: false,
     };
@@ -380,6 +381,32 @@ suite("Workbook diff row alignment", () => {
         assert.strictEqual(diff.totalDiffCells, 0);
         assert.strictEqual(diff.totalDiffRows, 0);
         assert.strictEqual(diff.totalDiffSheets, 2);
+    });
+
+    test("marks defined-name-only differences as workbook structural diffs", () => {
+        const diff = buildWorkbookDiff(
+            {
+                ...createWorkbook("left.xlsx", [createSheet("Sheet1", ["same"])]),
+                definedNames: [],
+            },
+            {
+                ...createWorkbook("right.xlsx", [createSheet("Sheet1", ["same"])]),
+                definedNames: [
+                    {
+                        hidden: false,
+                        name: "SheetCell",
+                        scope: null,
+                        value: "Sheet1!$A$1",
+                    },
+                ],
+            }
+        );
+
+        assert.strictEqual(diff.sheets[0]?.sheetOrderChanged, false);
+        assert.strictEqual(diff.definedNamesChanged, true);
+        assert.strictEqual(diff.totalDiffCells, 0);
+        assert.strictEqual(diff.totalDiffRows, 0);
+        assert.strictEqual(diff.totalDiffSheets, 0);
     });
 
     test("keeps later rows aligned when an inserted row is followed by a modified row", () => {

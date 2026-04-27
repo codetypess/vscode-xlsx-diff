@@ -164,6 +164,14 @@ suite("SCM workbook regressions", () => {
                 );
                 assert.ok(baseSheet);
                 assert.ok(localSheet);
+                assert.deepStrictEqual(
+                    headResourceSnapshot.definedNames,
+                    fixtureCase.expectedBaseDefinedNames ?? []
+                );
+                assert.deepStrictEqual(
+                    localSnapshot.definedNames,
+                    fixtureCase.expectedHeadDefinedNames ?? []
+                );
                 assert.strictEqual(
                     baseSheet?.cells[cellKey]?.displayValue,
                     fixtureCase.expectedBaseDisplayValue
@@ -219,6 +227,10 @@ suite("SCM workbook regressions", () => {
                 assert.strictEqual(
                     sheet.sheetOrderChanged,
                     fixtureCase.expectedDiff.sheetOrderChanged
+                );
+                assert.strictEqual(
+                    diff.definedNamesChanged,
+                    fixtureCase.expectedDiff.definedNamesChanged
                 );
                 assert.strictEqual(diff.totalDiffCells, fixtureCase.expectedDiff.totalDiffCells);
                 assert.strictEqual(diff.totalDiffRows, fixtureCase.expectedDiff.totalDiffRows);
@@ -277,6 +289,14 @@ suite("SCM workbook regressions", () => {
                 );
                 assert.ok(baseSheet);
                 assert.ok(localSheet);
+                assert.deepStrictEqual(
+                    baseResourceSnapshot.definedNames,
+                    fixtureCase.expectedBaseDefinedNames ?? []
+                );
+                assert.deepStrictEqual(
+                    localSnapshot.definedNames,
+                    fixtureCase.expectedHeadDefinedNames ?? []
+                );
                 assert.strictEqual(
                     baseSheet?.cells[cellKey]?.displayValue,
                     fixtureCase.expectedBaseDisplayValue
@@ -332,6 +352,10 @@ suite("SCM workbook regressions", () => {
                 assert.strictEqual(
                     sheet.sheetOrderChanged,
                     fixtureCase.expectedDiff.sheetOrderChanged
+                );
+                assert.strictEqual(
+                    diff.definedNamesChanged,
+                    fixtureCase.expectedDiff.definedNamesChanged
                 );
                 assert.strictEqual(diff.totalDiffCells, fixtureCase.expectedDiff.totalDiffCells);
                 assert.strictEqual(diff.totalDiffRows, fixtureCase.expectedDiff.totalDiffRows);

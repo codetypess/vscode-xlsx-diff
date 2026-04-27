@@ -48,6 +48,14 @@ suite("XLSX fixture regressions", () => {
                 headSheet?.cells[cellKey]?.displayValue,
                 fixtureCase.expectedHeadDisplayValue
             );
+            assert.deepStrictEqual(
+                baseSnapshot.definedNames,
+                fixtureCase.expectedBaseDefinedNames ?? []
+            );
+            assert.deepStrictEqual(
+                headSnapshot.definedNames,
+                fixtureCase.expectedHeadDefinedNames ?? []
+            );
             assert.strictEqual(
                 baseSheet?.visibility,
                 fixtureCase.expectedBaseVisibility ?? "visible"
@@ -88,6 +96,10 @@ suite("XLSX fixture regressions", () => {
             assert.strictEqual(sheet.freezePaneChanged, fixtureCase.expectedDiff.freezePaneChanged);
             assert.strictEqual(sheet.visibilityChanged, fixtureCase.expectedDiff.visibilityChanged);
             assert.strictEqual(sheet.sheetOrderChanged, fixtureCase.expectedDiff.sheetOrderChanged);
+            assert.strictEqual(
+                diff.definedNamesChanged,
+                fixtureCase.expectedDiff.definedNamesChanged
+            );
             assert.strictEqual(diff.totalDiffCells, fixtureCase.expectedDiff.totalDiffCells);
             assert.strictEqual(diff.totalDiffRows, fixtureCase.expectedDiff.totalDiffRows);
             assert.strictEqual(diff.totalDiffSheets, fixtureCase.expectedDiff.totalDiffSheets);

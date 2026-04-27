@@ -519,6 +519,18 @@ function getStructuralChangeLabels(
     return structuralChanges;
 }
 
+function getWorkbookStructuralChangeLabels(
+    model: Pick<DiffPanelRenderModel, "definedNamesChanged">
+): string[] {
+    const structuralChanges: string[] = [];
+
+    if (model.definedNamesChanged) {
+        structuralChanges.push(STRINGS.definedNames);
+    }
+
+    return structuralChanges;
+}
+
 function getSheetTooltip(sheet: DiffPanelSheetTabView): string {
     const structuralChanges = getStructuralChangeLabels(sheet);
     const tooltip = `${sheet.label} · ${sheet.diffCellCount} ${STRINGS.diffCells} · ${sheet.diffRowCount} ${STRINGS.diffRows}`;
@@ -2524,6 +2536,7 @@ function App(): React.JSX.Element {
                     const structuralChanges = activeSheet
                         ? getStructuralChangeLabels(activeSheet)
                         : [];
+                    const workbookStructuralChanges = getWorkbookStructuralChangeLabels(model);
 
                     return (
                         <>
@@ -2538,6 +2551,12 @@ function App(): React.JSX.Element {
                             </span>
                             <span>
                                 {STRINGS.diffRows} {activeSheet?.diffRowCount ?? 0}
+                            </span>
+                            <span>
+                                {STRINGS.workbookStructure}{" "}
+                                {workbookStructuralChanges.length > 0
+                                    ? workbookStructuralChanges.join(", ")
+                                    : STRINGS.none}
                             </span>
                             <span>
                                 {STRINGS.structure}{" "}

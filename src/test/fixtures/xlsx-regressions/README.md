@@ -45,6 +45,8 @@
   说明：`define!F5` 值相同，但工作表显示状态发生变化，应作为结构性差异显示
 - `sheet-order-only-structure-change`
   说明：`define!F5` 值相同，但工作表顺序发生变化，应作为结构性差异显示
+- `defined-name-only-structure-change`
+  说明：`define!F5` 值相同，但 workbook defined name 发生变化，应作为结构性差异显示
 
 生成命令：
 

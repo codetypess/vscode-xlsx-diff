@@ -72,6 +72,7 @@ function createWorkbook(fileName: string, sheets: SheetSnapshot[]): WorkbookSnap
         fileName,
         fileSize: 0,
         modifiedTime: new Date("2026-01-01T00:00:00.000Z").toISOString(),
+        definedNames: [],
         sheets,
         isReadonly: false,
     };

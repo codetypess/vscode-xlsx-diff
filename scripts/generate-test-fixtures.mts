@@ -164,6 +164,27 @@ async function createFixtureWorkbook(
             continue;
         }
 
+        if (operation.type === "setDefinedName") {
+            const args = [
+                "workbook",
+                "defined-name",
+                "set",
+                workbookPath,
+                "--name",
+                operation.name,
+                "--value",
+                operation.value,
+                "--in-place",
+            ];
+
+            if (operation.scope) {
+                args.push("--scope", operation.scope);
+            }
+
+            await runFastxlsx(fastxlsxCommand, args, { quiet: true });
+            continue;
+        }
+
         await runFastxlsx(
             fastxlsxCommand,
             [

@@ -380,6 +380,7 @@ export function createDiffPanelRenderModel(
         title: `${getWorkbookTitle(diff.left)} ↔ ${getWorkbookTitle(diff.right)}`,
         leftFile: createFileView(diff.left),
         rightFile: createFileView(diff.right),
+        definedNamesChanged: diff.definedNamesChanged,
         sheets: diff.sheets.map((sheet) => createSheetTabView(sheet, activeSheet?.key ?? null)),
         activeSheet: activeSheet ? createSheetView(activeSheet) : null,
     };

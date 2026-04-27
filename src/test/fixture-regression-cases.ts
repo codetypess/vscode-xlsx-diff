@@ -1,4 +1,4 @@
-import type { SheetVisibility } from "../core/model/types.js";
+import type { DefinedNameSnapshot, SheetVisibility } from "../core/model/types.js";
 
 export type FixtureWorkbookOperation =
     | {
@@ -23,6 +23,12 @@ export type FixtureWorkbookOperation =
     | {
           type: "moveSheet";
           targetIndex: number;
+      }
+    | {
+          type: "setDefinedName";
+          name: string;
+          value: string;
+          scope?: string;
       };
 
 export interface FixtureRegressionCase {
@@ -37,6 +43,8 @@ export interface FixtureRegressionCase {
     expectedHeadSheetNames?: string[];
     expectedBaseDisplayValue: string | undefined;
     expectedHeadDisplayValue: string | undefined;
+    expectedBaseDefinedNames?: DefinedNameSnapshot[];
+    expectedHeadDefinedNames?: DefinedNameSnapshot[];
     expectedBaseVisibility?: SheetVisibility;
     expectedHeadVisibility?: SheetVisibility;
     expectedBaseFreezePane?: {
@@ -62,6 +70,7 @@ export interface FixtureRegressionCase {
         freezePaneChanged: boolean;
         visibilityChanged: boolean;
         sheetOrderChanged: boolean;
+        definedNamesChanged: boolean;
     };
 }
 
@@ -103,6 +112,7 @@ export const fixtureRegressionCases: FixtureRegressionCase[] = [
             freezePaneChanged: false,
             visibilityChanged: false,
             sheetOrderChanged: false,
+            definedNamesChanged: false,
         },
     },
     {
@@ -133,6 +143,7 @@ export const fixtureRegressionCases: FixtureRegressionCase[] = [
             freezePaneChanged: false,
             visibilityChanged: false,
             sheetOrderChanged: false,
+            definedNamesChanged: false,
         },
     },
     {
@@ -175,6 +186,7 @@ export const fixtureRegressionCases: FixtureRegressionCase[] = [
             freezePaneChanged: false,
             visibilityChanged: false,
             sheetOrderChanged: false,
+            definedNamesChanged: false,
         },
     },
     {
@@ -221,6 +233,7 @@ export const fixtureRegressionCases: FixtureRegressionCase[] = [
             freezePaneChanged: true,
             visibilityChanged: false,
             sheetOrderChanged: false,
+            definedNamesChanged: false,
         },
     },
     {
@@ -263,6 +276,7 @@ export const fixtureRegressionCases: FixtureRegressionCase[] = [
             freezePaneChanged: false,
             visibilityChanged: true,
             sheetOrderChanged: false,
+            definedNamesChanged: false,
         },
     },
     {
@@ -306,6 +320,58 @@ export const fixtureRegressionCases: FixtureRegressionCase[] = [
             freezePaneChanged: false,
             visibilityChanged: false,
             sheetOrderChanged: true,
+            definedNamesChanged: false,
+        },
+    },
+    {
+        name: "defined-name-only-structure-change",
+        sheetName: "define",
+        focusCellAddress: "F5",
+        focusCellRowNumber: 5,
+        focusCellColumnNumber: 6,
+        expectedBaseDisplayValue: "same",
+        expectedHeadDisplayValue: "same",
+        expectedBaseDefinedNames: [],
+        expectedHeadDefinedNames: [
+            {
+                hidden: false,
+                name: "DefineCell",
+                scope: null,
+                value: "define!$F$5",
+            },
+        ],
+        expectedBaseVisibility: "visible",
+        expectedHeadVisibility: "visible",
+        expectedBaseFreezePane: null,
+        expectedHeadFreezePane: null,
+        baseOperations: [
+            {
+                type: "setText",
+                cellAddress: "F5",
+                value: "same",
+            },
+        ],
+        headOperations: [
+            {
+                type: "setText",
+                cellAddress: "F5",
+                value: "same",
+            },
+            {
+                type: "setDefinedName",
+                name: "DefineCell",
+                value: "define!$F$5",
+            },
+        ],
+        expectedDiff: {
+            totalDiffSheets: 0,
+            totalDiffRows: 0,
+            totalDiffCells: 0,
+            mergedRangesChanged: false,
+            freezePaneChanged: false,
+            visibilityChanged: false,
+            sheetOrderChanged: false,
+            definedNamesChanged: true,
         },
     },
 ];

@@ -105,6 +105,25 @@ function areSheetVisibilitiesEqual(
     return leftSheet.visibility === rightSheet.visibility;
 }
 
+function areDefinedNamesEqual(
+    leftWorkbook: WorkbookSnapshot,
+    rightWorkbook: WorkbookSnapshot
+): boolean {
+    if (leftWorkbook.definedNames.length !== rightWorkbook.definedNames.length) {
+        return false;
+    }
+
+    return leftWorkbook.definedNames.every((definedName, index) => {
+        const candidate = rightWorkbook.definedNames[index];
+        return (
+            definedName.name === candidate?.name &&
+            definedName.scope === candidate?.scope &&
+            definedName.value === candidate?.value &&
+            definedName.hidden === candidate?.hidden
+        );
+    });
+}
+
 function areCellsEqual(
     leftCell: CellSnapshot | undefined,
     rightCell: CellSnapshot | undefined
@@ -1059,11 +1078,13 @@ export function buildWorkbookDiff(
             sheet.visibilityChanged ||
             sheet.sheetOrderChanged
     );
+    const definedNamesChanged = !areDefinedNamesEqual(leftWorkbook, rightWorkbook);
 
     return {
         left: leftWorkbook,
         right: rightWorkbook,
         sheets,
+        definedNamesChanged,
         totalDiffSheets: diffSheets.length,
         totalDiffRows: diffSheets.reduce((total, sheet) => total + sheet.diffRows.length, 0),
         totalDiffCells: diffSheets.reduce((total, sheet) => total + sheet.diffCellCount, 0),

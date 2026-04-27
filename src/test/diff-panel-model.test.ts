@@ -24,6 +24,7 @@ function createWorkbook(overrides: Partial<WorkbookSnapshot>): WorkbookSnapshot 
         fileName: "item.xlsx",
         fileSize: 128,
         modifiedTime: new Date("2026-04-18T06:51:00.000Z").toISOString(),
+        definedNames: [],
         sheets: [sheet],
         ...overrides,
     };
@@ -407,6 +408,77 @@ suite("Diff panel render model", () => {
         assert.strictEqual(renderModel.sheets[0]?.sheetOrderChanged, true);
         assert.strictEqual(renderModel.sheets[1]?.sheetOrderChanged, true);
         assert.strictEqual(renderModel.activeSheet?.sheetOrderChanged, true);
+        assert.strictEqual(renderModel.activeSheet?.diffCellCount, 0);
+        assert.strictEqual(renderModel.activeSheet?.diffRowCount, 0);
+    });
+
+    test("surfaces defined-name-only changes as workbook structural diffs", () => {
+        const diff = buildWorkbookDiff(
+            createWorkbook({
+                definedNames: [],
+                sheets: [
+                    {
+                        name: "Sheet1",
+                        rowCount: 5,
+                        columnCount: 6,
+                        visibility: "visible",
+                        mergedRanges: [],
+                        freezePane: null,
+                        cells: {
+                            "5:6": {
+                                key: "5:6",
+                                rowNumber: 5,
+                                columnNumber: 6,
+                                address: "F5",
+                                displayValue: "same",
+                                formula: null,
+                                styleId: null,
+                            },
+                        },
+                        signature: "Sheet1:defined-name",
+                    },
+                ],
+            }),
+            createWorkbook({
+                filePath: "/tmp/item-next.xlsx",
+                fileName: "item-next.xlsx",
+                definedNames: [
+                    {
+                        hidden: false,
+                        name: "SheetCell",
+                        scope: null,
+                        value: "Sheet1!$F$5",
+                    },
+                ],
+                sheets: [
+                    {
+                        name: "Sheet1",
+                        rowCount: 5,
+                        columnCount: 6,
+                        visibility: "visible",
+                        mergedRanges: [],
+                        freezePane: null,
+                        cells: {
+                            "5:6": {
+                                key: "5:6",
+                                rowNumber: 5,
+                                columnNumber: 6,
+                                address: "F5",
+                                displayValue: "same",
+                                formula: null,
+                                styleId: null,
+                            },
+                        },
+                        signature: "Sheet1:defined-name",
+                    },
+                ],
+            })
+        );
+
+        const renderModel = createDiffPanelRenderModel(diff, null);
+
+        assert.strictEqual(renderModel.definedNamesChanged, true);
+        assert.strictEqual(renderModel.sheets[0]?.hasDiff, false);
         assert.strictEqual(renderModel.activeSheet?.diffCellCount, 0);
         assert.strictEqual(renderModel.activeSheet?.diffRowCount, 0);
     });

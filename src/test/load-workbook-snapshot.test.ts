@@ -25,6 +25,7 @@ suite("Load workbook snapshot", () => {
         assert.strictEqual(snapshot.filePath, "repo/item.xlsx");
         assert.strictEqual(snapshot.fileSize, 0);
         assert.strictEqual(snapshot.isReadonly, true);
+        assert.deepStrictEqual(snapshot.definedNames, []);
         assert.deepStrictEqual(snapshot.sheets, []);
         assert.ok(["Empty workbook", "空工作簿"].includes(snapshot.modifiedTimeLabel ?? ""));
     });

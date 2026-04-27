@@ -40,6 +40,13 @@ export interface SheetFreezePaneSnapshot {
 
 export type SheetVisibility = "visible" | "hidden" | "veryHidden";
 
+export interface DefinedNameSnapshot {
+    name: string;
+    scope: string | null;
+    value: string;
+    hidden: boolean;
+}
+
 export interface SheetSnapshot {
     name: string;
     rowCount: number;
@@ -62,6 +69,7 @@ export interface WorkbookSnapshot {
     detailFacts?: WorkbookDetailFact[];
     titleDetail?: string;
     isReadonly?: boolean;
+    definedNames: DefinedNameSnapshot[];
     sheets: SheetSnapshot[];
 }
 
@@ -139,6 +147,7 @@ export interface WorkbookDiffModel {
     left: WorkbookSnapshot;
     right: WorkbookSnapshot;
     sheets: SheetDiffModel[];
+    definedNamesChanged: boolean;
     totalDiffSheets: number;
     totalDiffRows: number;
     totalDiffCells: number;

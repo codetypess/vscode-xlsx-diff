@@ -91,6 +91,7 @@ export interface DiffPanelRenderModel {
     title: string;
     leftFile: DiffPanelFileView;
     rightFile: DiffPanelFileView;
+    definedNamesChanged: boolean;
     sheets: DiffPanelSheetTabView[];
     activeSheet: DiffPanelSheetView | null;
 }

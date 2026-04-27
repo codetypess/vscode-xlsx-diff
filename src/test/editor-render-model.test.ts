@@ -51,6 +51,7 @@ function createWorkbook(
         fileName: "editor.xlsx",
         fileSize: 128,
         modifiedTime: new Date("2026-04-18T06:51:00.000Z").toISOString(),
+        definedNames: [],
         sheets,
         ...overrides,
     };

@@ -12,6 +12,7 @@ import { Workbook } from "./runtime";
 import {
     type WorkbookDetailFact,
     type CellSnapshot,
+    type DefinedNameSnapshot,
     type SheetFreezePaneSnapshot,
     type SheetSnapshot,
     type SheetVisibility,
@@ -42,6 +43,7 @@ interface WorkbookReader {
     getSheet(sheetName: string): SheetReader;
     getSheetNames(): string[];
     getSheetVisibility(sheetName: string): SheetVisibility;
+    getDefinedNames(): DefinedNameSnapshot[];
 }
 
 interface WorkbookSnapshotMetadata {
@@ -147,9 +149,36 @@ function createWorkbookSnapshot(
     const sheets = workbook
         .getSheetNames()
         .map((sheetName) => loadSheetSnapshot(workbook, sheetName));
+    const definedNames = workbook
+        .getDefinedNames()
+        .map((definedName) => ({
+            name: definedName.name,
+            scope: definedName.scope ?? null,
+            value: definedName.value,
+            hidden: definedName.hidden,
+        }))
+        .sort((left, right) => {
+            const scopeComparison = (left.scope ?? "").localeCompare(right.scope ?? "");
+            if (scopeComparison !== 0) {
+                return scopeComparison;
+            }
+
+            const nameComparison = left.name.localeCompare(right.name);
+            if (nameComparison !== 0) {
+                return nameComparison;
+            }
+
+            const valueComparison = left.value.localeCompare(right.value);
+            if (valueComparison !== 0) {
+                return valueComparison;
+            }
+
+            return Number(left.hidden) - Number(right.hidden);
+        });
 
     return {
         ...metadata,
+        definedNames,
         sheets,
     };
 }
@@ -157,6 +186,7 @@ function createWorkbookSnapshot(
 function createEmptyWorkbookSnapshot(metadata: WorkbookSnapshotMetadata): WorkbookSnapshot {
     return {
         ...metadata,
+        definedNames: [],
         sheets: [],
     };
 }
