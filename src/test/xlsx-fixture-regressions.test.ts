@@ -36,6 +36,12 @@ suite("XLSX fixture regressions", () => {
                 headSnapshot.sheets[0]?.cells[cellKey]?.displayValue,
                 fixtureCase.expectedHeadDisplayValue
             );
+            if (fixtureCase.expectStyleDifference) {
+                assert.notStrictEqual(
+                    baseSnapshot.sheets[0]?.cells[cellKey]?.styleId ?? null,
+                    headSnapshot.sheets[0]?.cells[cellKey]?.styleId ?? null
+                );
+            }
 
             const diff = buildWorkbookDiff(baseSnapshot, headSnapshot);
             const sheet = diff.sheets[0]!;

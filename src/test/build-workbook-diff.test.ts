@@ -6,7 +6,12 @@ import { buildWorkbookDiff } from "../core/diff/build-workbook-diff";
 import { createCellKey, getCellAddress } from "../core/model/cells";
 import type { CellSnapshot, SheetSnapshot, WorkbookSnapshot } from "../core/model/types";
 
-function createCell(rowNumber: number, columnNumber: number, value: string): CellSnapshot {
+function createCell(
+    rowNumber: number,
+    columnNumber: number,
+    value: string,
+    styleId: number | null = null
+): CellSnapshot {
     return {
         key: createCellKey(rowNumber, columnNumber),
         rowNumber,
@@ -14,7 +19,7 @@ function createCell(rowNumber: number, columnNumber: number, value: string): Cel
         address: getCellAddress(rowNumber, columnNumber),
         displayValue: value,
         formula: null,
-        styleId: null,
+        styleId,
     };
 }
 
@@ -212,6 +217,49 @@ suite("Workbook diff row alignment", () => {
         assert.deepStrictEqual(sheet.diffCells, []);
         assert.strictEqual(sheet.rowCount, 0);
         assert.strictEqual(sheet.columnCount, 0);
+        assert.strictEqual(diff.totalDiffCells, 0);
+        assert.strictEqual(diff.totalDiffRows, 0);
+        assert.strictEqual(diff.totalDiffSheets, 0);
+    });
+
+    test("ignores style-only cell differences", () => {
+        const leftCell = createCell(5, 6, "same", null);
+        const rightCell = createCell(5, 6, "same", 2);
+        const diff = buildWorkbookDiff(
+            createWorkbook("left.xlsx", [
+                createSparseSheet(
+                    "Sheet1",
+                    [
+                        {
+                            rowNumber: leftCell.rowNumber,
+                            columnNumber: leftCell.columnNumber,
+                            value: leftCell.displayValue,
+                        },
+                    ],
+                    {
+                        rowCount: 5,
+                        columnCount: 6,
+                    }
+                ),
+            ]),
+            createWorkbook("right.xlsx", [
+                {
+                    name: "Sheet1",
+                    rowCount: 5,
+                    columnCount: 6,
+                    mergedRanges: [],
+                    freezePane: null,
+                    cells: {
+                        [rightCell.key]: rightCell,
+                    },
+                    signature: "Sheet1:style-only",
+                },
+            ])
+        );
+        const sheet = diff.sheets[0]!;
+
+        assert.deepStrictEqual(sheet.diffRows, []);
+        assert.deepStrictEqual(sheet.diffCells, []);
         assert.strictEqual(diff.totalDiffCells, 0);
         assert.strictEqual(diff.totalDiffRows, 0);
         assert.strictEqual(diff.totalDiffSheets, 0);

@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import {
     fixtureRegressionCases,
-    type FixtureCellEdit,
+    type FixtureWorkbookOperation,
 } from "../src/test/fixture-regression-cases.ts";
 
 const execFileAsync = promisify(execFile);
@@ -88,22 +88,41 @@ async function createFixtureWorkbook(
     fastxlsxCommand: FastxlsxCommand,
     workbookPath: string,
     sheetName: string,
-    cellEdits: FixtureCellEdit[]
+    operations: FixtureWorkbookOperation[]
 ): Promise<void> {
     await runFastxlsx(fastxlsxCommand, ["create", workbookPath, "--sheet", sheetName]);
 
-    for (const cellEdit of cellEdits) {
+    for (const operation of operations) {
+        if (operation.type === "setText") {
+            await runFastxlsx(
+                fastxlsxCommand,
+                [
+                    "set",
+                    workbookPath,
+                    "--sheet",
+                    sheetName,
+                    "--cell",
+                    operation.cellAddress,
+                    "--text",
+                    operation.value,
+                    "--in-place",
+                ],
+                { quiet: true }
+            );
+            continue;
+        }
+
         await runFastxlsx(
             fastxlsxCommand,
             [
-                "set",
+                "set-background-color",
                 workbookPath,
                 "--sheet",
                 sheetName,
                 "--cell",
-                cellEdit.cellAddress,
-                "--text",
-                cellEdit.value,
+                operation.cellAddress,
+                "--color",
+                operation.color,
                 "--in-place",
             ],
             { quiet: true }
@@ -112,10 +131,11 @@ async function createFixtureWorkbook(
 
     await runFastxlsx(fastxlsxCommand, ["validate", workbookPath]);
 
-    for (const cellEdit of cellEdits) {
+    const cellAddresses = [...new Set(operations.map((operation) => operation.cellAddress))];
+    for (const cellAddress of cellAddresses) {
         await runFastxlsx(
             fastxlsxCommand,
-            ["get", workbookPath, "--sheet", sheetName, "--cell", cellEdit.cellAddress],
+            ["get", workbookPath, "--sheet", sheetName, "--cell", cellAddress],
             { quiet: true }
         );
     }
@@ -132,13 +152,13 @@ async function main(): Promise<void> {
             fastxlsxCommand,
             path.join(caseDirectory, "base.xlsx"),
             fixtureCase.sheetName,
-            fixtureCase.baseEdits
+            fixtureCase.baseOperations
         );
         await createFixtureWorkbook(
             fastxlsxCommand,
             path.join(caseDirectory, "head.xlsx"),
             fixtureCase.sheetName,
-            fixtureCase.headEdits
+            fixtureCase.headOperations
         );
 
         console.log(`Fixtures generated in ${caseDirectory}`);

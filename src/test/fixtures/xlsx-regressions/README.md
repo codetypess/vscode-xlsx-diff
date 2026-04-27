@@ -37,6 +37,8 @@
   说明：`define!F5` 仅换行风格不同，UI 看起来一致，不应继续报 diff
 - `empty-string-vs-blank-cell`
   说明：`define!F5` 一侧为空白，另一侧为显式空字符串，两边看起来都为空，不应继续报 diff
+- `style-only-background-color`
+  说明：`define!F5` 值相同，只改了背景色样式，不应继续报 diff
 
 生成命令：
 

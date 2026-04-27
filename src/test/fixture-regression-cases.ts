@@ -1,7 +1,14 @@
-export interface FixtureCellEdit {
-    cellAddress: string;
-    value: string;
-}
+export type FixtureWorkbookOperation =
+    | {
+          type: "setText";
+          cellAddress: string;
+          value: string;
+      }
+    | {
+          type: "setBackgroundColor";
+          cellAddress: string;
+          color: string;
+      };
 
 export interface FixtureRegressionCase {
     name: string;
@@ -11,8 +18,9 @@ export interface FixtureRegressionCase {
     focusCellColumnNumber: number;
     expectedBaseDisplayValue: string | undefined;
     expectedHeadDisplayValue: string | undefined;
-    baseEdits: FixtureCellEdit[];
-    headEdits: FixtureCellEdit[];
+    expectStyleDifference?: boolean;
+    baseOperations: FixtureWorkbookOperation[];
+    headOperations: FixtureWorkbookOperation[];
 }
 
 const lfValue = "$&key1=ARMY==#army.id\n$&key1=ASSET==#assets.id";
@@ -27,14 +35,16 @@ export const fixtureRegressionCases: FixtureRegressionCase[] = [
         focusCellColumnNumber: 6,
         expectedBaseDisplayValue: lfValue,
         expectedHeadDisplayValue: crlfValue,
-        baseEdits: [
+        baseOperations: [
             {
+                type: "setText",
                 cellAddress: "F5",
                 value: lfValue,
             },
         ],
-        headEdits: [
+        headOperations: [
             {
+                type: "setText",
                 cellAddress: "F5",
                 value: crlfValue,
             },
@@ -48,11 +58,41 @@ export const fixtureRegressionCases: FixtureRegressionCase[] = [
         focusCellColumnNumber: 6,
         expectedBaseDisplayValue: undefined,
         expectedHeadDisplayValue: "",
-        baseEdits: [],
-        headEdits: [
+        baseOperations: [],
+        headOperations: [
             {
+                type: "setText",
                 cellAddress: "F5",
                 value: "",
+            },
+        ],
+    },
+    {
+        name: "style-only-background-color",
+        sheetName: "define",
+        focusCellAddress: "F5",
+        focusCellRowNumber: 5,
+        focusCellColumnNumber: 6,
+        expectedBaseDisplayValue: "same",
+        expectedHeadDisplayValue: "same",
+        expectStyleDifference: true,
+        baseOperations: [
+            {
+                type: "setText",
+                cellAddress: "F5",
+                value: "same",
+            },
+        ],
+        headOperations: [
+            {
+                type: "setText",
+                cellAddress: "F5",
+                value: "same",
+            },
+            {
+                type: "setBackgroundColor",
+                cellAddress: "F5",
+                color: "FFFF0000",
             },
         ],
     },

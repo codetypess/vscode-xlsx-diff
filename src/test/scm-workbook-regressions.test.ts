@@ -157,6 +157,12 @@ suite("SCM workbook regressions", () => {
                     localSnapshot.sheets[0]?.cells[cellKey]?.displayValue,
                     fixtureCase.expectedHeadDisplayValue
                 );
+                if (fixtureCase.expectStyleDifference) {
+                    assert.notStrictEqual(
+                        headResourceSnapshot.sheets[0]?.cells[cellKey]?.styleId ?? null,
+                        localSnapshot.sheets[0]?.cells[cellKey]?.styleId ?? null
+                    );
+                }
 
                 assertNoWorkbookDiff(buildWorkbookDiff(headResourceSnapshot, localSnapshot));
             } finally {
@@ -201,6 +207,12 @@ suite("SCM workbook regressions", () => {
                     localSnapshot.sheets[0]?.cells[cellKey]?.displayValue,
                     fixtureCase.expectedHeadDisplayValue
                 );
+                if (fixtureCase.expectStyleDifference) {
+                    assert.notStrictEqual(
+                        baseResourceSnapshot.sheets[0]?.cells[cellKey]?.styleId ?? null,
+                        localSnapshot.sheets[0]?.cells[cellKey]?.styleId ?? null
+                    );
+                }
 
                 assertNoWorkbookDiff(buildWorkbookDiff(baseResourceSnapshot, localSnapshot));
             } finally {
