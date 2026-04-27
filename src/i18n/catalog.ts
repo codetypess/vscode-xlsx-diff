@@ -20,6 +20,9 @@ export interface DiffPanelStrings {
     workbookStructure: string;
     structure: string;
     definedNames: string;
+    sheetAdded: string;
+    sheetRemoved: string;
+    sheetRenamed: string;
     mergedRanges: string;
     freezePanes: string;
     sheetVisibility: string;
@@ -204,6 +207,9 @@ export const RUNTIME_MESSAGES = {
             workbookStructure: "Workbook Structure",
             structure: "Structure",
             definedNames: "Defined Names",
+            sheetAdded: "Sheet Added",
+            sheetRemoved: "Sheet Removed",
+            sheetRenamed: "Sheet Renamed",
             mergedRanges: "Merged Ranges",
             freezePanes: "Freeze Panes",
             sheetVisibility: "Visibility",
@@ -339,6 +345,9 @@ export const RUNTIME_MESSAGES = {
             workbookStructure: "工作簿结构",
             structure: "结构变化",
             definedNames: "命名区域",
+            sheetAdded: "新增工作表",
+            sheetRemoved: "删除工作表",
+            sheetRenamed: "重命名工作表",
             mergedRanges: "合并区域",
             freezePanes: "冻结窗格",
             sheetVisibility: "显示状态",

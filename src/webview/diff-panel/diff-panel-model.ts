@@ -152,6 +152,7 @@ function createSheetTabView(
 ): DiffPanelSheetTabView {
     return {
         key: sheet.key,
+        kind: sheet.kind,
         label: getSheetLabel(sheet),
         diffRowCount: sheet.diffRows.length,
         diffCellCount: sheet.diffCellCount,
@@ -333,6 +334,7 @@ function createSheetView(sheet: SheetDiffModel): DiffPanelSheetView {
 
     return {
         key: sheet.key,
+        kind: sheet.kind,
         label: getSheetLabel(sheet),
         leftName: sheet.leftSheetName,
         rightName: sheet.rightSheetName,

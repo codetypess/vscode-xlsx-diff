@@ -1,4 +1,4 @@
-import type { CellDiffStatus } from "../../core/model/types";
+import type { CellDiffStatus, SheetComparisonKind } from "../../core/model/types";
 
 export interface DiffPanelFileView {
     title: string;
@@ -17,6 +17,7 @@ export interface DiffPanelFileFactView {
 
 export interface DiffPanelSheetTabView {
     key: string;
+    kind: SheetComparisonKind;
     label: string;
     diffRowCount: number;
     diffCellCount: number;
@@ -70,6 +71,7 @@ export interface DiffPanelRowView {
 
 export interface DiffPanelSheetView {
     key: string;
+    kind: SheetComparisonKind;
     label: string;
     leftName: string | null;
     rightName: string | null;

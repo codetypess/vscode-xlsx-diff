@@ -73,7 +73,6 @@ function createSheetSignature(sheet: SheetSnapshot): string {
         0
     );
 
-    hash.update(`${sheet.name}\n`);
     hash.update(`${comparableRowCount}:${comparableColumnCount}\n`);
     hash.update(`visibility:${sheet.visibility}\n`);
 

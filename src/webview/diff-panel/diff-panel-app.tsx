@@ -485,6 +485,7 @@ function getStructuralChangeLabels(
     sheet:
         | Pick<
               DiffPanelSheetTabView,
+              | "kind"
               | "mergedRangesChanged"
               | "freezePaneChanged"
               | "visibilityChanged"
@@ -492,6 +493,7 @@ function getStructuralChangeLabels(
           >
         | Pick<
               NonNullable<DiffPanelRenderModel["activeSheet"]>,
+              | "kind"
               | "mergedRangesChanged"
               | "freezePaneChanged"
               | "visibilityChanged"
@@ -499,6 +501,14 @@ function getStructuralChangeLabels(
           >
 ): string[] {
     const structuralChanges: string[] = [];
+
+    if (sheet.kind === "added") {
+        structuralChanges.push(STRINGS.sheetAdded);
+    } else if (sheet.kind === "removed") {
+        structuralChanges.push(STRINGS.sheetRemoved);
+    } else if (sheet.kind === "renamed") {
+        structuralChanges.push(STRINGS.sheetRenamed);
+    }
 
     if (sheet.mergedRangesChanged) {
         structuralChanges.push(STRINGS.mergedRanges);

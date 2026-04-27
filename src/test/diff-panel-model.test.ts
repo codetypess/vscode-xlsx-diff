@@ -482,4 +482,65 @@ suite("Diff panel render model", () => {
         assert.strictEqual(renderModel.activeSheet?.diffCellCount, 0);
         assert.strictEqual(renderModel.activeSheet?.diffRowCount, 0);
     });
+
+    test("preserves renamed sheet kinds for structural labels", () => {
+        const diff = buildWorkbookDiff(
+            createWorkbook({
+                sheets: [
+                    {
+                        name: "OldName",
+                        rowCount: 1,
+                        columnCount: 1,
+                        visibility: "visible",
+                        mergedRanges: [],
+                        freezePane: null,
+                        cells: {
+                            "1:1": {
+                                key: "1:1",
+                                rowNumber: 1,
+                                columnNumber: 1,
+                                address: "A1",
+                                displayValue: "same",
+                                formula: null,
+                                styleId: null,
+                            },
+                        },
+                        signature: "rename:sheet",
+                    },
+                ],
+            }),
+            createWorkbook({
+                filePath: "/tmp/item-next.xlsx",
+                fileName: "item-next.xlsx",
+                sheets: [
+                    {
+                        name: "NewName",
+                        rowCount: 1,
+                        columnCount: 1,
+                        visibility: "visible",
+                        mergedRanges: [],
+                        freezePane: null,
+                        cells: {
+                            "1:1": {
+                                key: "1:1",
+                                rowNumber: 1,
+                                columnNumber: 1,
+                                address: "A1",
+                                displayValue: "same",
+                                formula: null,
+                                styleId: null,
+                            },
+                        },
+                        signature: "rename:sheet",
+                    },
+                ],
+            })
+        );
+
+        const renderModel = createDiffPanelRenderModel(diff, null);
+
+        assert.strictEqual(renderModel.sheets[0]?.kind, "renamed");
+        assert.strictEqual(renderModel.activeSheet?.kind, "renamed");
+        assert.strictEqual(renderModel.sheets[0]?.label, "OldName -> NewName");
+    });
 });

@@ -43,7 +43,7 @@ function createSheet(name: string, rowValues: string[]): SheetSnapshot {
         mergedRanges: [],
         freezePane: null,
         cells,
-        signature: `${name}:${rowValues.join("|")}`,
+        signature: rowValues.join("|"),
     };
 }
 
@@ -71,7 +71,7 @@ function createGridSheet(name: string, rows: string[][]): SheetSnapshot {
         mergedRanges: [],
         freezePane: null,
         cells,
-        signature: `${name}:${rows.map((row) => row.join("|")).join("/")}`,
+        signature: rows.map((row) => row.join("|")).join("/"),
     };
 }
 
@@ -102,7 +102,7 @@ function createSparseSheet(
         mergedRanges: [],
         freezePane: null,
         cells,
-        signature: `${name}:sparse`,
+        signature: "sparse",
     };
 }
 
@@ -407,6 +407,18 @@ suite("Workbook diff row alignment", () => {
         assert.strictEqual(diff.totalDiffCells, 0);
         assert.strictEqual(diff.totalDiffRows, 0);
         assert.strictEqual(diff.totalDiffSheets, 0);
+    });
+
+    test("matches same-signature sheets as renamed structural diffs", () => {
+        const diff = buildWorkbookDiff(
+            createWorkbook("left.xlsx", [createSheet("OldName", ["same"])]),
+            createWorkbook("right.xlsx", [createSheet("NewName", ["same"])])
+        );
+
+        assert.strictEqual(diff.sheets[0]?.kind, "renamed");
+        assert.strictEqual(diff.sheets[0]?.leftSheetName, "OldName");
+        assert.strictEqual(diff.sheets[0]?.rightSheetName, "NewName");
+        assert.strictEqual(diff.totalDiffSheets, 1);
     });
 
     test("keeps later rows aligned when an inserted row is followed by a modified row", () => {
