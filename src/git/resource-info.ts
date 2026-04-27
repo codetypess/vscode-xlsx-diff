@@ -1,4 +1,5 @@
 import { execFile as execFileCallback } from "node:child_process";
+import { realpath } from "node:fs/promises";
 import * as path from "node:path";
 import { promisify } from "node:util";
 import * as vscode from "vscode";
@@ -49,6 +50,48 @@ async function getGitRepositoryRoot(resourcePath: string): Promise<string | unde
     return runGit(path.dirname(resourcePath), ["rev-parse", "--show-toplevel"]);
 }
 
+function toGitRelativePath(repositoryRoot: string, resourcePath: string): string {
+    return path.relative(repositoryRoot, resourcePath).split(path.sep).join("/");
+}
+
+function createGitBlobSpecifier(relativePath: string, ref: string): string {
+    if (ref === "") {
+        return `:${relativePath}`;
+    }
+
+    const stageMatch = /^~(\d)$/.exec(ref);
+    if (stageMatch) {
+        return `:${stageMatch[1]}:${relativePath}`;
+    }
+
+    const normalizedRef = ref === "~" ? "HEAD" : ref;
+    return `${normalizedRef}:${relativePath}`;
+}
+
+async function readGitBlob(
+    repositoryRoot: string,
+    resourcePath: string,
+    ref: string
+): Promise<Uint8Array | undefined> {
+    const [normalizedRepositoryRoot, normalizedResourcePath] = await Promise.all([
+        realpath(repositoryRoot).catch(() => repositoryRoot),
+        realpath(resourcePath).catch(() => resourcePath),
+    ]);
+    const relativePath = toGitRelativePath(normalizedRepositoryRoot, normalizedResourcePath);
+    const blobSpecifier = createGitBlobSpecifier(relativePath, ref);
+
+    try {
+        const { stdout } = await execFile("git", ["-C", repositoryRoot, "show", blobSpecifier], {
+            encoding: "buffer",
+            maxBuffer: 64 * 1024 * 1024,
+        });
+        const archive = stdout instanceof Buffer ? stdout : Buffer.from(stdout ?? "");
+        return new Uint8Array(archive);
+    } catch {
+        return undefined;
+    }
+}
+
 async function hasStagedChanges(repositoryRoot: string, resourcePath: string): Promise<boolean> {
     const relativePath = path.relative(repositoryRoot, resourcePath);
     const changedFiles = await runGit(repositoryRoot, [
@@ -61,7 +104,10 @@ async function hasStagedChanges(repositoryRoot: string, resourcePath: string): P
     return Boolean(changedFiles);
 }
 
-function formatGitCommitter(name: string | undefined, email: string | undefined): string | undefined {
+function formatGitCommitter(
+    name: string | undefined,
+    email: string | undefined
+): string | undefined {
     const trimmedName = name?.trim();
     const trimmedEmail = email?.trim();
     if (!trimmedName && !trimmedEmail) {
@@ -79,12 +125,7 @@ async function resolveGitCommitMetadata(
     repositoryRoot: string,
     ref: string
 ): Promise<GitCommitMetadata | undefined> {
-    const output = await runGit(repositoryRoot, [
-        "show",
-        "-s",
-        "--format=%h%x00%cn%x00%ce",
-        ref,
-    ]);
+    const output = await runGit(repositoryRoot, ["show", "-s", "--format=%h%x00%cn%x00%ce", ref]);
     if (!output) {
         return undefined;
     }
@@ -182,9 +223,7 @@ export function describeGitResourceRef(
     return { label, value };
 }
 
-export function getGitWorkbookResourceInfo(
-    uri: vscode.Uri
-): ScmWorkbookResourceInfo | undefined {
+export function getGitWorkbookResourceInfo(uri: vscode.Uri): ScmWorkbookResourceInfo | undefined {
     if (uri.scheme !== "git") {
         return undefined;
     }
@@ -198,9 +237,7 @@ export function getGitWorkbookResourceInfo(
     };
 }
 
-export function getGitWorkbookResourceTimeLabel(
-    info: ScmWorkbookResourceInfo
-): string | undefined {
+export function getGitWorkbookResourceTimeLabel(info: ScmWorkbookResourceInfo): string | undefined {
     if (info.provider !== "git" || info.ref === undefined) {
         return undefined;
     }
@@ -248,4 +285,16 @@ export const gitWorkbookResourceProvider: ScmWorkbookResourceProvider = {
     getResourceInfo: getGitWorkbookResourceInfo,
     getResourceTimeLabel: getGitWorkbookResourceTimeLabel,
     getResourceDetail: getGitWorkbookResourceDetail,
+    readWorkbookArchive: async (info) => {
+        if (info.provider !== "git" || info.ref === undefined) {
+            return undefined;
+        }
+
+        const repositoryRoot = await getGitRepositoryRoot(info.resourcePath);
+        if (!repositoryRoot) {
+            return undefined;
+        }
+
+        return readGitBlob(repositoryRoot, info.resourcePath, info.ref);
+    },
 };

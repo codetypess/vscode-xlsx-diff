@@ -181,7 +181,10 @@ async function resolveSvnAuthor(
         return undefined;
     }
 
-    const infoXml = await runSvn(["info", "--xml", "-r", revision, target], getSvnTargetCwd(target));
+    const infoXml = await runSvn(
+        ["info", "--xml", "-r", revision, target],
+        getSvnTargetCwd(target)
+    );
     return infoXml ? extractSvnAuthor(infoXml) : undefined;
 }
 
@@ -216,8 +219,7 @@ function runSvnCat(target: string, revision: string): Promise<Uint8Array> {
                     return;
                 }
 
-                const archive =
-                    stdout instanceof Buffer ? stdout : Buffer.from(stdout ?? "");
+                const archive = stdout instanceof Buffer ? stdout : Buffer.from(stdout ?? "");
                 resolve(new Uint8Array(archive));
             }
         );
@@ -241,9 +243,7 @@ function withSvnRef(uri: vscode.Uri, ref: string): vscode.Uri {
     });
 }
 
-export function getSvnWorkbookResourceInfo(
-    uri: vscode.Uri
-): ScmWorkbookResourceInfo | undefined {
+export function getSvnWorkbookResourceInfo(uri: vscode.Uri): ScmWorkbookResourceInfo | undefined {
     const query = parseSvnUriQuery(uri);
     if (query?.action !== "SHOW" || typeof query.fsPath !== "string") {
         return undefined;
@@ -290,9 +290,7 @@ export function getSvnTreeWorkbookResourceInfo(
     };
 }
 
-export function getSvnWorkbookResourceTimeLabel(
-    info: ScmWorkbookResourceInfo
-): string | undefined {
+export function getSvnWorkbookResourceTimeLabel(info: ScmWorkbookResourceInfo): string | undefined {
     if (info.provider !== "svn" || info.ref === undefined) {
         return undefined;
     }
@@ -391,6 +389,13 @@ export const svnWorkbookResourceProvider: ScmWorkbookResourceProvider = {
     getResourceInfo: getSvnWorkbookResourceInfo,
     getResourceTimeLabel: getSvnWorkbookResourceTimeLabel,
     getResourceDetail: getSvnWorkbookResourceDetail,
+    readWorkbookArchive: async (info) => {
+        if (info.provider !== "svn" || info.ref === undefined) {
+            return undefined;
+        }
+
+        return runSvnCat(info.resourcePath, info.ref).catch(() => undefined);
+    },
     normalizeDiffUris: normalizeSvnDiffUris,
 };
 
@@ -405,11 +410,7 @@ export const svnTreeWorkbookResourceProvider: ScmWorkbookResourceProvider = {
         }
 
         const descriptor = parseSvnTreeUriDescriptor(info.uri);
-        if (
-            descriptor?.source !== "svn" ||
-            !descriptor.target ||
-            !descriptor.revision
-        ) {
+        if (descriptor?.source !== "svn" || !descriptor.target || !descriptor.revision) {
             return undefined;
         }
 
