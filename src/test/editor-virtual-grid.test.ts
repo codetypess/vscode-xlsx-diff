@@ -113,8 +113,24 @@ suite("Editor virtual grid helpers", () => {
                 viewportWidth: 960,
             }),
             {
-                rowCount: 21,
-                columnCount: 8,
+                rowCount: 29,
+                columnCount: 11,
+                rowHeaderWidth: 56,
+            }
+        );
+    });
+
+    test("adds extra editable rows and columns even when the sheet already fills the viewport", () => {
+        assert.deepStrictEqual(
+            getEditorDisplayGridDimensions({
+                rowCount: 40,
+                columnCount: 12,
+                viewportHeight: 600,
+                viewportWidth: 960,
+            }),
+            {
+                rowCount: 48,
+                columnCount: 15,
                 rowHeaderWidth: 56,
             }
         );

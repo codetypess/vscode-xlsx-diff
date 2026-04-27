@@ -4,6 +4,8 @@ export const EDITOR_VIRTUAL_ROW_HEIGHT = 28;
 export const EDITOR_VIRTUAL_COLUMN_WIDTH = 120;
 export const EDITOR_VIRTUAL_HEADER_HEIGHT = 28;
 export const EDITOR_VIRTUAL_COLUMN_OVERSCAN = 8;
+export const EDITOR_EXTRA_PADDING_ROWS = 8;
+export const EDITOR_EXTRA_PADDING_COLUMNS = 3;
 
 function clamp(value: number, min: number, max: number): number {
     return Math.min(Math.max(value, min), max);
@@ -47,18 +49,21 @@ export function getEditorDisplayGridDimensions({
     viewportHeight: number;
     viewportWidth: number;
 }): { rowCount: number; columnCount: number; rowHeaderWidth: number } {
-    const displayRowCount = Math.max(rowCount, getMinimumVisibleEditorRowCount(viewportHeight));
+    const displayRowCount =
+        Math.max(rowCount, getMinimumVisibleEditorRowCount(viewportHeight)) +
+        EDITOR_EXTRA_PADDING_ROWS;
     const rowHeaderWidth = getEditorRowHeaderWidth(displayRowCount);
 
     return {
         rowCount: displayRowCount,
-        columnCount: Math.max(
-            columnCount,
-            getMinimumVisibleEditorColumnCount({
-                viewportWidth,
-                rowHeaderWidth,
-            })
-        ),
+        columnCount:
+            Math.max(
+                columnCount,
+                getMinimumVisibleEditorColumnCount({
+                    viewportWidth,
+                    rowHeaderWidth,
+                })
+            ) + EDITOR_EXTRA_PADDING_COLUMNS,
         rowHeaderWidth,
     };
 }
