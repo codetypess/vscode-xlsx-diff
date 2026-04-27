@@ -147,6 +147,23 @@ async function createFixtureWorkbook(
             continue;
         }
 
+        if (operation.type === "moveSheet") {
+            await runFastxlsx(
+                fastxlsxCommand,
+                [
+                    "move-sheet",
+                    workbookPath,
+                    "--sheet",
+                    sheetName,
+                    "--index",
+                    String(operation.targetIndex),
+                    "--in-place",
+                ],
+                { quiet: true }
+            );
+            continue;
+        }
+
         await runFastxlsx(
             fastxlsxCommand,
             [

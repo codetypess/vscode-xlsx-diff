@@ -842,7 +842,10 @@ function buildAlignedColumns(
 function createSheetDiff(
     kind: SheetComparisonKind,
     leftSheet: SheetSnapshot | null,
-    rightSheet: SheetSnapshot | null
+    rightSheet: SheetSnapshot | null,
+    options: {
+        sheetOrderChanged?: boolean;
+    } = {}
 ): SheetDiffModel {
     const alignedRowPairs = buildAlignedRows(leftSheet, rightSheet);
     const leftAlignedRowNumbersBySourceRow = createAlignedRowNumberMap(alignedRowPairs, "left");
@@ -958,6 +961,7 @@ function createSheetDiff(
         mergedRangesChanged: !areMergedRangesEqual(leftSheet, rightSheet),
         freezePaneChanged: !areFreezePanesEqual(leftSheet, rightSheet),
         visibilityChanged: !areSheetVisibilitiesEqual(leftSheet, rightSheet),
+        sheetOrderChanged: options.sheetOrderChanged ?? false,
     };
 }
 
@@ -965,59 +969,84 @@ export function buildWorkbookDiff(
     leftWorkbook: WorkbookSnapshot,
     rightWorkbook: WorkbookSnapshot
 ): WorkbookDiffModel {
-    const rightByName = new Map(rightWorkbook.sheets.map((sheet) => [sheet.name, sheet] as const));
+    const rightByName = new Map(
+        rightWorkbook.sheets.map((sheet, index) => [sheet.name, { sheet, index }] as const)
+    );
     const matchedRightNames = new Set<string>();
     const sheets: SheetDiffModel[] = [];
-    const unmatchedLeft: SheetSnapshot[] = [];
+    const unmatchedLeft: Array<{
+        sheet: SheetSnapshot;
+        index: number;
+    }> = [];
 
-    for (const leftSheet of leftWorkbook.sheets) {
-        const sameNameSheet = rightByName.get(leftSheet.name);
-        if (sameNameSheet) {
-            sheets.push(createSheetDiff("matched", leftSheet, sameNameSheet));
-            matchedRightNames.add(sameNameSheet.name);
+    for (const [leftIndex, leftSheet] of leftWorkbook.sheets.entries()) {
+        const sameNameEntry = rightByName.get(leftSheet.name);
+        if (sameNameEntry) {
+            sheets.push(
+                createSheetDiff("matched", leftSheet, sameNameEntry.sheet, {
+                    sheetOrderChanged: leftIndex !== sameNameEntry.index,
+                })
+            );
+            matchedRightNames.add(sameNameEntry.sheet.name);
             continue;
         }
 
-        unmatchedLeft.push(leftSheet);
+        unmatchedLeft.push({
+            sheet: leftSheet,
+            index: leftIndex,
+        });
     }
 
-    const remainingRight = rightWorkbook.sheets.filter(
-        (sheet) => !matchedRightNames.has(sheet.name)
-    );
-    const rightBySignature = new Map<string, SheetSnapshot[]>();
+    const remainingRight = rightWorkbook.sheets
+        .map((sheet, index) => ({ sheet, index }))
+        .filter(({ sheet }) => !matchedRightNames.has(sheet.name));
+    const rightBySignature = new Map<
+        string,
+        Array<{
+            sheet: SheetSnapshot;
+            index: number;
+        }>
+    >();
 
-    for (const rightSheet of remainingRight) {
-        const bucket = rightBySignature.get(rightSheet.signature) ?? [];
-        bucket.push(rightSheet);
-        rightBySignature.set(rightSheet.signature, bucket);
+    for (const rightEntry of remainingRight) {
+        const bucket = rightBySignature.get(rightEntry.sheet.signature) ?? [];
+        bucket.push(rightEntry);
+        rightBySignature.set(rightEntry.sheet.signature, bucket);
     }
 
-    const removedLeft: SheetSnapshot[] = [];
+    const removedLeft: Array<{
+        sheet: SheetSnapshot;
+        index: number;
+    }> = [];
     const renamedRightNames = new Set<string>();
 
-    for (const leftSheet of unmatchedLeft) {
-        const bucket = rightBySignature.get(leftSheet.signature);
-        const rightSheet = bucket?.shift();
+    for (const leftEntry of unmatchedLeft) {
+        const bucket = rightBySignature.get(leftEntry.sheet.signature);
+        const rightEntry = bucket?.shift();
 
-        if (rightSheet) {
-            sheets.push(createSheetDiff("renamed", leftSheet, rightSheet));
-            renamedRightNames.add(rightSheet.name);
+        if (rightEntry) {
+            sheets.push(
+                createSheetDiff("renamed", leftEntry.sheet, rightEntry.sheet, {
+                    sheetOrderChanged: leftEntry.index !== rightEntry.index,
+                })
+            );
+            renamedRightNames.add(rightEntry.sheet.name);
             continue;
         }
 
-        removedLeft.push(leftSheet);
+        removedLeft.push(leftEntry);
     }
 
-    for (const leftSheet of removedLeft) {
-        sheets.push(createSheetDiff("removed", leftSheet, null));
+    for (const leftEntry of removedLeft) {
+        sheets.push(createSheetDiff("removed", leftEntry.sheet, null));
     }
 
-    for (const rightSheet of remainingRight) {
-        if (renamedRightNames.has(rightSheet.name)) {
+    for (const rightEntry of remainingRight) {
+        if (renamedRightNames.has(rightEntry.sheet.name)) {
             continue;
         }
 
-        sheets.push(createSheetDiff("added", null, rightSheet));
+        sheets.push(createSheetDiff("added", null, rightEntry.sheet));
     }
 
     const diffSheets = sheets.filter(
@@ -1027,7 +1056,8 @@ export function buildWorkbookDiff(
             sheet.diffCellCount > 0 ||
             sheet.mergedRangesChanged ||
             sheet.freezePaneChanged ||
-            sheet.visibilityChanged
+            sheet.visibilityChanged ||
+            sheet.sheetOrderChanged
     );
 
     return {

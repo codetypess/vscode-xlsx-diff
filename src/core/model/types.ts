@@ -132,6 +132,7 @@ export interface SheetDiffModel {
     mergedRangesChanged: boolean;
     freezePaneChanged: boolean;
     visibilityChanged: boolean;
+    sheetOrderChanged: boolean;
 }
 
 export interface WorkbookDiffModel {

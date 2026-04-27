@@ -359,6 +359,29 @@ suite("Workbook diff row alignment", () => {
         assert.strictEqual(diff.totalDiffSheets, 1);
     });
 
+    test("marks sheet-order-only differences as structural diffs", () => {
+        const diff = buildWorkbookDiff(
+            createWorkbook("left.xlsx", [
+                createSheet("Sheet1", ["same"]),
+                createSheet("Sheet2", ["same"]),
+            ]),
+            createWorkbook("right.xlsx", [
+                createSheet("Sheet2", ["same"]),
+                createSheet("Sheet1", ["same"]),
+            ])
+        );
+
+        assert.strictEqual(diff.sheets[0]?.leftSheetName, "Sheet1");
+        assert.strictEqual(diff.sheets[0]?.rightSheetName, "Sheet1");
+        assert.strictEqual(diff.sheets[0]?.sheetOrderChanged, true);
+        assert.strictEqual(diff.sheets[1]?.leftSheetName, "Sheet2");
+        assert.strictEqual(diff.sheets[1]?.rightSheetName, "Sheet2");
+        assert.strictEqual(diff.sheets[1]?.sheetOrderChanged, true);
+        assert.strictEqual(diff.totalDiffCells, 0);
+        assert.strictEqual(diff.totalDiffRows, 0);
+        assert.strictEqual(diff.totalDiffSheets, 2);
+    });
+
     test("keeps later rows aligned when an inserted row is followed by a modified row", () => {
         const diff = buildWorkbookDiff(
             createWorkbook("left.xlsx", [createSheet("Sheet1", ["A", "B", "C"])]),

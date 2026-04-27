@@ -141,9 +141,10 @@ suite("SCM workbook regressions", () => {
                     fixtureCase.focusCellRowNumber,
                     fixtureCase.focusCellColumnNumber
                 );
-                const expectedSheetNames = fixtureCase.expectedSheetNames ?? [
-                    fixtureCase.sheetName,
-                ];
+                const expectedBaseSheetNames = fixtureCase.expectedBaseSheetNames ??
+                    fixtureCase.expectedSheetNames ?? [fixtureCase.sheetName];
+                const expectedHeadSheetNames = fixtureCase.expectedHeadSheetNames ??
+                    fixtureCase.expectedSheetNames ?? [fixtureCase.sheetName];
                 const baseSheet = headResourceSnapshot.sheets.find(
                     (sheet) => sheet.name === fixtureCase.sheetName
                 );
@@ -155,11 +156,11 @@ suite("SCM workbook regressions", () => {
                 assert.strictEqual(localSnapshot.isReadonly, false);
                 assert.deepStrictEqual(
                     headResourceSnapshot.sheets.map((sheet) => sheet.name),
-                    expectedSheetNames
+                    expectedBaseSheetNames
                 );
                 assert.deepStrictEqual(
                     localSnapshot.sheets.map((sheet) => sheet.name),
-                    expectedSheetNames
+                    expectedHeadSheetNames
                 );
                 assert.ok(baseSheet);
                 assert.ok(localSheet);
@@ -215,6 +216,10 @@ suite("SCM workbook regressions", () => {
                     sheet.visibilityChanged,
                     fixtureCase.expectedDiff.visibilityChanged
                 );
+                assert.strictEqual(
+                    sheet.sheetOrderChanged,
+                    fixtureCase.expectedDiff.sheetOrderChanged
+                );
                 assert.strictEqual(diff.totalDiffCells, fixtureCase.expectedDiff.totalDiffCells);
                 assert.strictEqual(diff.totalDiffRows, fixtureCase.expectedDiff.totalDiffRows);
                 assert.strictEqual(diff.totalDiffSheets, fixtureCase.expectedDiff.totalDiffSheets);
@@ -249,9 +254,10 @@ suite("SCM workbook regressions", () => {
                     fixtureCase.focusCellRowNumber,
                     fixtureCase.focusCellColumnNumber
                 );
-                const expectedSheetNames = fixtureCase.expectedSheetNames ?? [
-                    fixtureCase.sheetName,
-                ];
+                const expectedBaseSheetNames = fixtureCase.expectedBaseSheetNames ??
+                    fixtureCase.expectedSheetNames ?? [fixtureCase.sheetName];
+                const expectedHeadSheetNames = fixtureCase.expectedHeadSheetNames ??
+                    fixtureCase.expectedSheetNames ?? [fixtureCase.sheetName];
                 const baseSheet = baseResourceSnapshot.sheets.find(
                     (sheet) => sheet.name === fixtureCase.sheetName
                 );
@@ -263,11 +269,11 @@ suite("SCM workbook regressions", () => {
                 assert.strictEqual(localSnapshot.isReadonly, false);
                 assert.deepStrictEqual(
                     baseResourceSnapshot.sheets.map((sheet) => sheet.name),
-                    expectedSheetNames
+                    expectedBaseSheetNames
                 );
                 assert.deepStrictEqual(
                     localSnapshot.sheets.map((sheet) => sheet.name),
-                    expectedSheetNames
+                    expectedHeadSheetNames
                 );
                 assert.ok(baseSheet);
                 assert.ok(localSheet);
@@ -322,6 +328,10 @@ suite("SCM workbook regressions", () => {
                 assert.strictEqual(
                     sheet.visibilityChanged,
                     fixtureCase.expectedDiff.visibilityChanged
+                );
+                assert.strictEqual(
+                    sheet.sheetOrderChanged,
+                    fixtureCase.expectedDiff.sheetOrderChanged
                 );
                 assert.strictEqual(diff.totalDiffCells, fixtureCase.expectedDiff.totalDiffCells);
                 assert.strictEqual(diff.totalDiffRows, fixtureCase.expectedDiff.totalDiffRows);

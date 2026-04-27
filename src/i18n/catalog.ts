@@ -21,6 +21,7 @@ export interface DiffPanelStrings {
     mergedRanges: string;
     freezePanes: string;
     sheetVisibility: string;
+    sheetOrder: string;
     rows: string;
     filter: string;
     visibleRows: string;
@@ -202,6 +203,7 @@ export const RUNTIME_MESSAGES = {
             mergedRanges: "Merged Ranges",
             freezePanes: "Freeze Panes",
             sheetVisibility: "Visibility",
+            sheetOrder: "Sheet Order",
             rows: "Rows",
             filter: "Filter",
             visibleRows: "Visible Rows",
@@ -334,6 +336,7 @@ export const RUNTIME_MESSAGES = {
             mergedRanges: "合并区域",
             freezePanes: "冻结窗格",
             sheetVisibility: "显示状态",
+            sheetOrder: "工作表顺序",
             rows: "行",
             filter: "筛选",
             visibleRows: "可见行",

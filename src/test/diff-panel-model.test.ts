@@ -326,4 +326,88 @@ suite("Diff panel render model", () => {
         assert.strictEqual(renderModel.activeSheet?.diffCellCount, 0);
         assert.strictEqual(renderModel.activeSheet?.diffRowCount, 0);
     });
+
+    test("surfaces sheet-order-only changes as structural diffs", () => {
+        const diff = buildWorkbookDiff(
+            createWorkbook({
+                sheets: [
+                    {
+                        name: "Sheet1",
+                        rowCount: 5,
+                        columnCount: 6,
+                        visibility: "visible",
+                        mergedRanges: [],
+                        freezePane: null,
+                        cells: {
+                            "5:6": {
+                                key: "5:6",
+                                rowNumber: 5,
+                                columnNumber: 6,
+                                address: "F5",
+                                displayValue: "same",
+                                formula: null,
+                                styleId: null,
+                            },
+                        },
+                        signature: "Sheet1:order",
+                    },
+                    {
+                        name: "Sheet2",
+                        rowCount: 1,
+                        columnCount: 1,
+                        visibility: "visible",
+                        mergedRanges: [],
+                        freezePane: null,
+                        cells: {},
+                        signature: "Sheet2:order",
+                    },
+                ],
+            }),
+            createWorkbook({
+                filePath: "/tmp/item-next.xlsx",
+                fileName: "item-next.xlsx",
+                sheets: [
+                    {
+                        name: "Sheet2",
+                        rowCount: 1,
+                        columnCount: 1,
+                        visibility: "visible",
+                        mergedRanges: [],
+                        freezePane: null,
+                        cells: {},
+                        signature: "Sheet2:order",
+                    },
+                    {
+                        name: "Sheet1",
+                        rowCount: 5,
+                        columnCount: 6,
+                        visibility: "visible",
+                        mergedRanges: [],
+                        freezePane: null,
+                        cells: {
+                            "5:6": {
+                                key: "5:6",
+                                rowNumber: 5,
+                                columnNumber: 6,
+                                address: "F5",
+                                displayValue: "same",
+                                formula: null,
+                                styleId: null,
+                            },
+                        },
+                        signature: "Sheet1:order",
+                    },
+                ],
+            })
+        );
+
+        const renderModel = createDiffPanelRenderModel(diff, null);
+
+        assert.strictEqual(renderModel.sheets[0]?.hasDiff, true);
+        assert.strictEqual(renderModel.sheets[0]?.sheetOrderChanged, true);
+        assert.strictEqual(renderModel.sheets[1]?.sheetOrderChanged, true);
+        assert.strictEqual(renderModel.activeSheet?.sheetOrderChanged, true);
+        assert.strictEqual(renderModel.activeSheet?.diffCellCount, 0);
+        assert.strictEqual(renderModel.activeSheet?.diffRowCount, 0);
+    });
 });

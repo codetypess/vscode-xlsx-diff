@@ -485,11 +485,17 @@ function getStructuralChangeLabels(
     sheet:
         | Pick<
               DiffPanelSheetTabView,
-              "mergedRangesChanged" | "freezePaneChanged" | "visibilityChanged"
+              | "mergedRangesChanged"
+              | "freezePaneChanged"
+              | "visibilityChanged"
+              | "sheetOrderChanged"
           >
         | Pick<
               NonNullable<DiffPanelRenderModel["activeSheet"]>,
-              "mergedRangesChanged" | "freezePaneChanged" | "visibilityChanged"
+              | "mergedRangesChanged"
+              | "freezePaneChanged"
+              | "visibilityChanged"
+              | "sheetOrderChanged"
           >
 ): string[] {
     const structuralChanges: string[] = [];
@@ -504,6 +510,10 @@ function getStructuralChangeLabels(
 
     if (sheet.visibilityChanged) {
         structuralChanges.push(STRINGS.sheetVisibility);
+    }
+
+    if (sheet.sheetOrderChanged) {
+        structuralChanges.push(STRINGS.sheetOrder);
     }
 
     return structuralChanges;

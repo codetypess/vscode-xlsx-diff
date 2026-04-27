@@ -19,6 +19,10 @@ export type FixtureWorkbookOperation =
     | {
           type: "setSheetVisibility";
           visibility: SheetVisibility;
+      }
+    | {
+          type: "moveSheet";
+          targetIndex: number;
       };
 
 export interface FixtureRegressionCase {
@@ -29,6 +33,8 @@ export interface FixtureRegressionCase {
     focusCellRowNumber: number;
     focusCellColumnNumber: number;
     expectedSheetNames?: string[];
+    expectedBaseSheetNames?: string[];
+    expectedHeadSheetNames?: string[];
     expectedBaseDisplayValue: string | undefined;
     expectedHeadDisplayValue: string | undefined;
     expectedBaseVisibility?: SheetVisibility;
@@ -55,6 +61,7 @@ export interface FixtureRegressionCase {
         mergedRangesChanged: boolean;
         freezePaneChanged: boolean;
         visibilityChanged: boolean;
+        sheetOrderChanged: boolean;
     };
 }
 
@@ -95,6 +102,7 @@ export const fixtureRegressionCases: FixtureRegressionCase[] = [
             mergedRangesChanged: false,
             freezePaneChanged: false,
             visibilityChanged: false,
+            sheetOrderChanged: false,
         },
     },
     {
@@ -124,6 +132,7 @@ export const fixtureRegressionCases: FixtureRegressionCase[] = [
             mergedRangesChanged: false,
             freezePaneChanged: false,
             visibilityChanged: false,
+            sheetOrderChanged: false,
         },
     },
     {
@@ -165,6 +174,7 @@ export const fixtureRegressionCases: FixtureRegressionCase[] = [
             mergedRangesChanged: false,
             freezePaneChanged: false,
             visibilityChanged: false,
+            sheetOrderChanged: false,
         },
     },
     {
@@ -210,6 +220,7 @@ export const fixtureRegressionCases: FixtureRegressionCase[] = [
             mergedRangesChanged: false,
             freezePaneChanged: true,
             visibilityChanged: false,
+            sheetOrderChanged: false,
         },
     },
     {
@@ -251,6 +262,50 @@ export const fixtureRegressionCases: FixtureRegressionCase[] = [
             mergedRangesChanged: false,
             freezePaneChanged: false,
             visibilityChanged: true,
+            sheetOrderChanged: false,
+        },
+    },
+    {
+        name: "sheet-order-only-structure-change",
+        sheetName: "define",
+        extraSheetNames: ["helper"],
+        focusCellAddress: "F5",
+        focusCellRowNumber: 5,
+        focusCellColumnNumber: 6,
+        expectedBaseSheetNames: ["define", "helper"],
+        expectedHeadSheetNames: ["helper", "define"],
+        expectedBaseDisplayValue: "same",
+        expectedHeadDisplayValue: "same",
+        expectedBaseVisibility: "visible",
+        expectedHeadVisibility: "visible",
+        expectedBaseFreezePane: null,
+        expectedHeadFreezePane: null,
+        baseOperations: [
+            {
+                type: "setText",
+                cellAddress: "F5",
+                value: "same",
+            },
+        ],
+        headOperations: [
+            {
+                type: "setText",
+                cellAddress: "F5",
+                value: "same",
+            },
+            {
+                type: "moveSheet",
+                targetIndex: 1,
+            },
+        ],
+        expectedDiff: {
+            totalDiffSheets: 2,
+            totalDiffRows: 0,
+            totalDiffCells: 0,
+            mergedRangesChanged: false,
+            freezePaneChanged: false,
+            visibilityChanged: false,
+            sheetOrderChanged: true,
         },
     },
 ];

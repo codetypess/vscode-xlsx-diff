@@ -19,7 +19,10 @@ suite("XLSX fixture regressions", () => {
                 fixtureCase.focusCellRowNumber,
                 fixtureCase.focusCellColumnNumber
             );
-            const expectedSheetNames = fixtureCase.expectedSheetNames ?? [fixtureCase.sheetName];
+            const expectedBaseSheetNames = fixtureCase.expectedBaseSheetNames ??
+                fixtureCase.expectedSheetNames ?? [fixtureCase.sheetName];
+            const expectedHeadSheetNames = fixtureCase.expectedHeadSheetNames ??
+                fixtureCase.expectedSheetNames ?? [fixtureCase.sheetName];
             const baseSheet = baseSnapshot.sheets.find(
                 (sheet) => sheet.name === fixtureCase.sheetName
             );
@@ -29,11 +32,11 @@ suite("XLSX fixture regressions", () => {
 
             assert.deepStrictEqual(
                 baseSnapshot.sheets.map((sheet) => sheet.name),
-                expectedSheetNames
+                expectedBaseSheetNames
             );
             assert.deepStrictEqual(
                 headSnapshot.sheets.map((sheet) => sheet.name),
-                expectedSheetNames
+                expectedHeadSheetNames
             );
             assert.ok(baseSheet);
             assert.ok(headSheet);
@@ -84,6 +87,7 @@ suite("XLSX fixture regressions", () => {
             );
             assert.strictEqual(sheet.freezePaneChanged, fixtureCase.expectedDiff.freezePaneChanged);
             assert.strictEqual(sheet.visibilityChanged, fixtureCase.expectedDiff.visibilityChanged);
+            assert.strictEqual(sheet.sheetOrderChanged, fixtureCase.expectedDiff.sheetOrderChanged);
             assert.strictEqual(diff.totalDiffCells, fixtureCase.expectedDiff.totalDiffCells);
             assert.strictEqual(diff.totalDiffRows, fixtureCase.expectedDiff.totalDiffRows);
             assert.strictEqual(diff.totalDiffSheets, fixtureCase.expectedDiff.totalDiffSheets);
