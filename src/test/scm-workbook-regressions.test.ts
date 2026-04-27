@@ -11,31 +11,10 @@ import * as vscode from "vscode";
 import { buildWorkbookDiff } from "../core/diff/build-workbook-diff";
 import { loadWorkbookSnapshot } from "../core/fastxlsx/load-workbook-snapshot";
 import { createCellKey } from "../core/model/cells";
+import { fixtureRegressionCases } from "./fixture-regression-cases";
 import { getTestFixturePath } from "./fixture-paths";
 
 const execFile = promisify(execFileCallback);
-const cellKey = createCellKey(5, 6);
-const lfValue = "$&key1=ARMY==#army.id\n$&key1=ASSET==#assets.id";
-const crlfValue = "$&key1=ARMY==#army.id\r\n$&key1=ASSET==#assets.id";
-
-interface FixtureRegressionCase {
-    name: string;
-    expectedBaseDisplayValue: string | undefined;
-    expectedHeadDisplayValue: string | undefined;
-}
-
-const fixtureRegressionCases: FixtureRegressionCase[] = [
-    {
-        name: "newline-only-cell-diff",
-        expectedBaseDisplayValue: lfValue,
-        expectedHeadDisplayValue: crlfValue,
-    },
-    {
-        name: "empty-string-vs-blank-cell",
-        expectedBaseDisplayValue: undefined,
-        expectedHeadDisplayValue: "",
-    },
-];
 
 function createGitUri(resourcePath: string, ref = "HEAD") {
     return vscode.Uri.from({
@@ -163,6 +142,10 @@ suite("SCM workbook regressions", () => {
                 const localSnapshot = await loadWorkbookSnapshot(
                     vscode.Uri.file(workspace.workbookPath)
                 );
+                const cellKey = createCellKey(
+                    fixtureCase.focusCellRowNumber,
+                    fixtureCase.focusCellColumnNumber
+                );
 
                 assert.strictEqual(headResourceSnapshot.isReadonly, true);
                 assert.strictEqual(localSnapshot.isReadonly, false);
@@ -202,6 +185,10 @@ suite("SCM workbook regressions", () => {
                 );
                 const localSnapshot = await loadWorkbookSnapshot(
                     vscode.Uri.file(workspace.workbookPath)
+                );
+                const cellKey = createCellKey(
+                    fixtureCase.focusCellRowNumber,
+                    fixtureCase.focusCellColumnNumber
                 );
 
                 assert.strictEqual(baseResourceSnapshot.isReadonly, true);

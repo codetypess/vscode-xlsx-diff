@@ -4,60 +4,20 @@ import { execFile } from "node:child_process";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import {
+    fixtureRegressionCases,
+    type FixtureCellEdit,
+} from "../src/test/fixture-regression-cases.ts";
 
 const execFileAsync = promisify(execFile);
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(scriptDirectory, "..");
 const fixtureRoot = path.join(repositoryRoot, "src", "test", "fixtures", "xlsx-regressions");
-const lfValue = "$&key1=ARMY==#army.id\n$&key1=ASSET==#assets.id";
-const crlfValue = "$&key1=ARMY==#army.id\r\n$&key1=ASSET==#assets.id";
 
 interface FastxlsxCommand {
     command: string;
     argsPrefix: string[];
 }
-
-interface FixtureCellEdit {
-    cellAddress: string;
-    value: string;
-}
-
-interface FixtureCase {
-    name: string;
-    sheetName: string;
-    baseEdits: FixtureCellEdit[];
-    headEdits: FixtureCellEdit[];
-}
-
-const fixtureCases: FixtureCase[] = [
-    {
-        name: "newline-only-cell-diff",
-        sheetName: "define",
-        baseEdits: [
-            {
-                cellAddress: "F5",
-                value: lfValue,
-            },
-        ],
-        headEdits: [
-            {
-                cellAddress: "F5",
-                value: crlfValue,
-            },
-        ],
-    },
-    {
-        name: "empty-string-vs-blank-cell",
-        sheetName: "define",
-        baseEdits: [],
-        headEdits: [
-            {
-                cellAddress: "F5",
-                value: "",
-            },
-        ],
-    },
-];
 
 async function pathExists(targetPath: string): Promise<boolean> {
     try {
@@ -165,7 +125,7 @@ async function main(): Promise<void> {
     const fastxlsxCommand = await resolveFastxlsxCommand();
     await mkdir(fixtureRoot, { recursive: true });
 
-    for (const fixtureCase of fixtureCases) {
+    for (const fixtureCase of fixtureRegressionCases) {
         const caseDirectory = path.join(fixtureRoot, fixtureCase.name);
         await mkdir(caseDirectory, { recursive: true });
         await createFixtureWorkbook(

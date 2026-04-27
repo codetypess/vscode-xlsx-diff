@@ -5,29 +5,8 @@ import * as assert from "assert";
 import { buildWorkbookDiff } from "../core/diff/build-workbook-diff";
 import { loadWorkbookSnapshot } from "../core/fastxlsx/load-workbook-snapshot";
 import { createCellKey } from "../core/model/cells";
+import { fixtureRegressionCases } from "./fixture-regression-cases";
 import { getTestFixturePath } from "./fixture-paths";
-
-const lfValue = "$&key1=ARMY==#army.id\n$&key1=ASSET==#assets.id";
-const crlfValue = "$&key1=ARMY==#army.id\r\n$&key1=ASSET==#assets.id";
-
-interface FixtureRegressionCase {
-    name: string;
-    expectedBaseDisplayValue: string | undefined;
-    expectedHeadDisplayValue: string | undefined;
-}
-
-const fixtureRegressionCases: FixtureRegressionCase[] = [
-    {
-        name: "newline-only-cell-diff",
-        expectedBaseDisplayValue: lfValue,
-        expectedHeadDisplayValue: crlfValue,
-    },
-    {
-        name: "empty-string-vs-blank-cell",
-        expectedBaseDisplayValue: undefined,
-        expectedHeadDisplayValue: "",
-    },
-];
 
 suite("XLSX fixture regressions", () => {
     for (const fixtureCase of fixtureRegressionCases) {
@@ -36,7 +15,10 @@ suite("XLSX fixture regressions", () => {
             const headPath = getTestFixturePath("xlsx-regressions", fixtureCase.name, "head.xlsx");
             const baseSnapshot = await loadWorkbookSnapshot(basePath);
             const headSnapshot = await loadWorkbookSnapshot(headPath);
-            const cellKey = createCellKey(5, 6);
+            const cellKey = createCellKey(
+                fixtureCase.focusCellRowNumber,
+                fixtureCase.focusCellColumnNumber
+            );
 
             assert.deepStrictEqual(
                 baseSnapshot.sheets.map((sheet) => sheet.name),
