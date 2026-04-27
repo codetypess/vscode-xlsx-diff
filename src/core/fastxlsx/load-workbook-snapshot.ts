@@ -76,6 +76,12 @@ function createSheetSignature(sheet: SheetSnapshot): string {
         hash.update(`merge:${mergedRange}\n`);
     }
 
+    if (sheet.freezePane) {
+        hash.update(
+            `freeze:${sheet.freezePane.columnCount}:${sheet.freezePane.rowCount}:${sheet.freezePane.topLeftCell}:${sheet.freezePane.activePane ?? ""}\n`
+        );
+    }
+
     for (const cell of comparableCells) {
         hash.update(
             `${cell.address}\u0000${normalizeCellTextLineEndings(cell.displayValue)}\u0000${normalizeCellTextLineEndings(

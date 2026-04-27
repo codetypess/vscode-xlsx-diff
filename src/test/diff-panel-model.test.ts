@@ -191,4 +191,71 @@ suite("Diff panel render model", () => {
             },
         ]);
     });
+
+    test("surfaces freeze-pane-only sheet changes as structural diffs", () => {
+        const diff = buildWorkbookDiff(
+            createWorkbook({
+                sheets: [
+                    {
+                        name: "Sheet1",
+                        rowCount: 5,
+                        columnCount: 6,
+                        mergedRanges: [],
+                        freezePane: null,
+                        cells: {
+                            "5:6": {
+                                key: "5:6",
+                                rowNumber: 5,
+                                columnNumber: 6,
+                                address: "F5",
+                                displayValue: "same",
+                                formula: null,
+                                styleId: null,
+                            },
+                        },
+                        signature: "Sheet1:freeze:none",
+                    },
+                ],
+            }),
+            createWorkbook({
+                filePath: "/tmp/item-next.xlsx",
+                fileName: "item-next.xlsx",
+                sheets: [
+                    {
+                        name: "Sheet1",
+                        rowCount: 5,
+                        columnCount: 6,
+                        mergedRanges: [],
+                        freezePane: {
+                            columnCount: 1,
+                            rowCount: 1,
+                            topLeftCell: "B2",
+                            activePane: "bottomRight",
+                        },
+                        cells: {
+                            "5:6": {
+                                key: "5:6",
+                                rowNumber: 5,
+                                columnNumber: 6,
+                                address: "F5",
+                                displayValue: "same",
+                                formula: null,
+                                styleId: null,
+                            },
+                        },
+                        signature: "Sheet1:freeze:set",
+                    },
+                ],
+            })
+        );
+
+        const renderModel = createDiffPanelRenderModel(diff, null);
+
+        assert.strictEqual(renderModel.sheets[0]?.hasDiff, true);
+        assert.strictEqual(renderModel.sheets[0]?.freezePaneChanged, true);
+        assert.strictEqual(renderModel.sheets[0]?.mergedRangesChanged, false);
+        assert.strictEqual(renderModel.activeSheet?.freezePaneChanged, true);
+        assert.strictEqual(renderModel.activeSheet?.diffCellCount, 0);
+        assert.strictEqual(renderModel.activeSheet?.diffRowCount, 0);
+    });
 });

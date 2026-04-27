@@ -28,9 +28,7 @@ function getWorkbookTitle(workbook: WorkbookSnapshot): string {
         : workbook.fileName;
 }
 
-function getWorkbookDetailFacts(
-    workbook: WorkbookSnapshot
-): DiffPanelFileView["detailFacts"] {
+function getWorkbookDetailFacts(workbook: WorkbookSnapshot): DiffPanelFileView["detailFacts"] {
     return (
         workbook.detailFacts?.map((fact) => ({
             label: fact.label,
@@ -49,7 +47,10 @@ function getWorkbookDetailFacts(
     );
 }
 
-function getFileViewTitle(workbook: WorkbookSnapshot, detailFacts: DiffPanelFileView["detailFacts"]): string {
+function getFileViewTitle(
+    workbook: WorkbookSnapshot,
+    detailFacts: DiffPanelFileView["detailFacts"]
+): string {
     const primaryDetail = detailFacts[0];
     if (!primaryDetail) {
         return getWorkbookTitle(workbook);
@@ -95,7 +96,8 @@ function getSheetHasDiff(sheet: SheetDiffModel): boolean {
         sheet.kind !== "matched" ||
         sheet.diffRows.length > 0 ||
         sheet.diffCellCount > 0 ||
-        sheet.mergedRangesChanged
+        sheet.mergedRangesChanged ||
+        sheet.freezePaneChanged
     );
 }
 
@@ -151,6 +153,8 @@ function createSheetTabView(
         label: getSheetLabel(sheet),
         diffRowCount: sheet.diffRows.length,
         diffCellCount: sheet.diffCellCount,
+        mergedRangesChanged: sheet.mergedRangesChanged,
+        freezePaneChanged: sheet.freezePaneChanged,
         hasDiff: getSheetHasDiff(sheet),
         diffTone: getSheetDiffTone(sheet),
         isActive: sheet.key === activeSheetKey,
@@ -354,6 +358,8 @@ function createSheetView(sheet: SheetDiffModel): DiffPanelSheetView {
         })),
         diffRowCount: sheet.diffRows.length,
         diffCellCount: sheet.diffCellCount,
+        mergedRangesChanged: sheet.mergedRangesChanged,
+        freezePaneChanged: sheet.freezePaneChanged,
     };
 }
 
@@ -361,7 +367,8 @@ export function createDiffPanelRenderModel(
     diff: WorkbookDiffModel,
     activeSheetKey: string | null
 ): DiffPanelRenderModel {
-    const activeSheet = diff.sheets.find((sheet) => sheet.key === activeSheetKey) ?? diff.sheets[0] ?? null;
+    const activeSheet =
+        diff.sheets.find((sheet) => sheet.key === activeSheetKey) ?? diff.sheets[0] ?? null;
 
     return {
         title: `${getWorkbookTitle(diff.left)} ↔ ${getWorkbookTitle(diff.right)}`,

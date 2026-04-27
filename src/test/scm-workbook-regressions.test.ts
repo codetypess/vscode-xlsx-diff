@@ -109,18 +109,13 @@ async function createTempSvnWorkspace(
 }
 
 function assertNoWorkbookDiff(diff: ReturnType<typeof buildWorkbookDiff>) {
-    const firstSheet = diff.sheets[0];
-
-    assert.deepStrictEqual(firstSheet?.diffRows, []);
-    assert.deepStrictEqual(firstSheet?.diffCells, []);
-    assert.strictEqual(diff.totalDiffCells, 0);
-    assert.strictEqual(diff.totalDiffRows, 0);
-    assert.strictEqual(diff.totalDiffSheets, 0);
+    const firstSheet = diff.sheets[0]!;
+    return firstSheet;
 }
 
 suite("SCM workbook regressions", () => {
     for (const fixtureCase of fixtureRegressionCases) {
-        test(`loads git HEAD snapshots for ${fixtureCase.name} and ignores invisible diffs`, async function () {
+        test(`loads git HEAD snapshots for ${fixtureCase.name} and keeps expected diff semantics`, async function () {
             this.timeout(10000);
 
             const baseWorkbookPath = getTestFixturePath(
@@ -157,6 +152,14 @@ suite("SCM workbook regressions", () => {
                     localSnapshot.sheets[0]?.cells[cellKey]?.displayValue,
                     fixtureCase.expectedHeadDisplayValue
                 );
+                assert.deepStrictEqual(
+                    headResourceSnapshot.sheets[0]?.freezePane ?? null,
+                    fixtureCase.expectedBaseFreezePane ?? null
+                );
+                assert.deepStrictEqual(
+                    localSnapshot.sheets[0]?.freezePane ?? null,
+                    fixtureCase.expectedHeadFreezePane ?? null
+                );
                 if (fixtureCase.expectStyleDifference) {
                     assert.notStrictEqual(
                         headResourceSnapshot.sheets[0]?.cells[cellKey]?.styleId ?? null,
@@ -164,13 +167,27 @@ suite("SCM workbook regressions", () => {
                     );
                 }
 
-                assertNoWorkbookDiff(buildWorkbookDiff(headResourceSnapshot, localSnapshot));
+                const diff = buildWorkbookDiff(headResourceSnapshot, localSnapshot);
+                const sheet = assertNoWorkbookDiff(diff);
+                assert.deepStrictEqual(sheet.diffRows, []);
+                assert.deepStrictEqual(sheet.diffCells, []);
+                assert.strictEqual(
+                    sheet.mergedRangesChanged,
+                    fixtureCase.expectedDiff.mergedRangesChanged
+                );
+                assert.strictEqual(
+                    sheet.freezePaneChanged,
+                    fixtureCase.expectedDiff.freezePaneChanged
+                );
+                assert.strictEqual(diff.totalDiffCells, fixtureCase.expectedDiff.totalDiffCells);
+                assert.strictEqual(diff.totalDiffRows, fixtureCase.expectedDiff.totalDiffRows);
+                assert.strictEqual(diff.totalDiffSheets, fixtureCase.expectedDiff.totalDiffSheets);
             } finally {
                 await rm(workspace.tempDirectory, { recursive: true, force: true });
             }
         });
 
-        test(`loads svn BASE snapshots for ${fixtureCase.name} and ignores invisible diffs`, async function () {
+        test(`loads svn BASE snapshots for ${fixtureCase.name} and keeps expected diff semantics`, async function () {
             this.timeout(10000);
 
             const baseWorkbookPath = getTestFixturePath(
@@ -207,6 +224,14 @@ suite("SCM workbook regressions", () => {
                     localSnapshot.sheets[0]?.cells[cellKey]?.displayValue,
                     fixtureCase.expectedHeadDisplayValue
                 );
+                assert.deepStrictEqual(
+                    baseResourceSnapshot.sheets[0]?.freezePane ?? null,
+                    fixtureCase.expectedBaseFreezePane ?? null
+                );
+                assert.deepStrictEqual(
+                    localSnapshot.sheets[0]?.freezePane ?? null,
+                    fixtureCase.expectedHeadFreezePane ?? null
+                );
                 if (fixtureCase.expectStyleDifference) {
                     assert.notStrictEqual(
                         baseResourceSnapshot.sheets[0]?.cells[cellKey]?.styleId ?? null,
@@ -214,7 +239,21 @@ suite("SCM workbook regressions", () => {
                     );
                 }
 
-                assertNoWorkbookDiff(buildWorkbookDiff(baseResourceSnapshot, localSnapshot));
+                const diff = buildWorkbookDiff(baseResourceSnapshot, localSnapshot);
+                const sheet = assertNoWorkbookDiff(diff);
+                assert.deepStrictEqual(sheet.diffRows, []);
+                assert.deepStrictEqual(sheet.diffCells, []);
+                assert.strictEqual(
+                    sheet.mergedRangesChanged,
+                    fixtureCase.expectedDiff.mergedRangesChanged
+                );
+                assert.strictEqual(
+                    sheet.freezePaneChanged,
+                    fixtureCase.expectedDiff.freezePaneChanged
+                );
+                assert.strictEqual(diff.totalDiffCells, fixtureCase.expectedDiff.totalDiffCells);
+                assert.strictEqual(diff.totalDiffRows, fixtureCase.expectedDiff.totalDiffRows);
+                assert.strictEqual(diff.totalDiffSheets, fixtureCase.expectedDiff.totalDiffSheets);
             } finally {
                 await rm(workspace.tempDirectory, { recursive: true, force: true });
             }

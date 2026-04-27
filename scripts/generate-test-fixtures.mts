@@ -1,6 +1,7 @@
 import { access, mkdir } from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import { execFile } from "node:child_process";
+import { Workbook } from "fastxlsx";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -112,6 +113,13 @@ async function createFixtureWorkbook(
             continue;
         }
 
+        if (operation.type === "setFreezePane") {
+            const workbook = await Workbook.open(workbookPath);
+            workbook.getSheet(sheetName).freezePane(operation.columnCount, operation.rowCount);
+            await workbook.save(workbookPath);
+            continue;
+        }
+
         await runFastxlsx(
             fastxlsxCommand,
             [
@@ -131,7 +139,13 @@ async function createFixtureWorkbook(
 
     await runFastxlsx(fastxlsxCommand, ["validate", workbookPath]);
 
-    const cellAddresses = [...new Set(operations.map((operation) => operation.cellAddress))];
+    const cellAddresses = [
+        ...new Set(
+            operations.flatMap((operation) =>
+                "cellAddress" in operation ? [operation.cellAddress] : []
+            )
+        ),
+    ];
     for (const cellAddress of cellAddresses) {
         await runFastxlsx(
             fastxlsxCommand,

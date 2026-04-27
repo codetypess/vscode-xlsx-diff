@@ -10,7 +10,7 @@ import { getTestFixturePath } from "./fixture-paths";
 
 suite("XLSX fixture regressions", () => {
     for (const fixtureCase of fixtureRegressionCases) {
-        test(`ignores ${fixtureCase.name} differences in real workbooks`, async () => {
+        test(`handles ${fixtureCase.name} real workbooks`, async () => {
             const basePath = getTestFixturePath("xlsx-regressions", fixtureCase.name, "base.xlsx");
             const headPath = getTestFixturePath("xlsx-regressions", fixtureCase.name, "head.xlsx");
             const baseSnapshot = await loadWorkbookSnapshot(basePath);
@@ -36,6 +36,14 @@ suite("XLSX fixture regressions", () => {
                 headSnapshot.sheets[0]?.cells[cellKey]?.displayValue,
                 fixtureCase.expectedHeadDisplayValue
             );
+            assert.deepStrictEqual(
+                baseSnapshot.sheets[0]?.freezePane ?? null,
+                fixtureCase.expectedBaseFreezePane ?? null
+            );
+            assert.deepStrictEqual(
+                headSnapshot.sheets[0]?.freezePane ?? null,
+                fixtureCase.expectedHeadFreezePane ?? null
+            );
             if (fixtureCase.expectStyleDifference) {
                 assert.notStrictEqual(
                     baseSnapshot.sheets[0]?.cells[cellKey]?.styleId ?? null,
@@ -48,9 +56,14 @@ suite("XLSX fixture regressions", () => {
 
             assert.deepStrictEqual(sheet.diffRows, []);
             assert.deepStrictEqual(sheet.diffCells, []);
-            assert.strictEqual(diff.totalDiffCells, 0);
-            assert.strictEqual(diff.totalDiffRows, 0);
-            assert.strictEqual(diff.totalDiffSheets, 0);
+            assert.strictEqual(
+                sheet.mergedRangesChanged,
+                fixtureCase.expectedDiff.mergedRangesChanged
+            );
+            assert.strictEqual(sheet.freezePaneChanged, fixtureCase.expectedDiff.freezePaneChanged);
+            assert.strictEqual(diff.totalDiffCells, fixtureCase.expectedDiff.totalDiffCells);
+            assert.strictEqual(diff.totalDiffRows, fixtureCase.expectedDiff.totalDiffRows);
+            assert.strictEqual(diff.totalDiffSheets, fixtureCase.expectedDiff.totalDiffSheets);
         });
     }
 });

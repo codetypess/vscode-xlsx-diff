@@ -17,6 +17,9 @@ export interface DiffPanelStrings {
     sheets: string;
     moreSheets: string;
     diffCells: string;
+    structure: string;
+    mergedRanges: string;
+    freezePanes: string;
     rows: string;
     filter: string;
     visibleRows: string;
@@ -194,6 +197,9 @@ export const RUNTIME_MESSAGES = {
             sheets: "Sheets",
             moreSheets: "More",
             diffCells: "Diff Cells",
+            structure: "Structure",
+            mergedRanges: "Merged Ranges",
+            freezePanes: "Freeze Panes",
             rows: "Rows",
             filter: "Filter",
             visibleRows: "Visible Rows",
@@ -322,6 +328,9 @@ export const RUNTIME_MESSAGES = {
             sheets: "工作表",
             moreSheets: "更多",
             diffCells: "差异单元格",
+            structure: "结构变化",
+            mergedRanges: "合并区域",
+            freezePanes: "冻结窗格",
             rows: "行",
             filter: "筛选",
             visibleRows: "可见行",

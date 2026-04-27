@@ -265,6 +265,51 @@ suite("Workbook diff row alignment", () => {
         assert.strictEqual(diff.totalDiffSheets, 0);
     });
 
+    test("marks freeze-pane-only sheet differences as structural diffs", () => {
+        const diff = buildWorkbookDiff(
+            createWorkbook("left.xlsx", [
+                {
+                    name: "Sheet1",
+                    rowCount: 5,
+                    columnCount: 6,
+                    mergedRanges: [],
+                    freezePane: null,
+                    cells: {
+                        [createCell(5, 6, "same").key]: createCell(5, 6, "same"),
+                    },
+                    signature: "Sheet1:freeze:none",
+                },
+            ]),
+            createWorkbook("right.xlsx", [
+                {
+                    name: "Sheet1",
+                    rowCount: 5,
+                    columnCount: 6,
+                    mergedRanges: [],
+                    freezePane: {
+                        columnCount: 1,
+                        rowCount: 1,
+                        topLeftCell: "B2",
+                        activePane: "bottomRight",
+                    },
+                    cells: {
+                        [createCell(5, 6, "same").key]: createCell(5, 6, "same"),
+                    },
+                    signature: "Sheet1:freeze:set",
+                },
+            ])
+        );
+        const sheet = diff.sheets[0]!;
+
+        assert.deepStrictEqual(sheet.diffRows, []);
+        assert.deepStrictEqual(sheet.diffCells, []);
+        assert.strictEqual(sheet.mergedRangesChanged, false);
+        assert.strictEqual(sheet.freezePaneChanged, true);
+        assert.strictEqual(diff.totalDiffCells, 0);
+        assert.strictEqual(diff.totalDiffRows, 0);
+        assert.strictEqual(diff.totalDiffSheets, 1);
+    });
+
     test("keeps later rows aligned when an inserted row is followed by a modified row", () => {
         const diff = buildWorkbookDiff(
             createWorkbook("left.xlsx", [createSheet("Sheet1", ["A", "B", "C"])]),

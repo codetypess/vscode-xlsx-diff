@@ -71,6 +71,29 @@ function areMergedRangesEqual(
     );
 }
 
+function areFreezePanesEqual(
+    leftSheet: SheetSnapshot | null,
+    rightSheet: SheetSnapshot | null
+): boolean {
+    const leftFreezePane = leftSheet?.freezePane ?? null;
+    const rightFreezePane = rightSheet?.freezePane ?? null;
+
+    if (!leftFreezePane && !rightFreezePane) {
+        return true;
+    }
+
+    if (!leftFreezePane || !rightFreezePane) {
+        return false;
+    }
+
+    return (
+        leftFreezePane.columnCount === rightFreezePane.columnCount &&
+        leftFreezePane.rowCount === rightFreezePane.rowCount &&
+        leftFreezePane.topLeftCell === rightFreezePane.topLeftCell &&
+        leftFreezePane.activePane === rightFreezePane.activePane
+    );
+}
+
 function areCellsEqual(
     leftCell: CellSnapshot | undefined,
     rightCell: CellSnapshot | undefined
@@ -922,6 +945,7 @@ function createSheetDiff(
         diffCells,
         diffCellCount: diffCells.length,
         mergedRangesChanged: !areMergedRangesEqual(leftSheet, rightSheet),
+        freezePaneChanged: !areFreezePanesEqual(leftSheet, rightSheet),
     };
 }
 
@@ -989,7 +1013,8 @@ export function buildWorkbookDiff(
             sheet.kind !== "matched" ||
             sheet.diffRows.length > 0 ||
             sheet.diffCellCount > 0 ||
-            sheet.mergedRangesChanged
+            sheet.mergedRangesChanged ||
+            sheet.freezePaneChanged
     );
 
     return {

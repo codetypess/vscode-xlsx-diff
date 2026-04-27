@@ -482,7 +482,18 @@ function DiffMarker({
 }
 
 function getSheetTooltip(sheet: DiffPanelSheetTabView): string {
-    return `${sheet.label} · ${sheet.diffCellCount} ${STRINGS.diffCells} · ${sheet.diffRowCount} ${STRINGS.diffRows}`;
+    const structuralChanges: string[] = [];
+
+    if (sheet.mergedRangesChanged) {
+        structuralChanges.push(STRINGS.mergedRanges);
+    }
+
+    if (sheet.freezePaneChanged) {
+        structuralChanges.push(STRINGS.freezePanes);
+    }
+
+    const tooltip = `${sheet.label} · ${sheet.diffCellCount} ${STRINGS.diffCells} · ${sheet.diffRowCount} ${STRINGS.diffRows}`;
+    return structuralChanges.length > 0 ? `${tooltip} · ${structuralChanges.join(", ")}` : tooltip;
 }
 
 function DiffSheetTabs({
@@ -752,9 +763,7 @@ function getSelectionAddress(
 
     const column = sheet.columns[selection.columnNumber - 1];
     const columnLabel =
-        selection.side === "left"
-            ? (column?.leftLabel ?? "")
-            : (column?.rightLabel ?? "");
+        selection.side === "left" ? (column?.leftLabel ?? "") : (column?.rightLabel ?? "");
     const row = runtime?.rowByNumber.get(selection.rowNumber) ?? null;
     const sourceRowNumber = selection.sourceRowNumber ?? getSourceRowNumber(row, selection.side);
 
@@ -969,8 +978,7 @@ function PaneHeader({
                         />
                     ) : null}
                     {columnWindow.columns.map((column) => {
-                        const columnLabel =
-                            side === "left" ? column.leftLabel : column.rightLabel;
+                        const columnLabel = side === "left" ? column.leftLabel : column.rightLabel;
                         const columnNumber = column.columnNumber;
                         const diffTone = columnDiffTones[columnNumber - 1] ?? null;
                         const hasPending = pendingColumns.has(columnNumber);
@@ -2483,30 +2491,50 @@ function App(): React.JSX.Element {
             />
 
             <footer className="diff-statusBar">
-                <span>
-                    {STRINGS.sheets} {activeSheet?.label ?? STRINGS.none}
-                </span>
-                <span>
-                    {STRINGS.rows} {activeSheet?.rowCount ?? 0}
-                </span>
-                <span>
-                    {STRINGS.filter} {getFilterLabel(filter)}
-                </span>
-                <span>
-                    {STRINGS.diffRows} {activeSheet?.diffRowCount ?? 0}
-                </span>
-                <span>
-                    {STRINGS.sameRows} {sameRowCount}
-                </span>
-                <span>
-                    {STRINGS.visibleRows} {totalRowCount}
-                </span>
-                <span>
-                    {STRINGS.currentDiff} {currentDiffLabel}
-                </span>
-                <span>
-                    {STRINGS.selected} {selectedAddress}
-                </span>
+                {(() => {
+                    const structuralChanges: string[] = [];
+                    if (activeSheet?.mergedRangesChanged) {
+                        structuralChanges.push(STRINGS.mergedRanges);
+                    }
+                    if (activeSheet?.freezePaneChanged) {
+                        structuralChanges.push(STRINGS.freezePanes);
+                    }
+
+                    return (
+                        <>
+                            <span>
+                                {STRINGS.sheets} {activeSheet?.label ?? STRINGS.none}
+                            </span>
+                            <span>
+                                {STRINGS.rows} {activeSheet?.rowCount ?? 0}
+                            </span>
+                            <span>
+                                {STRINGS.filter} {getFilterLabel(filter)}
+                            </span>
+                            <span>
+                                {STRINGS.diffRows} {activeSheet?.diffRowCount ?? 0}
+                            </span>
+                            <span>
+                                {STRINGS.structure}{" "}
+                                {structuralChanges.length > 0
+                                    ? structuralChanges.join(", ")
+                                    : STRINGS.none}
+                            </span>
+                            <span>
+                                {STRINGS.sameRows} {sameRowCount}
+                            </span>
+                            <span>
+                                {STRINGS.visibleRows} {totalRowCount}
+                            </span>
+                            <span>
+                                {STRINGS.currentDiff} {currentDiffLabel}
+                            </span>
+                            <span>
+                                {STRINGS.selected} {selectedAddress}
+                            </span>
+                        </>
+                    );
+                })()}
             </footer>
         </div>
     );

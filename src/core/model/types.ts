@@ -127,6 +127,7 @@ export interface SheetDiffModel {
     diffCells: DiffCellLocation[];
     diffCellCount: number;
     mergedRangesChanged: boolean;
+    freezePaneChanged: boolean;
 }
 
 export interface WorkbookDiffModel {

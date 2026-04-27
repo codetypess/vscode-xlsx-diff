@@ -39,6 +39,8 @@
   说明：`define!F5` 一侧为空白，另一侧为显式空字符串，两边看起来都为空，不应继续报 diff
 - `style-only-background-color`
   说明：`define!F5` 值相同，只改了背景色样式，不应继续报 diff
+- `freeze-pane-only-view-change`
+  说明：`define!F5` 值相同，但冻结窗格发生变化，应作为结构性差异显示
 
 生成命令：
 

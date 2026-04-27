@@ -20,6 +20,8 @@ export interface DiffPanelSheetTabView {
     label: string;
     diffRowCount: number;
     diffCellCount: number;
+    mergedRangesChanged: boolean;
+    freezePaneChanged: boolean;
     hasDiff: boolean;
     diffTone: CellDiffStatus;
     isActive: boolean;
@@ -77,6 +79,8 @@ export interface DiffPanelSheetView {
     diffCells: DiffPanelDiffCellView[];
     diffRowCount: number;
     diffCellCount: number;
+    mergedRangesChanged: boolean;
+    freezePaneChanged: boolean;
 }
 
 export interface DiffPanelRenderModel {
