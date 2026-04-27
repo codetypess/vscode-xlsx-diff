@@ -1,0 +1,527 @@
+/// <reference types="mocha" />
+/// <reference types="node" />
+
+import * as assert from "assert";
+import {
+    buildFillChanges,
+    createFillPreviewRange,
+} from "../webview/editor-panel/editor-fill-drag";
+
+function createCellValueKey(rowNumber: number, columnNumber: number): string {
+    return `${rowNumber}:${columnNumber}`;
+}
+
+function createValueGetter(values: Record<string, string>): (rowNumber: number, columnNumber: number) => string {
+    return (rowNumber: number, columnNumber: number): string =>
+        values[createCellValueKey(rowNumber, columnNumber)] ?? "";
+}
+
+suite("Editor fill drag helpers", () => {
+    test("creates a downward preview range", () => {
+        assert.deepStrictEqual(
+            createFillPreviewRange(
+                {
+                    startRow: 2,
+                    endRow: 3,
+                    startColumn: 4,
+                    endColumn: 5,
+                },
+                {
+                    rowNumber: 6,
+                    columnNumber: 5,
+                },
+                {
+                    minRow: 1,
+                    maxRow: 20,
+                    minColumn: 1,
+                    maxColumn: 20,
+                }
+            ),
+            {
+                startRow: 2,
+                endRow: 6,
+                startColumn: 4,
+                endColumn: 5,
+            }
+        );
+    });
+
+    test("creates an upward preview range", () => {
+        assert.deepStrictEqual(
+            createFillPreviewRange(
+                {
+                    startRow: 5,
+                    endRow: 7,
+                    startColumn: 2,
+                    endColumn: 2,
+                },
+                {
+                    rowNumber: 3,
+                    columnNumber: 2,
+                },
+                {
+                    minRow: 1,
+                    maxRow: 20,
+                    minColumn: 1,
+                    maxColumn: 20,
+                }
+            ),
+            {
+                startRow: 3,
+                endRow: 7,
+                startColumn: 2,
+                endColumn: 2,
+            }
+        );
+    });
+
+    test("creates a leftward preview range", () => {
+        assert.deepStrictEqual(
+            createFillPreviewRange(
+                {
+                    startRow: 4,
+                    endRow: 4,
+                    startColumn: 3,
+                    endColumn: 5,
+                },
+                {
+                    rowNumber: 4,
+                    columnNumber: 1,
+                },
+                {
+                    minRow: 1,
+                    maxRow: 20,
+                    minColumn: 1,
+                    maxColumn: 20,
+                }
+            ),
+            {
+                startRow: 4,
+                endRow: 4,
+                startColumn: 1,
+                endColumn: 5,
+            }
+        );
+    });
+
+    test("creates a diagonal preview range", () => {
+        assert.deepStrictEqual(
+            createFillPreviewRange(
+                {
+                    startRow: 3,
+                    endRow: 4,
+                    startColumn: 3,
+                    endColumn: 4,
+                },
+                {
+                    rowNumber: 6,
+                    columnNumber: 7,
+                },
+                {
+                    minRow: 1,
+                    maxRow: 20,
+                    minColumn: 1,
+                    maxColumn: 20,
+                }
+            ),
+            {
+                startRow: 3,
+                endRow: 6,
+                startColumn: 3,
+                endColumn: 7,
+            }
+        );
+    });
+
+    test("clamps preview ranges to workbook bounds", () => {
+        assert.deepStrictEqual(
+            createFillPreviewRange(
+                {
+                    startRow: 2,
+                    endRow: 2,
+                    startColumn: 2,
+                    endColumn: 2,
+                },
+                {
+                    rowNumber: -4,
+                    columnNumber: 99,
+                },
+                {
+                    minRow: 1,
+                    maxRow: 6,
+                    minColumn: 1,
+                    maxColumn: 4,
+                }
+            ),
+            {
+                startRow: 1,
+                endRow: 2,
+                startColumn: 2,
+                endColumn: 4,
+            }
+        );
+    });
+
+    test("treats targets inside the source range as a no-op preview", () => {
+        assert.strictEqual(
+            createFillPreviewRange(
+                {
+                    startRow: 2,
+                    endRow: 4,
+                    startColumn: 2,
+                    endColumn: 4,
+                },
+                {
+                    rowNumber: 3,
+                    columnNumber: 3,
+                },
+                {
+                    minRow: 1,
+                    maxRow: 20,
+                    minColumn: 1,
+                    maxColumn: 20,
+                }
+            ),
+            null
+        );
+    });
+
+    test("repeats a single-cell seed across the fill area", () => {
+        const changes = buildFillChanges({
+            sheetKey: "sheet:1",
+            sourceRange: {
+                startRow: 2,
+                endRow: 2,
+                startColumn: 2,
+                endColumn: 2,
+            },
+            previewRange: {
+                startRow: 2,
+                endRow: 4,
+                startColumn: 2,
+                endColumn: 2,
+            },
+            getCellValue: createValueGetter({
+                "2:2": "x",
+                "3:2": "",
+                "4:2": "",
+            }),
+            getModelValue: createValueGetter({}),
+            canEditCell: () => true,
+        });
+
+        assert.deepStrictEqual(
+            changes.map(({ rowNumber, columnNumber, afterValue }) => ({
+                rowNumber,
+                columnNumber,
+                afterValue,
+            })),
+            [
+                {
+                    rowNumber: 3,
+                    columnNumber: 2,
+                    afterValue: "x",
+                },
+                {
+                    rowNumber: 4,
+                    columnNumber: 2,
+                    afterValue: "x",
+                },
+            ]
+        );
+    });
+
+    test("tiles a rectangular seed during diagonal expansion", () => {
+        const changes = buildFillChanges({
+            sheetKey: "sheet:1",
+            sourceRange: {
+                startRow: 1,
+                endRow: 2,
+                startColumn: 1,
+                endColumn: 2,
+            },
+            previewRange: {
+                startRow: 1,
+                endRow: 4,
+                startColumn: 1,
+                endColumn: 4,
+            },
+            getCellValue: createValueGetter({
+                "1:1": "A",
+                "1:2": "B",
+                "2:1": "C",
+                "2:2": "D",
+            }),
+            getModelValue: createValueGetter({}),
+            canEditCell: () => true,
+        });
+
+        assert.deepStrictEqual(
+            changes.map(({ rowNumber, columnNumber, afterValue }) => ({
+                rowNumber,
+                columnNumber,
+                afterValue,
+            })),
+            [
+                { rowNumber: 1, columnNumber: 3, afterValue: "A" },
+                { rowNumber: 1, columnNumber: 4, afterValue: "B" },
+                { rowNumber: 2, columnNumber: 3, afterValue: "C" },
+                { rowNumber: 2, columnNumber: 4, afterValue: "D" },
+                { rowNumber: 3, columnNumber: 1, afterValue: "A" },
+                { rowNumber: 3, columnNumber: 2, afterValue: "B" },
+                { rowNumber: 3, columnNumber: 3, afterValue: "A" },
+                { rowNumber: 3, columnNumber: 4, afterValue: "B" },
+                { rowNumber: 4, columnNumber: 1, afterValue: "C" },
+                { rowNumber: 4, columnNumber: 2, afterValue: "D" },
+                { rowNumber: 4, columnNumber: 3, afterValue: "C" },
+                { rowNumber: 4, columnNumber: 4, afterValue: "D" },
+            ]
+        );
+    });
+
+    test("extends arithmetic numeric row seeds forward", () => {
+        const changes = buildFillChanges({
+            sheetKey: "sheet:1",
+            sourceRange: {
+                startRow: 2,
+                endRow: 2,
+                startColumn: 2,
+                endColumn: 3,
+            },
+            previewRange: {
+                startRow: 2,
+                endRow: 2,
+                startColumn: 2,
+                endColumn: 5,
+            },
+            getCellValue: createValueGetter({
+                "2:2": "1",
+                "2:3": "3",
+            }),
+            getModelValue: createValueGetter({}),
+            canEditCell: () => true,
+        });
+
+        assert.deepStrictEqual(
+            changes.map(({ columnNumber, afterValue }) => ({
+                columnNumber,
+                afterValue,
+            })),
+            [
+                { columnNumber: 4, afterValue: "5" },
+                { columnNumber: 5, afterValue: "7" },
+            ]
+        );
+    });
+
+    test("extends arithmetic numeric column seeds backward", () => {
+        const changes = buildFillChanges({
+            sheetKey: "sheet:1",
+            sourceRange: {
+                startRow: 3,
+                endRow: 4,
+                startColumn: 2,
+                endColumn: 2,
+            },
+            previewRange: {
+                startRow: 1,
+                endRow: 4,
+                startColumn: 2,
+                endColumn: 2,
+            },
+            getCellValue: createValueGetter({
+                "3:2": "10",
+                "4:2": "13",
+            }),
+            getModelValue: createValueGetter({}),
+            canEditCell: () => true,
+        });
+
+        assert.deepStrictEqual(
+            changes.map(({ rowNumber, afterValue }) => ({
+                rowNumber,
+                afterValue,
+            })),
+            [
+                { rowNumber: 1, afterValue: "4" },
+                { rowNumber: 2, afterValue: "7" },
+            ]
+        );
+    });
+
+    test("falls back to repeating for single numeric seeds", () => {
+        const changes = buildFillChanges({
+            sheetKey: "sheet:1",
+            sourceRange: {
+                startRow: 1,
+                endRow: 1,
+                startColumn: 1,
+                endColumn: 1,
+            },
+            previewRange: {
+                startRow: 1,
+                endRow: 1,
+                startColumn: 1,
+                endColumn: 3,
+            },
+            getCellValue: createValueGetter({
+                "1:1": "9",
+            }),
+            getModelValue: createValueGetter({}),
+            canEditCell: () => true,
+        });
+
+        assert.deepStrictEqual(
+            changes.map(({ columnNumber, afterValue }) => ({
+                columnNumber,
+                afterValue,
+            })),
+            [
+                { columnNumber: 2, afterValue: "9" },
+                { columnNumber: 3, afterValue: "9" },
+            ]
+        );
+    });
+
+    test("falls back to repeating for mixed numeric seeds", () => {
+        const changes = buildFillChanges({
+            sheetKey: "sheet:1",
+            sourceRange: {
+                startRow: 2,
+                endRow: 2,
+                startColumn: 1,
+                endColumn: 3,
+            },
+            previewRange: {
+                startRow: 2,
+                endRow: 2,
+                startColumn: 1,
+                endColumn: 5,
+            },
+            getCellValue: createValueGetter({
+                "2:1": "1",
+                "2:2": "x",
+                "2:3": "3",
+            }),
+            getModelValue: createValueGetter({}),
+            canEditCell: () => true,
+        });
+
+        assert.deepStrictEqual(
+            changes.map(({ columnNumber, afterValue }) => ({
+                columnNumber,
+                afterValue,
+            })),
+            [
+                { columnNumber: 4, afterValue: "1" },
+                { columnNumber: 5, afterValue: "x" },
+            ]
+        );
+    });
+
+    test("falls back to repeating for non-arithmetic numeric seeds", () => {
+        const changes = buildFillChanges({
+            sheetKey: "sheet:1",
+            sourceRange: {
+                startRow: 1,
+                endRow: 3,
+                startColumn: 2,
+                endColumn: 2,
+            },
+            previewRange: {
+                startRow: 1,
+                endRow: 5,
+                startColumn: 2,
+                endColumn: 2,
+            },
+            getCellValue: createValueGetter({
+                "1:2": "1",
+                "2:2": "2",
+                "3:2": "4",
+            }),
+            getModelValue: createValueGetter({}),
+            canEditCell: () => true,
+        });
+
+        assert.deepStrictEqual(
+            changes.map(({ rowNumber, afterValue }) => ({
+                rowNumber,
+                afterValue,
+            })),
+            [
+                { rowNumber: 4, afterValue: "1" },
+                { rowNumber: 5, afterValue: "2" },
+            ]
+        );
+    });
+
+    test("excludes source cells and preserves effective before values", () => {
+        const changes = buildFillChanges({
+            sheetKey: "sheet:1",
+            sourceRange: {
+                startRow: 2,
+                endRow: 2,
+                startColumn: 2,
+                endColumn: 3,
+            },
+            previewRange: {
+                startRow: 2,
+                endRow: 2,
+                startColumn: 1,
+                endColumn: 3,
+            },
+            getCellValue: createValueGetter({
+                "2:1": "pending-old",
+                "2:2": "A",
+                "2:3": "B",
+            }),
+            getModelValue: createValueGetter({
+                "2:1": "model-old",
+            }),
+            canEditCell: () => true,
+        });
+
+        assert.deepStrictEqual(changes, [
+            {
+                sheetKey: "sheet:1",
+                rowNumber: 2,
+                columnNumber: 1,
+                modelValue: "model-old",
+                beforeValue: "pending-old",
+                afterValue: "B",
+            },
+        ]);
+    });
+
+    test("skips non-editable target cells", () => {
+        const changes = buildFillChanges({
+            sheetKey: "sheet:1",
+            sourceRange: {
+                startRow: 1,
+                endRow: 1,
+                startColumn: 1,
+                endColumn: 2,
+            },
+            previewRange: {
+                startRow: 1,
+                endRow: 1,
+                startColumn: 1,
+                endColumn: 4,
+            },
+            getCellValue: createValueGetter({
+                "1:1": "A",
+                "1:2": "B",
+            }),
+            getModelValue: createValueGetter({}),
+            canEditCell: (_rowNumber, columnNumber) => columnNumber !== 3,
+        });
+
+        assert.deepStrictEqual(
+            changes.map(({ columnNumber, afterValue }) => ({
+                columnNumber,
+                afterValue,
+            })),
+            [{ columnNumber: 4, afterValue: "B" }]
+        );
+    });
+});

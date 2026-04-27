@@ -30,6 +30,11 @@ import {
     type SelectionRange as CellRange,
 } from "./editor-selection-range";
 import {
+    buildFillChanges,
+    createFillPreviewRange,
+    isCellWithinFillPreviewArea,
+} from "./editor-fill-drag";
+import {
     getEditorToolbarSyncSnapshot,
     notifyEditorToolbarSync,
     subscribeEditorToolbarSync,
@@ -201,6 +206,14 @@ type SelectionDragState =
           pointerId: number;
       };
 
+interface FillDragState {
+    pointerId: number;
+    sourceRange: CellRange;
+    previewRange: CellRange | null;
+}
+
+type GridLayerKind = "body" | "top" | "left" | "corner";
+
 interface SearchPanelPosition {
     left: number;
     top: number;
@@ -250,6 +263,7 @@ let viewRevision = 0;
 let setViewState: React.Dispatch<React.SetStateAction<ViewState>> | null = null;
 let contextMenu: ContextMenuState | null = null;
 let selectionDragState: SelectionDragState | null = null;
+let fillDragState: FillDragState | null = null;
 let searchPanelDragState: SearchPanelDragState | null = null;
 let suppressNextCellClick = false;
 let suppressNextRowHeaderClick = false;
@@ -970,6 +984,108 @@ function getColumnNumberFromElement(element: Element | null): number | null {
     return Number.isInteger(columnNumber) ? columnNumber : null;
 }
 
+function clearFillDragState(): void {
+    fillDragState = null;
+}
+
+function hasEditableCellInRange(range: CellRange): boolean {
+    for (let rowNumber = range.startRow; rowNumber <= range.endRow; rowNumber += 1) {
+        for (
+            let columnNumber = range.startColumn;
+            columnNumber <= range.endColumn;
+            columnNumber += 1
+        ) {
+            if (canEditCellAt(rowNumber, columnNumber)) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+function canShowFillHandle(range: CellRange | null = getSelectionRange()): boolean {
+    return Boolean(model?.canEdit && !editingCell && range && hasEditableCellInRange(range));
+}
+
+function getFillHandleCell(range: CellRange | null): CellPosition | null {
+    if (!range || !canShowFillHandle(range)) {
+        return null;
+    }
+
+    return {
+        rowNumber: range.endRow,
+        columnNumber: range.endColumn,
+    };
+}
+
+function startFillDrag(pointerId: number, sourceRange: CellRange): void {
+    fillDragState = {
+        pointerId,
+        sourceRange,
+        previewRange: null,
+    };
+    clearBrowserTextSelection();
+    clearSuppressedSelectionClicks();
+}
+
+function updateFillDrag(targetCell: CellPosition): void {
+    if (!fillDragState) {
+        return;
+    }
+
+    const bounds = getSelectionBounds();
+    if (!bounds) {
+        return;
+    }
+
+    const nextPreviewRange = createFillPreviewRange(fillDragState.sourceRange, targetCell, bounds);
+    if (areSelectionRangesEqual(fillDragState.previewRange, nextPreviewRange)) {
+        return;
+    }
+
+    fillDragState = {
+        ...fillDragState,
+        previewRange: nextPreviewRange,
+    };
+    renderApp({ commitEditing: false });
+}
+
+function stopFillDrag(
+    pointerId?: number,
+    { commit = false }: { commit?: boolean } = {}
+): void {
+    if (!fillDragState) {
+        return;
+    }
+
+    if (pointerId !== undefined && fillDragState.pointerId !== pointerId) {
+        return;
+    }
+
+    const currentFillDrag = fillDragState;
+    fillDragState = null;
+
+    if (commit && model && currentFillDrag.previewRange) {
+        const changes = buildFillChanges({
+            sheetKey: model.activeSheet.key,
+            sourceRange: currentFillDrag.sourceRange,
+            previewRange: currentFillDrag.previewRange,
+            getCellValue: getEffectiveCellValue,
+            getModelValue: getCellModelValue,
+            canEditCell: canEditCellAt,
+        });
+        if (changes.length > 0) {
+            applyEditChanges(changes, { revealSelection: true });
+            return;
+        }
+    }
+
+    if (currentFillDrag.previewRange) {
+        renderApp({ commitEditing: false });
+    }
+}
+
 function startSelectionDrag(pointerId: number, anchorCell: CellPosition): void {
     selectionDragState = {
         kind: "cell",
@@ -1583,12 +1699,15 @@ function setSelectedCellLocal(
             ? (selectionRange ?? createSelectionRange(nextAnchorCell, nextCell))
             : null;
     const shouldClearSearchFeedback = clearSearchFeedback && Boolean(searchFeedback);
+    const shouldForceRenderForFillHandle = Boolean(getFillHandleCell(nextSelectionRange));
     const canUseLocalUpdate = canUseLocalSimpleSelectionUpdate(nextCell, {
         anchorCell: nextAnchorCell,
         selectionRange: nextSelectionRange,
-        forceRender: forceRender || shouldClearSearchFeedback,
+        forceRender:
+            forceRender || shouldClearSearchFeedback || shouldForceRenderForFillHandle,
     });
 
+    clearFillDragState();
     selectedCell = nextCell;
     selectionAnchorCell = nextAnchorCell;
     selectionRangeOverride = selectionRange ?? null;
@@ -1629,6 +1748,7 @@ function prepareSelectionForRender({
     const previousAnchorCell = selectionAnchorCell;
 
     if (useModelSelection && model?.selection) {
+        clearFillDragState();
         selectedCell = {
             rowNumber: model.selection.rowNumber,
             columnNumber: model.selection.columnNumber,
@@ -1651,6 +1771,7 @@ function prepareSelectionForRender({
     }
 
     if (pendingSelectionAfterRender) {
+        clearFillDragState();
         selectedCell = {
             rowNumber: pendingSelectionAfterRender.rowNumber,
             columnNumber: pendingSelectionAfterRender.columnNumber,
@@ -1692,6 +1813,7 @@ function prepareSelectionForRender({
         : model && model.activeSheet.rowCount > 0 && model.activeSheet.columnCount > 0
           ? { rowNumber: 1, columnNumber: 1 }
           : null;
+    clearFillDragState();
     selectionRangeOverride = null;
 
     if (selectedCell) {
@@ -1874,6 +1996,7 @@ function finishEdit({
         return;
     }
 
+    clearFillDragState();
     editingCell = null;
 
     if (mode === "commit") {
@@ -2027,6 +2150,7 @@ function startEditCell(rowNumber: number, columnNumber: number, currentValue: st
     }
 
     clearBrowserTextSelection();
+    clearFillDragState();
     selectedCell = { rowNumber, columnNumber };
     selectionAnchorCell = selectedCell;
     selectionRangeOverride = null;
@@ -3544,6 +3668,38 @@ function getEditorGridLeft(rowHeaderWidth: number, columnNumber: number): number
     return rowHeaderWidth + (columnNumber - 1) * EDITOR_VIRTUAL_COLUMN_WIDTH;
 }
 
+function getGridLayerForCell(
+    metrics: EditorVirtualGridMetrics,
+    cell: CellPosition | null
+): GridLayerKind | null {
+    if (!cell) {
+        return null;
+    }
+
+    const isFrozenRow = metrics.frozenRowNumbers.includes(cell.rowNumber);
+    const isFrozenColumn = metrics.frozenColumnNumbers.includes(cell.columnNumber);
+    const isVisibleRow = isFrozenRow || metrics.rowNumbers.includes(cell.rowNumber);
+    const isVisibleColumn = isFrozenColumn || metrics.columnNumbers.includes(cell.columnNumber);
+
+    if (!isVisibleRow || !isVisibleColumn) {
+        return null;
+    }
+
+    if (isFrozenRow && isFrozenColumn) {
+        return "corner";
+    }
+
+    if (isFrozenRow) {
+        return "top";
+    }
+
+    if (isFrozenColumn) {
+        return "left";
+    }
+
+    return "body";
+}
+
 function createEditorVirtualGridMetrics(
     currentModel: EditorRenderModel,
     element: HTMLElement | null,
@@ -3928,6 +4084,48 @@ const EditorRowHeaderCell = React.memo(
         previous.rowHeaderWidth === next.rowHeaderWidth
 );
 
+const FILL_HANDLE_SIZE = 8;
+const FILL_HANDLE_HALF_SIZE = FILL_HANDLE_SIZE / 2;
+
+function EditorFillHandle({
+    rowNumber,
+    columnNumber,
+    rowHeaderWidth,
+    isActive,
+    onPointerDown,
+}: {
+    rowNumber: number;
+    columnNumber: number;
+    rowHeaderWidth: number;
+    isActive: boolean;
+    onPointerDown(event: React.PointerEvent<HTMLSpanElement>): void;
+}): React.ReactElement {
+    return (
+        <span
+            aria-hidden
+            className={classNames(["editor-grid__fill-handle", isActive && "is-active"])}
+            style={getEditorGridItemStyle({
+                top: getEditorGridTop(rowNumber) + EDITOR_VIRTUAL_ROW_HEIGHT - FILL_HANDLE_HALF_SIZE,
+                left:
+                    getEditorGridLeft(rowHeaderWidth, columnNumber) +
+                    EDITOR_VIRTUAL_COLUMN_WIDTH -
+                    FILL_HANDLE_HALF_SIZE,
+                width: FILL_HANDLE_SIZE,
+                height: FILL_HANDLE_SIZE,
+            })}
+            onPointerDown={onPointerDown}
+            onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+            }}
+            onDoubleClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+            }}
+        />
+    );
+}
+
 const EditorVirtualCell = React.memo(
     function EditorVirtualCell({
         currentModel,
@@ -3941,6 +4139,8 @@ const EditorVirtualCell = React.memo(
         currentSelection,
         activeEditingCell,
         pendingEdit,
+        fillSourceRange,
+        fillPreviewRange,
     }: {
         currentModel: EditorRenderModel;
         rowNumber: number;
@@ -3953,6 +4153,8 @@ const EditorVirtualCell = React.memo(
         currentSelection: CellPosition | null;
         activeEditingCell: EditingCell | null;
         pendingEdit: PendingEdit | undefined;
+        fillSourceRange: CellRange | null;
+        fillPreviewRange: CellRange | null;
     }): React.ReactElement {
         const cell = getCellView(rowNumber, columnNumber, currentModel) ?? {
             key: createCellKey(rowNumber, columnNumber),
@@ -3979,6 +4181,15 @@ const EditorVirtualCell = React.memo(
         const isEditing =
             activeEditingCell?.rowNumber === rowNumber &&
             activeEditingCell.columnNumber === columnNumber;
+        const isFillPreview = Boolean(
+            fillSourceRange &&
+                isCellWithinFillPreviewArea(
+                    fillSourceRange,
+                    fillPreviewRange,
+                    rowNumber,
+                    columnNumber
+                )
+        );
 
         return (
             <div
@@ -3992,6 +4203,7 @@ const EditorVirtualCell = React.memo(
                     isActiveColumn && "grid__cell--active-column",
                     !editable && "grid__cell--locked",
                     pendingEdit && "grid__cell--pending",
+                    isFillPreview && "grid__cell--fill-preview",
                     isEditing && "grid__cell--editing",
                     ...getSelectionOutlineClasses(rowNumber, columnNumber, selectionRange),
                 ])}
@@ -4077,7 +4289,9 @@ const EditorVirtualCell = React.memo(
         areSelectionRangesEqual(previous.selectionRange, next.selectionRange) &&
         areCellPositionsEqual(previous.currentSelection, next.currentSelection) &&
         areEditingCellsEqual(previous.activeEditingCell, next.activeEditingCell) &&
-        arePendingEditsEqual(previous.pendingEdit, next.pendingEdit)
+        arePendingEditsEqual(previous.pendingEdit, next.pendingEdit) &&
+        areSelectionRangesEqual(previous.fillSourceRange, next.fillSourceRange) &&
+        areSelectionRangesEqual(previous.fillPreviewRange, next.fillPreviewRange)
 );
 
 function EditorVirtualGrid({
@@ -4095,6 +4309,10 @@ function EditorVirtualGrid({
         view.revision
     );
     const selectionRange = getSelectionRange();
+    const fillSourceRange = fillDragState?.sourceRange ?? selectionRange;
+    const fillPreviewRange = fillDragState?.previewRange ?? null;
+    const fillHandleCell = getFillHandleCell(fillSourceRange);
+    const fillHandleLayer = getGridLayerForCell(metrics, fillHandleCell);
     const currentSelection = selectedCell;
     const activeHighlightCell = getActiveHighlightCell();
     const activeRowNumber = activeHighlightCell?.rowNumber ?? null;
@@ -4132,6 +4350,8 @@ function EditorVirtualGrid({
                 currentSelection={currentSelection}
                 activeEditingCell={activeEditingCell}
                 pendingEdit={pendingEdit}
+                fillSourceRange={fillSourceRange}
+                fillPreviewRange={fillPreviewRange}
             />
         );
     };
@@ -4218,6 +4438,37 @@ function EditorVirtualGrid({
         for (const columnNumber of metrics.frozenColumnNumbers) {
             cornerItems.push(createGridCellItem("corner", rowNumber, columnNumber));
         }
+    }
+
+    const fillHandle =
+        fillHandleCell && fillHandleLayer ? (
+            <EditorFillHandle
+                key={`fill-handle:${fillHandleCell.rowNumber}:${fillHandleCell.columnNumber}`}
+                rowNumber={fillHandleCell.rowNumber}
+                columnNumber={fillHandleCell.columnNumber}
+                rowHeaderWidth={metrics.rowHeaderWidth}
+                isActive={Boolean(fillPreviewRange)}
+                onPointerDown={(event) => {
+                    if (event.button !== 0 || !fillSourceRange) {
+                        return;
+                    }
+
+                    event.preventDefault();
+                    event.stopPropagation();
+                    closeContextMenu({ refresh: false });
+                    startFillDrag(event.pointerId, fillSourceRange);
+                }}
+            />
+        ) : null;
+
+    if (fillHandle && fillHandleLayer === "body") {
+        bodyItems.push(fillHandle);
+    } else if (fillHandle && fillHandleLayer === "top") {
+        topItems.push(fillHandle);
+    } else if (fillHandle && fillHandleLayer === "left") {
+        leftItems.push(fillHandle);
+    } else if (fillHandle && fillHandleLayer === "corner") {
+        cornerItems.push(fillHandle);
     }
 
     React.useLayoutEffect(() => {
@@ -4821,6 +5072,7 @@ window.addEventListener("message", (event: MessageEvent<IncomingMessage>) => {
     const message = event.data;
 
     if (message.type === "loading") {
+        clearFillDragState();
         stopSearchPanelDrag();
         isSearchPanelOpen = false;
         searchMode = "find";
@@ -4835,6 +5087,7 @@ window.addEventListener("message", (event: MessageEvent<IncomingMessage>) => {
     }
 
     if (message.type === "error") {
+        clearFillDragState();
         stopSearchPanelDrag();
         isSaving = false;
         renderError(message.message);
@@ -4847,6 +5100,7 @@ window.addEventListener("message", (event: MessageEvent<IncomingMessage>) => {
     }
 
     if (message.type === "render") {
+        clearFillDragState();
         model = stabilizeIncomingRenderModel(model, message.payload, {
             canReuseActiveSheetData: Boolean(message.reuseActiveSheetData),
         });
@@ -5083,6 +5337,27 @@ document.addEventListener("pointermove", (event: PointerEvent) => {
         return;
     }
 
+    if (fillDragState && fillDragState.pointerId === event.pointerId) {
+        if ((event.buttons & 1) === 0) {
+            stopFillDrag(event.pointerId, { commit: true });
+            return;
+        }
+
+        const targetElement = document.elementFromPoint(event.clientX, event.clientY);
+        if (!targetElement) {
+            return;
+        }
+
+        const targetCell = getCellPositionFromElement(targetElement);
+        if (!targetCell) {
+            return;
+        }
+
+        event.preventDefault();
+        updateFillDrag(targetCell);
+        return;
+    }
+
     if (!selectionDragState || selectionDragState.pointerId !== event.pointerId) {
         return;
     }
@@ -5127,12 +5402,14 @@ document.addEventListener("pointermove", (event: PointerEvent) => {
 
 document.addEventListener("pointerup", (event: PointerEvent) => {
     stopSearchPanelDrag(event.pointerId);
+    stopFillDrag(event.pointerId, { commit: true });
     stopSelectionDrag(event.pointerId);
     scheduleSuppressedSelectionClickReset();
 });
 
 document.addEventListener("pointercancel", (event: PointerEvent) => {
     stopSearchPanelDrag(event.pointerId);
+    stopFillDrag(event.pointerId);
     stopSelectionDrag(event.pointerId);
     scheduleSuppressedSelectionClickReset();
 });
