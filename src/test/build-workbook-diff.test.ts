@@ -125,6 +125,32 @@ suite("Workbook diff row alignment", () => {
         );
     });
 
+    test("ignores newline-style-only cell differences", () => {
+        const diff = buildWorkbookDiff(
+            createWorkbook("left.xlsx", [
+                createSheet("Sheet1", [
+                    "row1",
+                    "row2",
+                    "$&key1=ARMY==#army.id\n$&key1=ASSET==#assets.id",
+                ]),
+            ]),
+            createWorkbook("right.xlsx", [
+                createSheet("Sheet1", [
+                    "row1",
+                    "row2",
+                    "$&key1=ARMY==#army.id\r\n$&key1=ASSET==#assets.id",
+                ]),
+            ])
+        );
+        const sheet = diff.sheets[0]!;
+
+        assert.deepStrictEqual(sheet.diffRows, []);
+        assert.deepStrictEqual(sheet.diffCells, []);
+        assert.strictEqual(diff.totalDiffCells, 0);
+        assert.strictEqual(diff.totalDiffRows, 0);
+        assert.strictEqual(diff.totalDiffSheets, 0);
+    });
+
     test("keeps later rows aligned when an inserted row is followed by a modified row", () => {
         const diff = buildWorkbookDiff(
             createWorkbook("left.xlsx", [createSheet("Sheet1", ["A", "B", "C"])]),

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { stat } from "node:fs/promises";
 import * as path from "node:path";
 import * as vscode from "vscode";
-import { createCellKey, getCellAddress } from "../model/cells";
+import { createCellKey, getCellAddress, normalizeCellTextLineEndings } from "../model/cells";
 import { Workbook } from "./runtime";
 import {
     type WorkbookDetailFact,
@@ -62,7 +62,11 @@ function createSheetSignature(sheet: SheetSnapshot): string {
     for (const cell of Object.values(sheet.cells).sort((left, right) =>
         left.key.localeCompare(right.key)
     )) {
-        hash.update(`${cell.address}\u0000${cell.displayValue}\u0000${cell.formula ?? ""}\n`);
+        hash.update(
+            `${cell.address}\u0000${normalizeCellTextLineEndings(cell.displayValue)}\u0000${normalizeCellTextLineEndings(
+                cell.formula ?? ""
+            )}\n`
+        );
     }
 
     return hash.digest("hex");
@@ -205,11 +209,10 @@ export async function loadWorkbookSnapshot(
     const resourceStats = resourceFilePath
         ? await stat(resourceFilePath).catch(() => undefined)
         : undefined;
-    const modifiedTimeLabel =
-        resourceStats
-            ? undefined
-            : (getWorkbookResourceTimeLabel(filePathOrUri) ??
-              `${filePathOrUri.scheme.toUpperCase()} resource`);
+    const modifiedTimeLabel = resourceStats
+        ? undefined
+        : (getWorkbookResourceTimeLabel(filePathOrUri) ??
+          `${filePathOrUri.scheme.toUpperCase()} resource`);
 
     if (isEmptyWorkbookResourceUri(filePathOrUri)) {
         return createEmptyWorkbookSnapshot({

@@ -1,4 +1,4 @@
-import { createCellKey, getCellAddress } from "../model/cells";
+import { createCellKey, getCellAddress, normalizeCellTextLineEndings } from "../model/cells";
 import {
     type CellSnapshot,
     type DiffCellLocation,
@@ -41,6 +41,14 @@ interface ColumnPairing {
     right: ColumnSnapshot | null;
 }
 
+function normalizeComparisonText(value: string | null | undefined): string | null {
+    if (value === null || value === undefined) {
+        return null;
+    }
+
+    return normalizeCellTextLineEndings(value);
+}
+
 function areMergedRangesEqual(
     leftSheet: SheetSnapshot | null,
     rightSheet: SheetSnapshot | null
@@ -71,7 +79,9 @@ function areCellsEqual(
     }
 
     return (
-        leftCell.displayValue === rightCell.displayValue && leftCell.formula === rightCell.formula
+        normalizeComparisonText(leftCell.displayValue) ===
+            normalizeComparisonText(rightCell.displayValue) &&
+        normalizeComparisonText(leftCell.formula) === normalizeComparisonText(rightCell.formula)
     );
 }
 
@@ -105,7 +115,9 @@ function buildRowSnapshots(sheet: SheetSnapshot | null): RowSnapshot[] {
         const signature = cells
             .map(
                 (cell) =>
-                    `${cell.columnNumber}\u0000${cell.displayValue}\u0000${cell.formula ?? ""}`
+                    `${cell.columnNumber}\u0000${normalizeComparisonText(cell.displayValue) ?? ""}\u0000${
+                        normalizeComparisonText(cell.formula) ?? ""
+                    }`
             )
             .join("\n");
 
@@ -146,15 +158,21 @@ function buildColumnSnapshots(
             return leftRowNumber - rightRowNumber;
         });
         const cellsByRow = new Map(
-            cells.map((cell) => [
-                alignedRowNumbersBySourceRow.get(cell.rowNumber) ?? cell.rowNumber,
-                cell,
-            ] as const)
+            cells.map(
+                (cell) =>
+                    [
+                        alignedRowNumbersBySourceRow.get(cell.rowNumber) ?? cell.rowNumber,
+                        cell,
+                    ] as const
+            )
         );
         const signature = cells
             .map((cell) => {
-                const rowNumber = alignedRowNumbersBySourceRow.get(cell.rowNumber) ?? cell.rowNumber;
-                return `${rowNumber}\u0000${cell.displayValue}\u0000${cell.formula ?? ""}`;
+                const rowNumber =
+                    alignedRowNumbersBySourceRow.get(cell.rowNumber) ?? cell.rowNumber;
+                return `${rowNumber}\u0000${normalizeComparisonText(cell.displayValue) ?? ""}\u0000${
+                    normalizeComparisonText(cell.formula) ?? ""
+                }`;
             })
             .join("\n");
 
@@ -252,8 +270,7 @@ function backtrackExactDiff(
         if (
             diagonal === -distance ||
             (diagonal !== distance &&
-                previousFurthestX[offset + diagonal - 1] <
-                    previousFurthestX[offset + diagonal + 1])
+                previousFurthestX[offset + diagonal - 1] < previousFurthestX[offset + diagonal + 1])
         ) {
             previousDiagonal = diagonal + 1;
         } else {
@@ -322,10 +339,10 @@ function getRowGapCost(row: RowSnapshot): number {
 }
 
 function getCellMismatchCost(leftCell: CellSnapshot, rightCell: CellSnapshot): number {
-    const leftDisplayValue = leftCell.displayValue.trim();
-    const rightDisplayValue = rightCell.displayValue.trim();
-    const leftFormula = (leftCell.formula ?? "").trim();
-    const rightFormula = (rightCell.formula ?? "").trim();
+    const leftDisplayValue = normalizeComparisonText(leftCell.displayValue)?.trim() ?? "";
+    const rightDisplayValue = normalizeComparisonText(rightCell.displayValue)?.trim() ?? "";
+    const leftFormula = normalizeComparisonText(leftCell.formula)?.trim() ?? "";
+    const rightFormula = normalizeComparisonText(rightCell.formula)?.trim() ?? "";
 
     if (
         (leftDisplayValue.length > 0 &&
@@ -369,7 +386,11 @@ function getRowPairCost(leftRow: RowSnapshot, rightRow: RowSnapshot): number {
         mismatchCost += leftCell && rightCell ? getCellMismatchCost(leftCell, rightCell) : 3;
     }
 
-    if (sharedColumnCount === 0 && leftRow.nonEmptyCellCount > 0 && rightRow.nonEmptyCellCount > 0) {
+    if (
+        sharedColumnCount === 0 &&
+        leftRow.nonEmptyCellCount > 0 &&
+        rightRow.nonEmptyCellCount > 0
+    ) {
         return getRowGapCost(leftRow) + getRowGapCost(rightRow) + 1;
     }
 
@@ -616,8 +637,7 @@ function alignColumnSegment(
                 costs[leftIndex - 1]![rightIndex - 1]! +
                 getColumnPairCost(leftColumns[leftIndex - 1]!, rightColumns[rightIndex - 1]!);
             const deleteCost =
-                costs[leftIndex - 1]![rightIndex]! +
-                getColumnGapCost(leftColumns[leftIndex - 1]!);
+                costs[leftIndex - 1]![rightIndex]! + getColumnGapCost(leftColumns[leftIndex - 1]!);
             const insertCost =
                 costs[leftIndex]![rightIndex - 1]! +
                 getColumnGapCost(rightColumns[rightIndex - 1]!);

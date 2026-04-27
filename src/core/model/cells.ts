@@ -32,3 +32,7 @@ export function getColumnNumber(columnLabel: string): number | null {
 export function getCellAddress(rowNumber: number, columnNumber: number): string {
     return `${getColumnLabel(columnNumber)}${rowNumber}`;
 }
+
+export function normalizeCellTextLineEndings(value: string): string {
+    return value.replace(/\r\n?/g, "\n");
+}
