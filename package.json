@@ -143,6 +143,11 @@
             "%configuration.displayLanguage.en%",
             "%configuration.displayLanguage.zhCn%"
           ]
+        },
+        "xlsx-diff.compareFormula": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "%configuration.compareFormula.description%"
         }
       }
     }

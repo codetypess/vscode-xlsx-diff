@@ -1,7 +1,6 @@
 import {
     createCellKey,
     getCellAddress,
-    hasComparableCellContent,
     normalizeCellTextLineEndings,
 } from "../model/cells";
 import {
@@ -46,12 +45,97 @@ interface ColumnPairing {
     right: ColumnSnapshot | null;
 }
 
+export interface WorkbookDiffBuildOptions {
+    compareFormula?: boolean;
+}
+
+interface NormalizedWorkbookDiffBuildOptions {
+    compareFormula: boolean;
+}
+
 function normalizeComparisonText(value: string | null | undefined): string | null {
     if (value === null || value === undefined) {
         return null;
     }
 
     return normalizeCellTextLineEndings(value);
+}
+
+function normalizeWorkbookDiffBuildOptions(
+    options: WorkbookDiffBuildOptions | undefined
+): NormalizedWorkbookDiffBuildOptions {
+    return {
+        compareFormula: options?.compareFormula ?? false,
+    };
+}
+
+function hasComparableCellContentForDiff(
+    displayValue: string | null | undefined,
+    formula: string | null | undefined,
+    options: NormalizedWorkbookDiffBuildOptions
+): boolean {
+    return (
+        (options.compareFormula && formula !== null && formula !== undefined) ||
+        (displayValue !== null && displayValue !== undefined && displayValue !== "")
+    );
+}
+
+function getComparableFormulaText(
+    formula: string | null | undefined,
+    options: NormalizedWorkbookDiffBuildOptions
+): string | null {
+    if (!options.compareFormula) {
+        return null;
+    }
+
+    return normalizeComparisonText(formula);
+}
+
+function getCellComparisonSignature(
+    cell: CellSnapshot,
+    index: number,
+    options: NormalizedWorkbookDiffBuildOptions
+): string {
+    return `${index}\u0000${normalizeComparisonText(cell.displayValue) ?? ""}\u0000${
+        getComparableFormulaText(cell.formula, options) ?? ""
+    }`;
+}
+
+function getSheetSignatureForDiff(
+    sheet: SheetSnapshot,
+    options: NormalizedWorkbookDiffBuildOptions
+): string {
+    if (options.compareFormula) {
+        return sheet.signature;
+    }
+
+    const comparableCells = Object.values(sheet.cells)
+        .filter((cell) => hasComparableCellContentForDiff(cell.displayValue, cell.formula, options))
+        .sort((left, right) => left.key.localeCompare(right.key));
+    const comparableRowCount = comparableCells.reduce(
+        (maxRowNumber, cell) => Math.max(maxRowNumber, cell.rowNumber),
+        0
+    );
+    const comparableColumnCount = comparableCells.reduce(
+        (maxColumnNumber, cell) => Math.max(maxColumnNumber, cell.columnNumber),
+        0
+    );
+
+    return [
+        `${comparableRowCount}:${comparableColumnCount}`,
+        `visibility:${sheet.visibility}`,
+        ...sheet.mergedRanges.map((mergedRange) => `merge:${mergedRange}`),
+        sheet.freezePane
+            ? `freeze:${sheet.freezePane.columnCount}:${sheet.freezePane.rowCount}:${sheet.freezePane.topLeftCell}:${
+                  sheet.freezePane.activePane ?? ""
+              }`
+            : null,
+        ...comparableCells.map((cell) =>
+            `${cell.address}\u0000${normalizeComparisonText(cell.displayValue) ?? ""}`
+        ),
+    ]
+        .filter((part): part is string => part !== null)
+        .join("\n");
 }
 
 function areMergedRangesEqual(
@@ -126,13 +210,28 @@ function areDefinedNamesEqual(
 
 function areCellsEqual(
     leftCell: CellSnapshot | undefined,
-    rightCell: CellSnapshot | undefined
+    rightCell: CellSnapshot | undefined,
+    comparisonOptions: NormalizedWorkbookDiffBuildOptions
 ): boolean {
-    if (leftCell && !hasComparableCellContent(leftCell.displayValue, leftCell.formula)) {
+    if (
+        leftCell &&
+        !hasComparableCellContentForDiff(
+            leftCell.displayValue,
+            leftCell.formula,
+            comparisonOptions
+        )
+    ) {
         leftCell = undefined;
     }
 
-    if (rightCell && !hasComparableCellContent(rightCell.displayValue, rightCell.formula)) {
+    if (
+        rightCell &&
+        !hasComparableCellContentForDiff(
+            rightCell.displayValue,
+            rightCell.formula,
+            comparisonOptions
+        )
+    ) {
         rightCell = undefined;
     }
 
@@ -147,7 +246,8 @@ function areCellsEqual(
     return (
         normalizeComparisonText(leftCell.displayValue) ===
             normalizeComparisonText(rightCell.displayValue) &&
-        normalizeComparisonText(leftCell.formula) === normalizeComparisonText(rightCell.formula)
+        getComparableFormulaText(leftCell.formula, comparisonOptions) ===
+            getComparableFormulaText(rightCell.formula, comparisonOptions)
     );
 }
 
@@ -159,7 +259,10 @@ function createSheetKey(
     return `${kind}:${leftSheetName ?? "-"}:${rightSheetName ?? "-"}`;
 }
 
-function buildRowSnapshots(sheet: SheetSnapshot | null): RowSnapshot[] {
+function buildRowSnapshots(
+    sheet: SheetSnapshot | null,
+    comparisonOptions: NormalizedWorkbookDiffBuildOptions
+): RowSnapshot[] {
     if (!sheet || sheet.rowCount <= 0) {
         return [];
     }
@@ -168,7 +271,13 @@ function buildRowSnapshots(sheet: SheetSnapshot | null): RowSnapshot[] {
     let maxComparableRowNumber = 0;
 
     for (const cell of Object.values(sheet.cells)) {
-        if (!hasComparableCellContent(cell.displayValue, cell.formula)) {
+        if (
+            !hasComparableCellContentForDiff(
+                cell.displayValue,
+                cell.formula,
+                comparisonOptions
+            )
+        ) {
             continue;
         }
 
@@ -189,12 +298,7 @@ function buildRowSnapshots(sheet: SheetSnapshot | null): RowSnapshot[] {
         );
         const cellsByColumn = new Map(cells.map((cell) => [cell.columnNumber, cell] as const));
         const signature = cells
-            .map(
-                (cell) =>
-                    `${cell.columnNumber}\u0000${normalizeComparisonText(cell.displayValue) ?? ""}\u0000${
-                        normalizeComparisonText(cell.formula) ?? ""
-                    }`
-            )
+            .map((cell) => getCellComparisonSignature(cell, cell.columnNumber, comparisonOptions))
             .join("\n");
 
         rows.push({
@@ -210,7 +314,8 @@ function buildRowSnapshots(sheet: SheetSnapshot | null): RowSnapshot[] {
 
 function buildColumnSnapshots(
     sheet: SheetSnapshot | null,
-    alignedRowNumbersBySourceRow: ReadonlyMap<number, number>
+    alignedRowNumbersBySourceRow: ReadonlyMap<number, number>,
+    comparisonOptions: NormalizedWorkbookDiffBuildOptions
 ): ColumnSnapshot[] {
     if (!sheet || sheet.columnCount <= 0) {
         return [];
@@ -220,7 +325,13 @@ function buildColumnSnapshots(
     let maxComparableColumnNumber = 0;
 
     for (const cell of Object.values(sheet.cells)) {
-        if (!hasComparableCellContent(cell.displayValue, cell.formula)) {
+        if (
+            !hasComparableCellContentForDiff(
+                cell.displayValue,
+                cell.formula,
+                comparisonOptions
+            )
+        ) {
             continue;
         }
 
@@ -256,9 +367,7 @@ function buildColumnSnapshots(
             .map((cell) => {
                 const rowNumber =
                     alignedRowNumbersBySourceRow.get(cell.rowNumber) ?? cell.rowNumber;
-                return `${rowNumber}\u0000${normalizeComparisonText(cell.displayValue) ?? ""}\u0000${
-                    normalizeComparisonText(cell.formula) ?? ""
-                }`;
+                return getCellComparisonSignature(cell, rowNumber, comparisonOptions);
             })
             .join("\n");
 
@@ -424,11 +533,16 @@ function getRowGapCost(row: RowSnapshot): number {
     return Math.max(2, row.nonEmptyCellCount * 2);
 }
 
-function getCellMismatchCost(leftCell: CellSnapshot, rightCell: CellSnapshot): number {
+function getCellMismatchCost(
+    leftCell: CellSnapshot,
+    rightCell: CellSnapshot,
+    comparisonOptions: NormalizedWorkbookDiffBuildOptions
+): number {
     const leftDisplayValue = normalizeComparisonText(leftCell.displayValue)?.trim() ?? "";
     const rightDisplayValue = normalizeComparisonText(rightCell.displayValue)?.trim() ?? "";
-    const leftFormula = normalizeComparisonText(leftCell.formula)?.trim() ?? "";
-    const rightFormula = normalizeComparisonText(rightCell.formula)?.trim() ?? "";
+    const leftFormula = getComparableFormulaText(leftCell.formula, comparisonOptions)?.trim() ?? "";
+    const rightFormula =
+        getComparableFormulaText(rightCell.formula, comparisonOptions)?.trim() ?? "";
 
     if (
         (leftDisplayValue.length > 0 &&
@@ -445,7 +559,11 @@ function getCellMismatchCost(leftCell: CellSnapshot, rightCell: CellSnapshot): n
     return 2;
 }
 
-function getRowPairCost(leftRow: RowSnapshot, rightRow: RowSnapshot): number {
+function getRowPairCost(
+    leftRow: RowSnapshot,
+    rightRow: RowSnapshot,
+    comparisonOptions: NormalizedWorkbookDiffBuildOptions
+): number {
     if (leftRow.signature === rightRow.signature) {
         return 0;
     }
@@ -465,11 +583,14 @@ function getRowPairCost(leftRow: RowSnapshot, rightRow: RowSnapshot): number {
             sharedColumnCount += 1;
         }
 
-        if (areCellsEqual(leftCell, rightCell)) {
+        if (areCellsEqual(leftCell, rightCell, comparisonOptions)) {
             continue;
         }
 
-        mismatchCost += leftCell && rightCell ? getCellMismatchCost(leftCell, rightCell) : 3;
+        mismatchCost +=
+            leftCell && rightCell
+                ? getCellMismatchCost(leftCell, rightCell, comparisonOptions)
+                : 3;
     }
 
     if (
@@ -483,7 +604,11 @@ function getRowPairCost(leftRow: RowSnapshot, rightRow: RowSnapshot): number {
     return mismatchCost;
 }
 
-function alignRowSegment(leftRows: RowSnapshot[], rightRows: RowSnapshot[]): RowPairing[] {
+function alignRowSegment(
+    leftRows: RowSnapshot[],
+    rightRows: RowSnapshot[],
+    comparisonOptions: NormalizedWorkbookDiffBuildOptions
+): RowPairing[] {
     if (leftRows.length === 0) {
         return rightRows.map((row) => ({
             left: null,
@@ -520,7 +645,11 @@ function alignRowSegment(leftRows: RowSnapshot[], rightRows: RowSnapshot[]): Row
         for (let rightIndex = 1; rightIndex <= rightRows.length; rightIndex += 1) {
             const pairCost =
                 costs[leftIndex - 1]![rightIndex - 1]! +
-                getRowPairCost(leftRows[leftIndex - 1]!, rightRows[rightIndex - 1]!);
+                getRowPairCost(
+                    leftRows[leftIndex - 1]!,
+                    rightRows[rightIndex - 1]!,
+                    comparisonOptions
+                );
             const deleteCost =
                 costs[leftIndex - 1]![rightIndex]! + getRowGapCost(leftRows[leftIndex - 1]!);
             const insertCost =
@@ -581,10 +710,11 @@ function alignRowSegment(leftRows: RowSnapshot[], rightRows: RowSnapshot[]): Row
 
 function buildAlignedRows(
     leftSheet: SheetSnapshot | null,
-    rightSheet: SheetSnapshot | null
+    rightSheet: SheetSnapshot | null,
+    comparisonOptions: NormalizedWorkbookDiffBuildOptions
 ): RowPairing[] {
-    const leftRows = buildRowSnapshots(leftSheet);
-    const rightRows = buildRowSnapshots(rightSheet);
+    const leftRows = buildRowSnapshots(leftSheet, comparisonOptions);
+    const rightRows = buildRowSnapshots(rightSheet, comparisonOptions);
 
     if (leftRows.length === 0) {
         return rightRows.map((row) => ({
@@ -610,7 +740,7 @@ function buildAlignedRows(
             return;
         }
 
-        alignedRows.push(...alignRowSegment(pendingLeft, pendingRight));
+        alignedRows.push(...alignRowSegment(pendingLeft, pendingRight, comparisonOptions));
         pendingLeft = [];
         pendingRight = [];
     };
@@ -642,7 +772,11 @@ function getColumnGapCost(column: ColumnSnapshot): number {
     return Math.max(2, column.nonEmptyCellCount * 2);
 }
 
-function getColumnPairCost(leftColumn: ColumnSnapshot, rightColumn: ColumnSnapshot): number {
+function getColumnPairCost(
+    leftColumn: ColumnSnapshot,
+    rightColumn: ColumnSnapshot,
+    comparisonOptions: NormalizedWorkbookDiffBuildOptions
+): number {
     if (leftColumn.signature === rightColumn.signature) {
         return 0;
     }
@@ -662,11 +796,14 @@ function getColumnPairCost(leftColumn: ColumnSnapshot, rightColumn: ColumnSnapsh
             sharedRowCount += 1;
         }
 
-        if (areCellsEqual(leftCell, rightCell)) {
+        if (areCellsEqual(leftCell, rightCell, comparisonOptions)) {
             continue;
         }
 
-        mismatchCost += leftCell && rightCell ? getCellMismatchCost(leftCell, rightCell) : 3;
+        mismatchCost +=
+            leftCell && rightCell
+                ? getCellMismatchCost(leftCell, rightCell, comparisonOptions)
+                : 3;
     }
 
     if (
@@ -682,7 +819,8 @@ function getColumnPairCost(leftColumn: ColumnSnapshot, rightColumn: ColumnSnapsh
 
 function alignColumnSegment(
     leftColumns: ColumnSnapshot[],
-    rightColumns: ColumnSnapshot[]
+    rightColumns: ColumnSnapshot[],
+    comparisonOptions: NormalizedWorkbookDiffBuildOptions
 ): ColumnPairing[] {
     if (leftColumns.length === 0) {
         return rightColumns.map((column) => ({
@@ -721,7 +859,11 @@ function alignColumnSegment(
         for (let rightIndex = 1; rightIndex <= rightColumns.length; rightIndex += 1) {
             const pairCost =
                 costs[leftIndex - 1]![rightIndex - 1]! +
-                getColumnPairCost(leftColumns[leftIndex - 1]!, rightColumns[rightIndex - 1]!);
+                getColumnPairCost(
+                    leftColumns[leftIndex - 1]!,
+                    rightColumns[rightIndex - 1]!,
+                    comparisonOptions
+                );
             const deleteCost =
                 costs[leftIndex - 1]![rightIndex]! + getColumnGapCost(leftColumns[leftIndex - 1]!);
             const insertCost =
@@ -801,10 +943,19 @@ function buildAlignedColumns(
     leftSheet: SheetSnapshot | null,
     rightSheet: SheetSnapshot | null,
     leftAlignedRowNumbersBySourceRow: ReadonlyMap<number, number>,
-    rightAlignedRowNumbersBySourceRow: ReadonlyMap<number, number>
+    rightAlignedRowNumbersBySourceRow: ReadonlyMap<number, number>,
+    comparisonOptions: NormalizedWorkbookDiffBuildOptions
 ): ColumnPairing[] {
-    const leftColumns = buildColumnSnapshots(leftSheet, leftAlignedRowNumbersBySourceRow);
-    const rightColumns = buildColumnSnapshots(rightSheet, rightAlignedRowNumbersBySourceRow);
+    const leftColumns = buildColumnSnapshots(
+        leftSheet,
+        leftAlignedRowNumbersBySourceRow,
+        comparisonOptions
+    );
+    const rightColumns = buildColumnSnapshots(
+        rightSheet,
+        rightAlignedRowNumbersBySourceRow,
+        comparisonOptions
+    );
 
     if (leftColumns.length === 0) {
         return rightColumns.map((column) => ({
@@ -830,7 +981,7 @@ function buildAlignedColumns(
             return;
         }
 
-        alignedColumns.push(...alignColumnSegment(pendingLeft, pendingRight));
+        alignedColumns.push(...alignColumnSegment(pendingLeft, pendingRight, comparisonOptions));
         pendingLeft = [];
         pendingRight = [];
     };
@@ -862,18 +1013,20 @@ function createSheetDiff(
     kind: SheetComparisonKind,
     leftSheet: SheetSnapshot | null,
     rightSheet: SheetSnapshot | null,
+    comparisonOptions: NormalizedWorkbookDiffBuildOptions,
     options: {
         sheetOrderChanged?: boolean;
     } = {}
 ): SheetDiffModel {
-    const alignedRowPairs = buildAlignedRows(leftSheet, rightSheet);
+    const alignedRowPairs = buildAlignedRows(leftSheet, rightSheet, comparisonOptions);
     const leftAlignedRowNumbersBySourceRow = createAlignedRowNumberMap(alignedRowPairs, "left");
     const rightAlignedRowNumbersBySourceRow = createAlignedRowNumberMap(alignedRowPairs, "right");
     const alignedColumnPairs = buildAlignedColumns(
         leftSheet,
         rightSheet,
         leftAlignedRowNumbersBySourceRow,
-        rightAlignedRowNumbersBySourceRow
+        rightAlignedRowNumbersBySourceRow,
+        comparisonOptions
     );
     const alignedRows: DiffRowAlignment[] = [];
     const alignedColumns: DiffColumnAlignment[] = alignedColumnPairs.map((pair, index) => ({
@@ -933,7 +1086,7 @@ function createSheetDiff(
                     ? pair.right?.cellsByColumn.get(alignedColumn.rightColumnNumber)
                     : undefined;
 
-            if (areCellsEqual(leftCell, rightCell)) {
+            if (areCellsEqual(leftCell, rightCell, comparisonOptions)) {
                 continue;
             }
 
@@ -986,8 +1139,10 @@ function createSheetDiff(
 
 export function buildWorkbookDiff(
     leftWorkbook: WorkbookSnapshot,
-    rightWorkbook: WorkbookSnapshot
+    rightWorkbook: WorkbookSnapshot,
+    options?: WorkbookDiffBuildOptions
 ): WorkbookDiffModel {
+    const comparisonOptions = normalizeWorkbookDiffBuildOptions(options);
     const rightByName = new Map(
         rightWorkbook.sheets.map((sheet, index) => [sheet.name, { sheet, index }] as const)
     );
@@ -1002,7 +1157,7 @@ export function buildWorkbookDiff(
         const sameNameEntry = rightByName.get(leftSheet.name);
         if (sameNameEntry) {
             sheets.push(
-                createSheetDiff("matched", leftSheet, sameNameEntry.sheet, {
+                createSheetDiff("matched", leftSheet, sameNameEntry.sheet, comparisonOptions, {
                     sheetOrderChanged: leftIndex !== sameNameEntry.index,
                 })
             );
@@ -1028,9 +1183,10 @@ export function buildWorkbookDiff(
     >();
 
     for (const rightEntry of remainingRight) {
-        const bucket = rightBySignature.get(rightEntry.sheet.signature) ?? [];
+        const signature = getSheetSignatureForDiff(rightEntry.sheet, comparisonOptions);
+        const bucket = rightBySignature.get(signature) ?? [];
         bucket.push(rightEntry);
-        rightBySignature.set(rightEntry.sheet.signature, bucket);
+        rightBySignature.set(signature, bucket);
     }
 
     const removedLeft: Array<{
@@ -1040,14 +1196,21 @@ export function buildWorkbookDiff(
     const renamedRightNames = new Set<string>();
 
     for (const leftEntry of unmatchedLeft) {
-        const bucket = rightBySignature.get(leftEntry.sheet.signature);
+        const signature = getSheetSignatureForDiff(leftEntry.sheet, comparisonOptions);
+        const bucket = rightBySignature.get(signature);
         const rightEntry = bucket?.shift();
 
         if (rightEntry) {
             sheets.push(
-                createSheetDiff("renamed", leftEntry.sheet, rightEntry.sheet, {
-                    sheetOrderChanged: leftEntry.index !== rightEntry.index,
-                })
+                createSheetDiff(
+                    "renamed",
+                    leftEntry.sheet,
+                    rightEntry.sheet,
+                    comparisonOptions,
+                    {
+                        sheetOrderChanged: leftEntry.index !== rightEntry.index,
+                    }
+                )
             );
             renamedRightNames.add(rightEntry.sheet.name);
             continue;
@@ -1057,7 +1220,7 @@ export function buildWorkbookDiff(
     }
 
     for (const leftEntry of removedLeft) {
-        sheets.push(createSheetDiff("removed", leftEntry.sheet, null));
+        sheets.push(createSheetDiff("removed", leftEntry.sheet, null, comparisonOptions));
     }
 
     for (const rightEntry of remainingRight) {
@@ -1065,7 +1228,7 @@ export function buildWorkbookDiff(
             continue;
         }
 
-        sheets.push(createSheetDiff("added", null, rightEntry.sheet));
+        sheets.push(createSheetDiff("added", null, rightEntry.sheet, comparisonOptions));
     }
 
     const diffSheets = sheets.filter(

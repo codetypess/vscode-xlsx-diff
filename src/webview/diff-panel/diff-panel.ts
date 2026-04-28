@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import * as vscode from "vscode";
+import { getCompareFormulaEnabled } from "../../compare-formula";
 import { WEBVIEW_TYPE_DIFF_PANEL } from "../../constants";
 import { buildWorkbookDiff } from "../../core/diff/build-workbook-diff";
 import { loadWorkbookSnapshot } from "../../core/fastxlsx/load-workbook-snapshot";
@@ -421,7 +422,9 @@ export class XlsxDiffPanel {
             loadWorkbookSnapshot(this.rightFileUri),
         ]);
 
-        this.diffModel = buildWorkbookDiff(leftWorkbook, rightWorkbook);
+        this.diffModel = buildWorkbookDiff(leftWorkbook, rightWorkbook, {
+            compareFormula: getCompareFormulaEnabled(),
+        });
         this.activeSheetKey =
             this.diffModel.sheets.find((sheet) => sheet.key === this.activeSheetKey)?.key ??
             this.diffModel.sheets[0]?.key ??

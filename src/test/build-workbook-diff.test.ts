@@ -10,7 +10,8 @@ function createCell(
     rowNumber: number,
     columnNumber: number,
     value: string,
-    styleId: number | null = null
+    styleId: number | null = null,
+    formula: string | null = null
 ): CellSnapshot {
     return {
         key: createCellKey(rowNumber, columnNumber),
@@ -18,7 +19,7 @@ function createCell(
         columnNumber,
         address: getCellAddress(rowNumber, columnNumber),
         displayValue: value,
-        formula: null,
+        formula,
         styleId,
     };
 }
@@ -268,6 +269,96 @@ suite("Workbook diff row alignment", () => {
         assert.strictEqual(diff.totalDiffCells, 0);
         assert.strictEqual(diff.totalDiffRows, 0);
         assert.strictEqual(diff.totalDiffSheets, 0);
+    });
+
+    test("ignores formula-only cell differences by default when display values match", () => {
+        const leftCell = createCell(1, 1, "same", null, "=UPPER(\"same\")");
+        const rightCell = createCell(1, 1, "same", null, "=\"same\"");
+        const diff = buildWorkbookDiff(
+            createWorkbook("left.xlsx", [
+                {
+                    name: "Sheet1",
+                    rowCount: 1,
+                    columnCount: 1,
+                    visibility: "visible",
+                    mergedRanges: [],
+                    freezePane: null,
+                    cells: {
+                        [leftCell.key]: leftCell,
+                    },
+                    signature: "Sheet1:formula:left",
+                },
+            ]),
+            createWorkbook("right.xlsx", [
+                {
+                    name: "Sheet1",
+                    rowCount: 1,
+                    columnCount: 1,
+                    visibility: "visible",
+                    mergedRanges: [],
+                    freezePane: null,
+                    cells: {
+                        [rightCell.key]: rightCell,
+                    },
+                    signature: "Sheet1:formula:right",
+                },
+            ])
+        );
+        const sheet = diff.sheets[0]!;
+
+        assert.deepStrictEqual(sheet.diffRows, []);
+        assert.deepStrictEqual(sheet.diffCells, []);
+        assert.strictEqual(diff.totalDiffCells, 0);
+        assert.strictEqual(diff.totalDiffRows, 0);
+        assert.strictEqual(diff.totalDiffSheets, 0);
+    });
+
+    test("can compare formula differences when the option is enabled", () => {
+        const leftCell = createCell(1, 1, "same", null, "=UPPER(\"same\")");
+        const rightCell = createCell(1, 1, "same", null, "=\"same\"");
+        const diff = buildWorkbookDiff(
+            createWorkbook("left.xlsx", [
+                {
+                    name: "Sheet1",
+                    rowCount: 1,
+                    columnCount: 1,
+                    visibility: "visible",
+                    mergedRanges: [],
+                    freezePane: null,
+                    cells: {
+                        [leftCell.key]: leftCell,
+                    },
+                    signature: "Sheet1:formula:left",
+                },
+            ]),
+            createWorkbook("right.xlsx", [
+                {
+                    name: "Sheet1",
+                    rowCount: 1,
+                    columnCount: 1,
+                    visibility: "visible",
+                    mergedRanges: [],
+                    freezePane: null,
+                    cells: {
+                        [rightCell.key]: rightCell,
+                    },
+                    signature: "Sheet1:formula:right",
+                },
+            ]),
+            {
+                compareFormula: true,
+            }
+        );
+        const sheet = diff.sheets[0]!;
+
+        assert.deepStrictEqual(sheet.diffRows, [1]);
+        assert.deepStrictEqual(
+            sheet.diffCells.map((cell) => [cell.rowNumber, cell.columnNumber]),
+            [[1, 1]]
+        );
+        assert.strictEqual(diff.totalDiffCells, 1);
+        assert.strictEqual(diff.totalDiffRows, 1);
+        assert.strictEqual(diff.totalDiffSheets, 1);
     });
 
     test("marks freeze-pane-only sheet differences as structural diffs", () => {

@@ -81,6 +81,7 @@ Git support works with VS Code's built-in Git extension. SVN support works with 
 | Setting                     | Values                | Default | Description                                                                                                         |
 | --------------------------- | --------------------- | ------- | ------------------------------------------------------------------------------------------------------------------- |
 | `xlsx-diff.displayLanguage` | `auto`, `en`, `zh-CN` | `auto`  | Controls the language used in diff panel prompts and UI labels. `auto` follows the active VS Code display language. |
+| `xlsx-diff.compareFormula` | `boolean` | `false` | Controls whether formula changes count as cell diffs when the displayed value is unchanged. |
 
 ---
 

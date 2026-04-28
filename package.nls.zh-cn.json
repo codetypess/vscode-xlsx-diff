@@ -6,6 +6,7 @@
   "configuration.displayLanguage.auto": "跟随当前 VS Code 显示语言。",
   "configuration.displayLanguage.en": "始终使用英文。",
   "configuration.displayLanguage.zhCn": "始终使用简体中文。",
+  "configuration.compareFormula.description": "启用后，即使显示值没变，只要公式发生变化，XLSX Diff 也会把该单元格视为差异。",
   "command.category": "XLSX 对比",
   "customEditor.xlsx.displayName": "XLSX 编辑器",
   "command.compareTwoFiles.title": "比较两个 XLSX 文件",

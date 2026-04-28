@@ -3,7 +3,7 @@ import type {
     SheetCellAlignmentsSnapshot,
     SheetColumnAlignmentsSnapshot,
     SheetRowAlignmentsSnapshot,
-} from "./alignment";
+} from "./alignment.js";
 
 export type SheetComparisonKind = "matched" | "renamed" | "added" | "removed";
 export type CellDiffStatus = "equal" | "modified" | "added" | "removed";

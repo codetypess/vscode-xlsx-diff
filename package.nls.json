@@ -6,6 +6,7 @@
   "configuration.displayLanguage.auto": "Follow the current VS Code display language.",
   "configuration.displayLanguage.en": "Always use English.",
   "configuration.displayLanguage.zhCn": "Always use Simplified Chinese.",
+  "configuration.compareFormula.description": "When enabled, XLSX Diff treats formula changes as cell differences even when the displayed value is unchanged.",
   "command.category": "XLSX Diff",
   "customEditor.xlsx.displayName": "XLSX Editor",
   "command.compareTwoFiles.title": "Compare Two XLSX Files",
