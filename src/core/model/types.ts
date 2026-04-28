@@ -47,6 +47,8 @@ export interface DefinedNameSnapshot {
     hidden: boolean;
 }
 
+export type SheetRowHeightsSnapshot = Record<string, number | null>;
+
 export interface SheetSnapshot {
     name: string;
     rowCount: number;
@@ -54,6 +56,7 @@ export interface SheetSnapshot {
     visibility: SheetVisibility;
     mergedRanges: string[];
     columnWidths?: Array<number | null>;
+    rowHeights?: SheetRowHeightsSnapshot;
     freezePane?: SheetFreezePaneSnapshot | null;
     cells: Record<string, CellSnapshot>;
     signature: string;
@@ -110,6 +113,7 @@ export interface EditorActiveSheetView {
     columnCount: number;
     columns: string[];
     columnWidths?: Array<number | null>;
+    rowHeights?: SheetRowHeightsSnapshot;
     cells: Record<string, CellSnapshot>;
     freezePane: SheetFreezePaneSnapshot | null;
 }

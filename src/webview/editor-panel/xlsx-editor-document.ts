@@ -145,6 +145,11 @@ function cloneViewEdit(edit: SheetViewEdit): SheetViewEdit {
                   columnWidths: edit.columnWidths.map((columnWidth) => columnWidth ?? null),
               }
             : {}),
+        ...(edit.rowHeights
+            ? {
+                  rowHeights: { ...edit.rowHeights },
+              }
+            : {}),
     };
 }
 
@@ -167,6 +172,11 @@ function areViewEditsEqual(
             (edit.columnWidths ?? []).every(
                 (columnWidth, columnIndex) =>
                     columnWidth === (other.columnWidths?.[columnIndex] ?? null)
+            ) &&
+            Object.keys(edit.rowHeights ?? {}).length ===
+                Object.keys(other.rowHeights ?? {}).length &&
+            Object.entries(edit.rowHeights ?? {}).every(
+                ([rowNumber, rowHeight]) => rowHeight === (other.rowHeights?.[rowNumber] ?? null)
             )
         );
     });

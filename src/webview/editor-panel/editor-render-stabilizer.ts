@@ -29,6 +29,15 @@ export function stabilizeIncomingRenderModel(
     const reusedActiveSheetColumnWidths =
         previousColumnWidths.length === nextColumnWidths.length &&
         previousColumnWidths.every((width, index) => width === nextColumnWidths[index]);
+    const previousRowHeights = previousModel.activeSheet.rowHeights ?? {};
+    const nextRowHeights = nextModel.activeSheet.rowHeights ?? {};
+    const previousRowHeightKeys = Object.keys(previousRowHeights);
+    const nextRowHeightKeys = Object.keys(nextRowHeights);
+    const reusedActiveSheetRowHeights =
+        previousRowHeightKeys.length === nextRowHeightKeys.length &&
+        previousRowHeightKeys.every(
+            (rowNumber) => previousRowHeights[rowNumber] === nextRowHeights[rowNumber]
+        );
 
     return {
         ...nextModel,
@@ -41,6 +50,9 @@ export function stabilizeIncomingRenderModel(
             columnWidths: reusedActiveSheetColumnWidths
                 ? previousModel.activeSheet.columnWidths
                 : nextModel.activeSheet.columnWidths,
+            rowHeights: reusedActiveSheetRowHeights
+                ? previousModel.activeSheet.rowHeights
+                : nextModel.activeSheet.rowHeights,
         },
     };
 }

@@ -30,6 +30,8 @@ suite("Workbook edit writer", () => {
             deleteRow(): void;
             insertColumn(): void;
             deleteColumn(): void;
+            setColumnWidth(): void;
+            setRowHeight(): void;
             freezePane(): void;
             unfreezePane(): void;
         }
@@ -80,6 +82,12 @@ suite("Workbook edit writer", () => {
                     deleteColumn() {
                         mutationContexts.push(inBatch);
                     },
+                    setColumnWidth() {
+                        mutationContexts.push(inBatch);
+                    },
+                    setRowHeight() {
+                        mutationContexts.push(inBatch);
+                    },
                     freezePane() {
                         mutationContexts.push(inBatch);
                     },
@@ -115,11 +123,15 @@ suite("Workbook edit writer", () => {
                     sheetEdits: [],
                     viewEdits: [
                         {
+                            columnWidths: [12],
                             sheetKey: "sheet-1",
                             sheetName: "Sheet1",
                             freezePane: {
                                 columnCount: 1,
                                 rowCount: 1,
+                            },
+                            rowHeights: {
+                                "1": 18,
                             },
                         },
                     ],
@@ -127,7 +139,7 @@ suite("Workbook edit writer", () => {
             );
 
             assert.strictEqual(batchCalls, 1);
-            assert.deepStrictEqual(mutationContexts, [true, true]);
+            assert.deepStrictEqual(mutationContexts, [true, true, true, true]);
             assert.strictEqual(saveCalls.length, 1);
         } finally {
             (

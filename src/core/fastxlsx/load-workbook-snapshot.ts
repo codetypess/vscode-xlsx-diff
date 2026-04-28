@@ -36,6 +36,7 @@ interface SheetReader {
     getFormula(rowNumber: number, columnNumber: number): string | null;
     getStyleId(rowNumber: number, columnNumber: number): number | null;
     getColumnWidth(columnNumber: number): number | null;
+    getRowHeight(rowNumber: number): number | null;
     getMergedRanges(): string[];
     getFreezePane(): SheetFreezePaneSnapshot | null;
 }
@@ -106,6 +107,11 @@ function loadSheetSnapshot(workbook: WorkbookReader, sheetName: string): SheetSn
     const columnWidths = Array.from({ length: sheet.columnCount }, (_, index) =>
         sheet.getColumnWidth(index + 1)
     );
+    const rowHeights = Object.fromEntries(
+        Array.from({ length: sheet.rowCount }, (_, index) => index + 1)
+            .map((rowNumber) => [String(rowNumber), sheet.getRowHeight(rowNumber)] as const)
+            .filter(([, rowHeight]) => rowHeight !== null)
+    );
 
     for (let rowNumber = 1; rowNumber <= sheet.rowCount; rowNumber += 1) {
         for (let columnNumber = 1; columnNumber <= sheet.columnCount; columnNumber += 1) {
@@ -137,6 +143,7 @@ function loadSheetSnapshot(workbook: WorkbookReader, sheetName: string): SheetSn
         visibility,
         mergedRanges: [...sheet.getMergedRanges()].sort((left, right) => left.localeCompare(right)),
         columnWidths,
+        rowHeights,
         freezePane: freezePane ? { ...freezePane } : null,
         cells,
         signature: "",

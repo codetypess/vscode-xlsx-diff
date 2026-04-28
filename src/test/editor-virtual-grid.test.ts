@@ -8,16 +8,24 @@ import {
     stabilizeColumnPixelWidth,
 } from "../webview/column-layout";
 import {
+    convertPixelsToWorkbookRowHeight,
+    convertWorkbookRowHeightToPixels,
+    stabilizeRowPixelHeight,
+} from "../webview/row-layout";
+import {
     EDITOR_VIRTUAL_COLUMN_WIDTH,
     EDITOR_VIRTUAL_HEADER_HEIGHT,
     EDITOR_VIRTUAL_ROW_HEIGHT,
     clampEditorScrollPosition,
     createEditorColumnWindow,
     createEditorPixelColumnLayout,
+    createEditorPixelRowLayout,
     createEditorRowWindow,
     getEditorDisplayColumnLayout,
     getEditorDisplayGridDimensions,
+    getEditorDisplayRowLayout,
     getEditorFrozenColumnsWidth,
+    getEditorFrozenRowsHeight,
     getEditorContentSize,
     getEditorRowHeaderWidth,
     getEditorScrollPositionForCell,
@@ -27,7 +35,10 @@ import {
 
 suite("Editor virtual grid helpers", () => {
     test("creates a scrollable row window below frozen rows", () => {
+        const sheetRowLayout = createEditorPixelRowLayout({ rowCount: 1000 });
+        const rowLayout = getEditorDisplayRowLayout(sheetRowLayout, 1000);
         const window = createEditorRowWindow({
+            rowLayout,
             totalRows: 1000,
             frozenRowCount: 2,
             scrollTop: 28 * 100,
@@ -58,10 +69,13 @@ suite("Editor virtual grid helpers", () => {
 
     test("computes content size and target scroll positions for a cell", () => {
         const rowHeaderWidth = getEditorRowHeaderWidth(1000);
+        const sheetRowLayout = createEditorPixelRowLayout({ rowCount: 1000 });
+        const rowLayout = getEditorDisplayRowLayout(sheetRowLayout, 1000);
         const sheetColumnLayout = createEditorPixelColumnLayout({ columnCount: 50 });
         const columnLayout = getEditorDisplayColumnLayout(sheetColumnLayout, 50);
         const contentSize = getEditorContentSize({
             rowCount: 1000,
+            rowLayout,
             columnLayout,
             rowHeaderWidth,
         });
@@ -73,6 +87,7 @@ suite("Editor virtual grid helpers", () => {
             viewportHeight: 600,
             viewportWidth: 900,
             rowHeaderWidth,
+            rowLayout,
             columnLayout,
         });
 
@@ -102,6 +117,7 @@ suite("Editor virtual grid helpers", () => {
     });
 
     test("clips rendered frozen panes to the current viewport", () => {
+        const rowLayout = createEditorPixelRowLayout({ rowCount: 200 });
         const columnLayout = createEditorPixelColumnLayout({ columnCount: 20 });
         assert.deepStrictEqual(
             getVisibleFrozenEditorCounts({
@@ -110,16 +126,18 @@ suite("Editor virtual grid helpers", () => {
                 viewportHeight: 600,
                 viewportWidth: 900,
                 rowHeaderWidth: 56,
+                rowLayout,
                 columnLayout,
             }),
             {
-                rowCount: 20,
+                rowCount: 21,
                 columnCount: 8,
             }
         );
     });
 
     test("pads displayed rows and columns to fill the viewport", () => {
+        const rowLayout = createEditorPixelRowLayout({ rowCount: 5 });
         const columnLayout = createEditorPixelColumnLayout({ columnCount: 3 });
         assert.deepStrictEqual(
             getEditorDisplayGridDimensions({
@@ -127,6 +145,7 @@ suite("Editor virtual grid helpers", () => {
                 columnCount: 3,
                 viewportHeight: 600,
                 viewportWidth: 960,
+                rowLayout,
                 columnLayout,
             }),
             {
@@ -138,6 +157,7 @@ suite("Editor virtual grid helpers", () => {
     });
 
     test("adds extra editable rows and columns even when the sheet already fills the viewport", () => {
+        const rowLayout = createEditorPixelRowLayout({ rowCount: 40 });
         const columnLayout = createEditorPixelColumnLayout({ columnCount: 12 });
         assert.deepStrictEqual(
             getEditorDisplayGridDimensions({
@@ -145,6 +165,7 @@ suite("Editor virtual grid helpers", () => {
                 columnCount: 12,
                 viewportHeight: 600,
                 viewportWidth: 960,
+                rowLayout,
                 columnLayout,
             }),
             {
@@ -156,6 +177,7 @@ suite("Editor virtual grid helpers", () => {
     });
 
     test("honors workbook-backed variable column widths", () => {
+        const rowLayout = createEditorPixelRowLayout({ rowCount: 10 });
         const sheetColumnLayout = createEditorPixelColumnLayout({
             columnCount: 4,
             columnWidths: [8.7109375, 20, null, 12],
@@ -170,9 +192,31 @@ suite("Editor virtual grid helpers", () => {
                 columnCount: 4,
                 viewportHeight: 600,
                 viewportWidth: 960,
+                rowLayout,
                 columnLayout: sheetColumnLayout,
             }).columnCount,
             12
+        );
+    });
+
+    test("honors workbook-backed variable row heights", () => {
+        const rowHeaderWidth = getEditorRowHeaderWidth(4);
+        const sheetRowLayout = createEditorPixelRowLayout({
+            rowCount: 4,
+            rowHeights: { "2": 30, "4": 7.5 },
+        });
+        const rowLayout = getEditorDisplayRowLayout(sheetRowLayout, 4);
+        const columnLayout = createEditorPixelColumnLayout({ columnCount: 1 });
+
+        assert.strictEqual(getEditorFrozenRowsHeight(rowLayout, 2), 84);
+        assert.strictEqual(
+            getEditorContentSize({
+                rowCount: 4,
+                rowLayout,
+                columnLayout,
+                rowHeaderWidth,
+            }).height,
+            154
         );
     });
 
@@ -188,6 +232,17 @@ suite("Editor virtual grid helpers", () => {
             assert.strictEqual(
                 convertWorkbookColumnWidthToPixels(workbookWidth, maximumDigitWidth),
                 stabilizedPixelWidth
+            );
+        }
+    });
+
+    test("normalizes drag-resized pixel heights to stable workbook-backed sizes", () => {
+        for (const pixelHeight of [14, 28, 37, 56, 84, 140]) {
+            const stabilizedPixelHeight = stabilizeRowPixelHeight(pixelHeight);
+            const workbookHeight = convertPixelsToWorkbookRowHeight(stabilizedPixelHeight);
+            assert.strictEqual(
+                convertWorkbookRowHeightToPixels(workbookHeight),
+                stabilizedPixelHeight
             );
         }
     });

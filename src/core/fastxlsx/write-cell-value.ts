@@ -81,6 +81,7 @@ export interface SheetViewEdit {
         rowCount: number;
     } | null;
     columnWidths?: Array<number | null>;
+    rowHeights?: Record<string, number | null>;
 }
 
 export interface WorkbookEditState {
@@ -218,6 +219,10 @@ export async function writeWorkbookEditsToDestination(
 
             for (let columnIndex = 0; columnIndex < (edit.columnWidths?.length ?? 0); columnIndex += 1) {
                 sheet.setColumnWidth(columnIndex + 1, edit.columnWidths?.[columnIndex] ?? null);
+            }
+
+            for (const [rowNumberText, rowHeight] of Object.entries(edit.rowHeights ?? {})) {
+                sheet.setRowHeight(Number(rowNumberText), rowHeight);
             }
         }
     });

@@ -170,6 +170,10 @@ suite("Xlsx custom editor provider", () => {
         const originalCommitDocumentSave = XlsxEditorPanel.commitDocumentSave;
         const originalFailDocumentSave = XlsxEditorPanel.failDocumentSave;
         let resolveSave: (() => void) | undefined;
+        let resolveSaveStarted: (() => void) | undefined;
+        const saveStarted = new Promise<void>((resolve) => {
+            resolveSaveStarted = resolve;
+        });
         let saveCalls = 0;
 
         document.replacePendingState({
@@ -187,6 +191,7 @@ suite("Xlsx custom editor provider", () => {
 
         document.saveTo = async (): Promise<void> => {
             saveCalls += 1;
+            resolveSaveStarted?.();
             await new Promise<void>((resolve) => {
                 resolveSave = resolve;
             });
@@ -206,7 +211,7 @@ suite("Xlsx custom editor provider", () => {
             const firstSave = provider.saveCustomDocument(document, {} as vscode.CancellationToken);
             const secondSave = provider.saveCustomDocument(document, {} as vscode.CancellationToken);
 
-            await Promise.resolve();
+            await saveStarted;
             assert.strictEqual(saveCalls, 1);
 
             resolveSave?.();

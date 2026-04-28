@@ -33,6 +33,12 @@ export function cloneColumnWidths(
     return (columnWidths ?? []).map((columnWidth) => columnWidth ?? null);
 }
 
+export function cloneRowHeights(
+    rowHeights: Readonly<Record<string, number | null>> | undefined
+): Record<string, number | null> {
+    return { ...(rowHeights ?? {}) };
+}
+
 function normalizeColumnWidthsForComparison(
     columnWidths: readonly (number | null | undefined)[] | undefined
 ): Array<number | null> {
@@ -60,6 +66,33 @@ export function areColumnWidthsEquivalent(
     return normalizedLeft.every((columnWidth, index) => columnWidth === normalizedRight[index]);
 }
 
+function normalizeRowHeightsForComparison(
+    rowHeights: Readonly<Record<string, number | null>> | undefined
+): Record<string, number> {
+    return Object.fromEntries(
+        Object.entries(rowHeights ?? {})
+            .filter(([, rowHeight]) => rowHeight !== null)
+            .sort(([leftRowNumber], [rightRowNumber]) => Number(leftRowNumber) - Number(rightRowNumber))
+    ) as Record<string, number>;
+}
+
+export function areRowHeightsEquivalent(
+    left: Readonly<Record<string, number | null>> | undefined,
+    right: Readonly<Record<string, number | null>> | undefined
+): boolean {
+    const normalizedLeft = normalizeRowHeightsForComparison(left);
+    const normalizedRight = normalizeRowHeightsForComparison(right);
+    const leftKeys = Object.keys(normalizedLeft);
+    const rightKeys = Object.keys(normalizedRight);
+    if (leftKeys.length !== rightKeys.length) {
+        return false;
+    }
+
+    return leftKeys.every(
+        (rowNumber) => normalizedLeft[rowNumber] === normalizedRight[rowNumber]
+    );
+}
+
 export function setSheetColumnWidthSnapshot(
     columnWidths: readonly (number | null | undefined)[] | undefined,
     columnNumber: number,
@@ -74,6 +107,21 @@ export function setSheetColumnWidthSnapshot(
     return nextColumnWidths;
 }
 
+export function setSheetRowHeightSnapshot(
+    rowHeights: Readonly<Record<string, number | null>> | undefined,
+    rowNumber: number,
+    nextHeight: number | null
+): Record<string, number | null> {
+    const nextRowHeights = cloneRowHeights(rowHeights);
+    if (nextHeight === null) {
+        delete nextRowHeights[String(rowNumber)];
+        return nextRowHeights;
+    }
+
+    nextRowHeights[String(rowNumber)] = nextHeight;
+    return nextRowHeights;
+}
+
 export function cloneViewEdit(edit: SheetViewEdit): SheetViewEdit {
     return {
         ...edit,
@@ -81,6 +129,11 @@ export function cloneViewEdit(edit: SheetViewEdit): SheetViewEdit {
         ...(edit.columnWidths
             ? {
                   columnWidths: cloneColumnWidths(edit.columnWidths),
+              }
+            : {}),
+        ...(edit.rowHeights
+            ? {
+                  rowHeights: cloneRowHeights(edit.rowHeights),
               }
             : {}),
     };
@@ -93,6 +146,7 @@ export function cloneSheetSnapshot(
         ...sheet,
         mergedRanges: [...sheet.mergedRanges],
         columnWidths: cloneColumnWidths(sheet.columnWidths),
+        rowHeights: cloneRowHeights(sheet.rowHeights),
         freezePane: sheet.freezePane ? { ...sheet.freezePane } : null,
         cells: { ...sheet.cells },
     };
@@ -289,6 +343,47 @@ function transformColumnWidths(
     return nextWidths;
 }
 
+function transformRowHeights(
+    rowHeights: WorkbookSnapshot["sheets"][number]["rowHeights"],
+    edit: GridSheetEdit
+): WorkbookSnapshot["sheets"][number]["rowHeights"] {
+    if (edit.type !== "insertRow" && edit.type !== "deleteRow") {
+        return cloneRowHeights(rowHeights);
+    }
+
+    const nextRowHeights = Object.fromEntries(
+        Object.entries(rowHeights ?? {}).flatMap(([rowNumberText, rowHeight]) => {
+            const rowNumber = Number(rowNumberText);
+            if (!Number.isInteger(rowNumber) || rowNumber < 1) {
+                return [];
+            }
+
+            if (edit.type === "insertRow") {
+                return [
+                    [
+                        String(rowNumber >= edit.rowNumber ? rowNumber + edit.count : rowNumber),
+                        rowHeight,
+                    ] as const,
+                ];
+            }
+
+            const lastDeletedRow = edit.rowNumber + edit.count - 1;
+            if (rowNumber >= edit.rowNumber && rowNumber <= lastDeletedRow) {
+                return [];
+            }
+
+            return [
+                [
+                    String(rowNumber > lastDeletedRow ? rowNumber - edit.count : rowNumber),
+                    rowHeight,
+                ] as const,
+            ];
+        })
+    );
+
+    return nextRowHeights;
+}
+
 export function shiftPendingCellEditsForGridSheetEdit(
     pendingCellEdits: CellEdit[],
     edit: GridSheetEdit
@@ -368,6 +463,7 @@ export function applyGridSheetEditToSheet(
         rowCount,
         columnCount,
         columnWidths: transformColumnWidths(sheet.columnWidths, edit),
+        rowHeights: transformRowHeights(sheet.rowHeights, edit),
         cells: nextCells,
         signature: createPendingSheetSignature(
             sheet.name,
@@ -483,6 +579,7 @@ export function restorePendingWorkbookState(
                     visibility: "visible",
                     mergedRanges: [],
                     columnWidths: [],
+                    rowHeights: {},
                     cells: {},
                     freezePane: null,
                     signature: `pending:${edit.sheetKey}:${edit.sheetName}`,
@@ -546,6 +643,9 @@ export function restorePendingWorkbookState(
                           columnWidths: edit.columnWidths
                               ? cloneColumnWidths(edit.columnWidths)
                               : cloneColumnWidths(entry.sheet.columnWidths),
+                          rowHeights: edit.rowHeights
+                              ? cloneRowHeights(edit.rowHeights)
+                              : cloneRowHeights(entry.sheet.rowHeights),
                           freezePane: edit.freezePane
                               ? createFreezePaneSnapshot(
                                     edit.freezePane.columnCount,

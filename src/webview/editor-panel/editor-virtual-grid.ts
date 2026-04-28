@@ -10,8 +10,18 @@ import {
     getPixelColumnOffset,
     getPixelColumnWidth,
 } from "../column-layout";
+import {
+    DEFAULT_ROW_PIXEL_HEIGHT,
+    type PixelRowLayout,
+    createPixelRowLayout,
+    extendPixelRowLayout,
+    getPixelRowHeight,
+    getPixelRowOffset,
+    getPixelRowTop,
+    getPixelRowWindow,
+} from "../row-layout";
 
-export const EDITOR_VIRTUAL_ROW_HEIGHT = 28;
+export const EDITOR_VIRTUAL_ROW_HEIGHT = DEFAULT_ROW_PIXEL_HEIGHT;
 export const EDITOR_VIRTUAL_COLUMN_WIDTH = DEFAULT_COLUMN_PIXEL_WIDTH;
 export const EDITOR_VIRTUAL_HEADER_HEIGHT = 28;
 export const EDITOR_VIRTUAL_COLUMN_OVERSCAN = 8;
@@ -44,11 +54,32 @@ export function createEditorPixelColumnLayout({
     });
 }
 
+export function createEditorPixelRowLayout({
+    rowCount,
+    rowHeights,
+}: {
+    rowCount: number;
+    rowHeights?: Readonly<Record<string, number | null>>;
+}): PixelRowLayout {
+    return createPixelRowLayout({
+        rowHeights,
+        totalRowCount: rowCount,
+        fallbackPixelHeight: EDITOR_VIRTUAL_ROW_HEIGHT,
+    });
+}
+
 export function getEditorDisplayColumnLayout(
     layout: PixelColumnLayout,
     totalColumnCount: number
 ): PixelColumnLayout {
     return extendPixelColumnLayout(layout, totalColumnCount);
+}
+
+export function getEditorDisplayRowLayout(
+    layout: PixelRowLayout,
+    totalRowCount: number
+): PixelRowLayout {
+    return extendPixelRowLayout(layout, totalRowCount);
 }
 
 export function getEditorColumnLeft(layout: PixelColumnLayout, columnNumber: number): number {
@@ -66,13 +97,38 @@ export function getEditorFrozenColumnsWidth(
     return getPixelColumnOffset(layout, frozenColumnCount);
 }
 
-export function getMinimumVisibleEditorRowCount(viewportHeight: number): number {
-    return Math.max(
-        1,
-        Math.ceil(
-            Math.max(0, viewportHeight - EDITOR_VIRTUAL_HEADER_HEIGHT) / EDITOR_VIRTUAL_ROW_HEIGHT
-        )
-    );
+export function getEditorRowTop(layout: PixelRowLayout, rowNumber: number): number {
+    return getPixelRowTop(layout, rowNumber);
+}
+
+export function getEditorRowHeight(layout: PixelRowLayout, rowNumber: number): number {
+    return getPixelRowHeight(layout, rowNumber);
+}
+
+export function getEditorFrozenRowsHeight(
+    layout: PixelRowLayout,
+    frozenRowCount: number
+): number {
+    return getPixelRowOffset(layout, frozenRowCount);
+}
+
+export function getMinimumVisibleEditorRowCount(
+    viewportHeight: number,
+    rowLayout: PixelRowLayout
+): number {
+    const availableHeight = Math.max(0, viewportHeight - EDITOR_VIRTUAL_HEADER_HEIGHT);
+    if (availableHeight <= 0) {
+        return 1;
+    }
+
+    let visibleHeight = 0;
+    let visibleRowCount = 0;
+    while (visibleHeight < availableHeight) {
+        visibleRowCount += 1;
+        visibleHeight += getEditorRowHeight(rowLayout, visibleRowCount);
+    }
+
+    return Math.max(1, visibleRowCount);
 }
 
 export function getMinimumVisibleEditorColumnCount({
@@ -104,16 +160,18 @@ export function getEditorDisplayGridDimensions({
     columnCount,
     viewportHeight,
     viewportWidth,
+    rowLayout,
     columnLayout,
 }: {
     rowCount: number;
     columnCount: number;
     viewportHeight: number;
     viewportWidth: number;
+    rowLayout: PixelRowLayout;
     columnLayout: PixelColumnLayout;
 }): { rowCount: number; columnCount: number; rowHeaderWidth: number } {
     const displayRowCount =
-        Math.max(rowCount, getMinimumVisibleEditorRowCount(viewportHeight)) +
+        Math.max(rowCount, getMinimumVisibleEditorRowCount(viewportHeight, rowLayout)) +
         EDITOR_EXTRA_PADDING_ROWS;
     const rowHeaderWidth = getEditorRowHeaderWidth(displayRowCount);
 
@@ -162,6 +220,7 @@ export function getVisibleFrozenEditorCounts({
     viewportHeight,
     viewportWidth,
     rowHeaderWidth,
+    rowLayout,
     columnLayout,
 }: {
     frozenRowCount: number;
@@ -169,14 +228,16 @@ export function getVisibleFrozenEditorCounts({
     viewportHeight: number;
     viewportWidth: number;
     rowHeaderWidth: number;
+    rowLayout: PixelRowLayout;
     columnLayout: PixelColumnLayout;
 }): { rowCount: number; columnCount: number } {
-    const visibleFrozenRowCount = Math.max(
-        0,
-        Math.floor(
-            Math.max(0, viewportHeight - EDITOR_VIRTUAL_HEADER_HEIGHT) / EDITOR_VIRTUAL_ROW_HEIGHT
-        )
-    );
+    const availableFrozenHeight = Math.max(0, viewportHeight - EDITOR_VIRTUAL_HEADER_HEIGHT);
+    let visibleFrozenRowCount = 0;
+    let consumedFrozenHeight = 0;
+    while (visibleFrozenRowCount < frozenRowCount && consumedFrozenHeight < availableFrozenHeight) {
+        visibleFrozenRowCount += 1;
+        consumedFrozenHeight += getEditorRowHeight(rowLayout, visibleFrozenRowCount);
+    }
 
     const availableFrozenWidth = Math.max(0, viewportWidth - rowHeaderWidth);
     let visibleFrozenColumnCount = 0;
@@ -196,12 +257,14 @@ export function getVisibleFrozenEditorCounts({
 }
 
 export function createEditorRowWindow({
+    rowLayout,
     totalRows,
     frozenRowCount,
     scrollTop,
     viewportHeight,
     overscan = DEFAULT_EDITOR_WINDOW_OVERSCAN,
 }: {
+    rowLayout: PixelRowLayout;
     totalRows: number;
     frozenRowCount: number;
     scrollTop: number;
@@ -225,32 +288,35 @@ export function createEditorRowWindow({
         };
     }
 
+    const frozenRowsHeight = getEditorFrozenRowsHeight(rowLayout, frozenRowCount);
     const scrollableViewportHeight = Math.max(
         0,
-        viewportHeight - EDITOR_VIRTUAL_HEADER_HEIGHT - frozenRowCount * EDITOR_VIRTUAL_ROW_HEIGHT
+        viewportHeight - EDITOR_VIRTUAL_HEADER_HEIGHT - frozenRowsHeight
     );
-    const startIndex = Math.max(
-        0,
-        Math.floor(scrollTop / EDITOR_VIRTUAL_ROW_HEIGHT) - overscan
+    const rowWindow = getPixelRowWindow(
+        rowLayout,
+        frozenRowsHeight + scrollTop,
+        scrollableViewportHeight,
+        overscan
     );
-    const visibleRowCount =
-        Math.ceil(
-            Math.max(scrollableViewportHeight, EDITOR_VIRTUAL_ROW_HEIGHT) /
-                EDITOR_VIRTUAL_ROW_HEIGHT
-        ) +
-        overscan * 2;
-    const endIndex = Math.min(scrollableRowCount, startIndex + visibleRowCount);
+    const startIndex = Math.max(frozenRowCount, rowWindow.startIndex);
+    const endIndex = Math.max(startIndex, rowWindow.endIndex);
     const rowNumbers = Array.from(
         { length: Math.max(0, endIndex - startIndex) },
-        (_, index) => frozenRowCount + startIndex + index + 1
+        (_, index) => startIndex + index + 1
     );
+    const totalScrollableHeight = Math.max(0, rowLayout.totalHeight - frozenRowsHeight);
 
     return {
         rowNumbers,
         startRowNumber: rowNumbers[0] ?? frozenRowCount + 1,
         endRowNumber: rowNumbers[rowNumbers.length - 1] ?? frozenRowCount,
-        topSpacerHeight: startIndex * EDITOR_VIRTUAL_ROW_HEIGHT,
-        bottomSpacerHeight: Math.max(0, (scrollableRowCount - endIndex) * EDITOR_VIRTUAL_ROW_HEIGHT),
+        topSpacerHeight: Math.max(0, getPixelRowOffset(rowLayout, startIndex) - frozenRowsHeight),
+        bottomSpacerHeight: Math.max(
+            0,
+            totalScrollableHeight -
+                Math.max(0, getPixelRowOffset(rowLayout, endIndex) - frozenRowsHeight)
+        ),
     };
 }
 
@@ -326,16 +392,20 @@ export function createEditorColumnWindow({
 
 export function getEditorContentSize({
     rowCount,
+    rowLayout,
     columnLayout,
     rowHeaderWidth,
 }: {
     rowCount: number;
+    rowLayout: PixelRowLayout;
     columnLayout: PixelColumnLayout;
     rowHeaderWidth: number;
 }): { width: number; height: number } {
     return {
         width: rowHeaderWidth + columnLayout.totalWidth,
-        height: EDITOR_VIRTUAL_HEADER_HEIGHT + rowCount * EDITOR_VIRTUAL_ROW_HEIGHT,
+        height:
+            EDITOR_VIRTUAL_HEADER_HEIGHT +
+            getEditorDisplayRowLayout(rowLayout, rowCount).totalHeight,
     };
 }
 
@@ -347,6 +417,7 @@ export function getEditorScrollPositionForCell({
     viewportHeight,
     viewportWidth,
     rowHeaderWidth,
+    rowLayout,
     columnLayout,
 }: {
     rowNumber: number;
@@ -356,10 +427,11 @@ export function getEditorScrollPositionForCell({
     viewportHeight: number;
     viewportWidth: number;
     rowHeaderWidth: number;
+    rowLayout: PixelRowLayout;
     columnLayout: PixelColumnLayout;
 }): { top: number | null; left: number | null } {
     const stickyTop =
-        EDITOR_VIRTUAL_HEADER_HEIGHT + frozenRowCount * EDITOR_VIRTUAL_ROW_HEIGHT;
+        EDITOR_VIRTUAL_HEADER_HEIGHT + getEditorFrozenRowsHeight(rowLayout, frozenRowCount);
     const frozenColumnsWidth = getEditorFrozenColumnsWidth(columnLayout, frozenColumnCount);
     const stickyLeft = rowHeaderWidth + frozenColumnsWidth;
 
@@ -369,10 +441,13 @@ export function getEditorScrollPositionForCell({
                 ? null
                 : Math.max(
                       0,
-                      (rowNumber - frozenRowCount - 1) * EDITOR_VIRTUAL_ROW_HEIGHT -
+                      getEditorRowTop(rowLayout, rowNumber) -
+                          getEditorFrozenRowsHeight(rowLayout, frozenRowCount) -
                           Math.max(
                               0,
-                              viewportHeight - stickyTop - EDITOR_VIRTUAL_ROW_HEIGHT
+                              viewportHeight -
+                                  stickyTop -
+                                  getEditorRowHeight(rowLayout, rowNumber)
                           )
                   ),
         left:
