@@ -29,7 +29,8 @@ function createSheet(
     columnCount = 1,
     mergedRanges: string[] = [],
     freezePane: SheetSnapshot["freezePane"] = null,
-    columnWidths: SheetSnapshot["columnWidths"] = []
+    columnWidths: SheetSnapshot["columnWidths"] = [],
+    autoFilter: SheetSnapshot["autoFilter"] = null
 ): SheetSnapshot {
     return {
         name,
@@ -39,6 +40,7 @@ function createSheet(
         mergedRanges,
         columnWidths,
         freezePane,
+        autoFilter,
         cells: Object.fromEntries(cells.map((cell) => [cell.key, cell])),
         signature: `${name}-signature`,
     };
@@ -164,6 +166,41 @@ suite("Editor render model", () => {
         });
         assert.strictEqual(renderModel.activeSheet.rowCount, 10);
         assert.strictEqual(renderModel.activeSheet.columnCount, 10);
+    });
+
+    test("surfaces auto-filter state for the active sheet", () => {
+        const workbook = createWorkbook({}, [
+            createSheet("Sheet1", [createCell(2, 1, "alpha")], 10, 4, [], null, [], {
+                range: {
+                    startRow: 1,
+                    endRow: 5,
+                    startColumn: 1,
+                    endColumn: 3,
+                },
+                sort: {
+                    columnNumber: 2,
+                    direction: "desc",
+                },
+            }),
+        ]);
+
+        const renderModel = createEditorRenderModel(
+            workbook,
+            createInitialEditorPanelState(workbook)
+        );
+
+        assert.deepStrictEqual(renderModel.activeSheet.autoFilter, {
+            range: {
+                startRow: 1,
+                endRow: 5,
+                startColumn: 1,
+                endColumn: 3,
+            },
+            sort: {
+                columnNumber: 2,
+                direction: "desc",
+            },
+        });
     });
 
     test("keeps the full active sheet cell map available for large locked sheets", () => {

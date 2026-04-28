@@ -1,7 +1,5 @@
 import { createCellKey, getColumnLabel } from "../../core/model/cells";
-import {
-    cloneCellAlignmentMap,
-} from "../../core/model/alignment";
+import { cloneCellAlignmentMap } from "../../core/model/alignment";
 import {
     type EditorPanelState,
     type EditorRenderModel,
@@ -229,6 +227,7 @@ export function createEditorRenderModel(
                 columnAlignments: {},
                 cells: {},
                 freezePane: null,
+                autoFilter: null,
             },
             selection: null,
             hasPendingEdits,
@@ -267,6 +266,7 @@ export function createEditorRenderModel(
             columnAlignments: cloneCellAlignmentMap(activeSheet.columnAlignments),
             cells: activeSheet.cells,
             freezePane: activeSheet.freezePane ?? null,
+            autoFilter: activeSheet.autoFilter ?? null,
         },
         selection,
         hasPendingEdits,

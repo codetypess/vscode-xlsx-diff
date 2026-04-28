@@ -12,9 +12,8 @@ async function writePendingWorkbookEditsToDestination(
     destinationUri: vscode.Uri,
     edits: WorkbookEditState
 ): Promise<void> {
-    const { writeWorkbookEditsToDestination } = await import(
-        "../../core/fastxlsx/write-cell-value"
-    );
+    const { writeWorkbookEditsToDestination } =
+        await import("../../core/fastxlsx/write-cell-value");
     await writeWorkbookEditsToDestination(sourceUri, destinationUri, edits);
 }
 
@@ -169,10 +168,62 @@ function compareViewEdits(left: SheetViewEdit, right: SheetViewEdit): number {
     return 0;
 }
 
+function cloneAutoFilter(autoFilter: SheetViewEdit["autoFilter"]): SheetViewEdit["autoFilter"] {
+    if (autoFilter === undefined) {
+        return undefined;
+    }
+
+    if (autoFilter === null) {
+        return null;
+    }
+
+    return {
+        range: {
+            ...autoFilter.range,
+        },
+        sort: autoFilter.sort
+            ? {
+                  ...autoFilter.sort,
+              }
+            : null,
+    };
+}
+
+function areAutoFiltersEqual(
+    left: SheetViewEdit["autoFilter"],
+    right: SheetViewEdit["autoFilter"]
+): boolean {
+    if (left === right) {
+        return true;
+    }
+
+    if (left === undefined || right === undefined) {
+        return left === right;
+    }
+
+    if (left === null || right === null) {
+        return left === right;
+    }
+
+    return (
+        left.range.startRow === right.range.startRow &&
+        left.range.endRow === right.range.endRow &&
+        left.range.startColumn === right.range.startColumn &&
+        left.range.endColumn === right.range.endColumn &&
+        (left.sort?.columnNumber ?? null) === (right.sort?.columnNumber ?? null) &&
+        (left.sort?.direction ?? null) === (right.sort?.direction ?? null)
+    );
+}
+
 function cloneViewEdit(edit: SheetViewEdit): SheetViewEdit {
     return {
         ...edit,
         freezePane: edit.freezePane ? { ...edit.freezePane } : null,
+        ...(edit.autoFilter !== undefined
+            ? {
+                  autoFilter: cloneAutoFilter(edit.autoFilter),
+              }
+            : {}),
         ...(edit.columnWidths
             ? {
                   columnWidths: edit.columnWidths.map((columnWidth) => columnWidth ?? null),
@@ -216,6 +267,7 @@ function areViewEditsEqual(
             edit.sheetName === other.sheetName &&
             (edit.freezePane?.columnCount ?? null) === (other.freezePane?.columnCount ?? null) &&
             (edit.freezePane?.rowCount ?? null) === (other.freezePane?.rowCount ?? null) &&
+            areAutoFiltersEqual(edit.autoFilter, other.autoFilter) &&
             (edit.columnWidths?.length ?? 0) === (other.columnWidths?.length ?? 0) &&
             (edit.columnWidths ?? []).every(
                 (columnWidth, columnIndex) =>

@@ -35,6 +35,7 @@ function createRenderModel(
             columnCount,
             columns,
             freezePane,
+            autoFilter: null,
             cells: {
                 "1:1": {
                     key: "1:1",

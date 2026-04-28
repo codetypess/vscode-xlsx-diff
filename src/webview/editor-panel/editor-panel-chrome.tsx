@@ -451,6 +451,9 @@ export function EditorToolbar({
     strings,
     currentModel,
     isSearchPanelOpen,
+    filterActionLabel,
+    isFilterButtonEnabled,
+    hasActiveFilter,
     isSaving,
     hasPendingEdits,
     canUndo,
@@ -463,6 +466,7 @@ export function EditorToolbar({
     canEditSelectedCellValue,
     getActiveCellEditTarget,
     onOpenSearch,
+    onToggleFilter,
     onUndo,
     onRedo,
     onReload,
@@ -476,6 +480,9 @@ export function EditorToolbar({
     strings: EditorPanelStrings;
     currentModel: EditorRenderModel;
     isSearchPanelOpen: boolean;
+    filterActionLabel: string;
+    isFilterButtonEnabled: boolean;
+    hasActiveFilter: boolean;
     isSaving: boolean;
     hasPendingEdits: boolean;
     canUndo: boolean;
@@ -488,6 +495,7 @@ export function EditorToolbar({
     canEditSelectedCellValue(): boolean;
     getActiveCellEditTarget(): ToolbarCellEditTarget | null;
     onOpenSearch(mode: SearchPanelMode): void;
+    onToggleFilter(): void;
     onUndo(): void;
     onRedo(): void;
     onReload(): void;
@@ -701,6 +709,14 @@ export function EditorToolbar({
                 </label>
             </div>
             <div className="toolbar__group">
+                <ToolbarButton
+                    actionLabel={filterActionLabel}
+                    disabled={!isFilterButtonEnabled}
+                    icon="codicon-filter"
+                    iconOnly={true}
+                    isActive={hasActiveFilter}
+                    onClick={onToggleFilter}
+                />
                 <ToolbarButton
                     actionLabel={strings.search}
                     icon="codicon-search"

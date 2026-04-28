@@ -25,6 +25,7 @@ import {
 import {
     applyAlignmentPatchToSheetSnapshot,
     applyGridSheetEditToSheet,
+    areAutoFiltersEquivalent,
     areCellAlignmentsEquivalent,
     areColumnWidthsEquivalent,
     areColumnAlignmentsEquivalent,
@@ -32,6 +33,7 @@ import {
     areRowHeightsEquivalent,
     areRowAlignmentsEquivalent,
     captureStructuralSnapshot,
+    cloneAutoFilterSnapshot,
     cloneCellAlignments,
     cloneColumnWidths,
     cloneColumnAlignments,
@@ -639,6 +641,9 @@ export class XlsxEditorPanel {
                     }
                     return;
                 }
+                case "setFilterState":
+                    await this.setPendingFilterState(message.sheetKey, message.filterState);
+                    return;
                 case "requestSave":
                     await this.requestDocumentSave();
                     return;
@@ -927,6 +932,10 @@ export class XlsxEditorPanel {
             baselineSheet?.freezePane ?? null,
             entry.sheet.freezePane ?? null
         );
+        const hasAutoFilterChange = !areAutoFiltersEquivalent(
+            baselineSheet?.autoFilter ?? null,
+            entry.sheet.autoFilter ?? null
+        );
         const hasRowHeightChange = !areRowHeightsEquivalent(
             baselineSheet?.rowHeights,
             entry.sheet.rowHeights
@@ -949,6 +958,7 @@ export class XlsxEditorPanel {
         );
         if (
             !hasFreezePaneChange &&
+            !hasAutoFilterChange &&
             !hasColumnWidthChange &&
             !hasRowHeightChange &&
             !hasCellAlignmentChange &&
@@ -970,6 +980,11 @@ export class XlsxEditorPanel {
                       rowCount: entry.sheet.freezePane.rowCount,
                   }
                 : null,
+            ...(hasAutoFilterChange
+                ? {
+                      autoFilter: cloneAutoFilterSnapshot(entry.sheet.autoFilter),
+                  }
+                : {}),
             ...(hasColumnWidthChange
                 ? {
                       columnWidths: cloneColumnWidths(entry.sheet.columnWidths),
@@ -1203,9 +1218,11 @@ export class XlsxEditorPanel {
             return;
         }
 
-        const normalizedWidth =
-            nextWidth === null ? null : normalizeWorkbookColumnWidth(nextWidth);
-        if (normalizedWidth !== null && (!Number.isFinite(normalizedWidth) || normalizedWidth <= 0)) {
+        const normalizedWidth = nextWidth === null ? null : normalizeWorkbookColumnWidth(nextWidth);
+        if (
+            normalizedWidth !== null &&
+            (!Number.isFinite(normalizedWidth) || normalizedWidth <= 0)
+        ) {
             return;
         }
 
@@ -1253,7 +1270,10 @@ export class XlsxEditorPanel {
 
         const normalizedHeight =
             nextHeight === null ? null : normalizeWorkbookRowHeight(nextHeight);
-        if (normalizedHeight !== null && (!Number.isFinite(normalizedHeight) || normalizedHeight <= 0)) {
+        if (
+            normalizedHeight !== null &&
+            (!Number.isFinite(normalizedHeight) || normalizedHeight <= 0)
+        ) {
             return;
         }
 
@@ -1403,6 +1423,39 @@ export class XlsxEditorPanel {
                     freezePane: nextFreezePane,
                 };
                 this.syncPendingSheetViewEdit(entry.key);
+            },
+            {
+                resetPendingHistory: false,
+            }
+        );
+    }
+
+    private async setPendingFilterState(
+        sheetKey: string,
+        filterState: WorkbookSnapshot["sheets"][number]["autoFilter"]
+    ): Promise<void> {
+        const workbook = this.getWorkingWorkbook();
+        const entry = this.findSheetEntry(sheetKey);
+        if (!workbook || workbook.isReadonly || !entry) {
+            return;
+        }
+
+        if (areAutoFiltersEquivalent(entry.sheet.autoFilter ?? null, filterState ?? null)) {
+            return;
+        }
+
+        await this.commitStructuralMutation(
+            () => {
+                const activeEntry = this.findSheetEntry(sheetKey);
+                if (!activeEntry) {
+                    return;
+                }
+
+                activeEntry.sheet = {
+                    ...activeEntry.sheet,
+                    autoFilter: cloneAutoFilterSnapshot(filterState),
+                };
+                this.syncPendingSheetViewEdit(activeEntry.key);
             },
             {
                 resetPendingHistory: false,

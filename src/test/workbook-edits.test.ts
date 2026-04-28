@@ -376,10 +376,84 @@ suite("Workbook edit writer", () => {
             const snapshot = await loadWorkbookSnapshot(destinationPath);
             assert.strictEqual(snapshot.sheets[0]?.cellAlignments?.["2:2"]?.horizontal, "right");
             assert.strictEqual(snapshot.sheets[0]?.rowAlignments?.["2"]?.vertical, "center");
-            assert.strictEqual(
-                snapshot.sheets[0]?.columnAlignments?.["3"]?.horizontal,
-                "center"
+            assert.strictEqual(snapshot.sheets[0]?.columnAlignments?.["3"]?.horizontal, "center");
+        } finally {
+            await rm(tempDirectory, { recursive: true, force: true });
+        }
+    });
+
+    test("writes and reloads worksheet auto-filter range and sort state", async () => {
+        const tempDirectory = await mkdtemp(path.join(os.tmpdir(), "xlsx-diff-"));
+
+        try {
+            const sourcePath = path.join(tempDirectory, "source-filter.xlsx");
+            const destinationPath = path.join(tempDirectory, "destination-filter.xlsx");
+            const workbook = Workbook.create("Sheet1");
+            const sheet = workbook.getSheet("Sheet1");
+            sheet.cell("A1").setValue("Name");
+            sheet.cell("B1").setValue("Score");
+            sheet.cell("A2").setValue("alpha");
+            sheet.cell("B2").setValue("2");
+            sheet.cell("A3").setValue("beta");
+            sheet.cell("B3").setValue("1");
+            await workbook.save(sourcePath);
+
+            await writeWorkbookEditsToDestination(
+                vscode.Uri.file(sourcePath),
+                vscode.Uri.file(destinationPath),
+                {
+                    sheetEdits: [],
+                    cellEdits: [],
+                    viewEdits: [
+                        {
+                            sheetKey: "sheet-1",
+                            sheetName: "Sheet1",
+                            freezePane: null,
+                            autoFilter: {
+                                range: {
+                                    startRow: 1,
+                                    endRow: 3,
+                                    startColumn: 1,
+                                    endColumn: 2,
+                                },
+                                sort: {
+                                    columnNumber: 2,
+                                    direction: "desc",
+                                },
+                            },
+                        },
+                    ],
+                }
             );
+
+            const savedWorkbook = await Workbook.open(destinationPath);
+            assert.deepStrictEqual(savedWorkbook.getSheet("Sheet1").getAutoFilterDefinition(), {
+                range: "A1:B3",
+                columns: [],
+                sortState: {
+                    range: "A1:B3",
+                    conditions: [
+                        {
+                            columnNumber: 2,
+                            descending: true,
+                        },
+                    ],
+                },
+            });
+
+            const snapshot = await loadWorkbookSnapshot(destinationPath);
+            assert.deepStrictEqual(snapshot.sheets[0]?.autoFilter, {
+                range: {
+                    startRow: 1,
+                    endRow: 3,
+                    startColumn: 1,
+                    endColumn: 2,
+                },
+                sort: {
+                    columnNumber: 2,
+                    direction: "desc",
+                },
+            });
         } finally {
             await rm(tempDirectory, { recursive: true, force: true });
         }
@@ -407,6 +481,18 @@ suite("Workbook edit writer", () => {
                             columnCount: 1,
                             rowCount: 1,
                         },
+                        autoFilter: {
+                            range: {
+                                startRow: 1,
+                                endRow: 4,
+                                startColumn: 1,
+                                endColumn: 2,
+                            },
+                            sort: {
+                                columnNumber: 2,
+                                direction: "asc",
+                            },
+                        },
                     },
                 ],
             }),
@@ -428,6 +514,18 @@ suite("Workbook edit writer", () => {
                 freezePane: {
                     columnCount: 1,
                     rowCount: 1,
+                },
+                autoFilter: {
+                    range: {
+                        startRow: 1,
+                        endRow: 4,
+                        startColumn: 1,
+                        endColumn: 2,
+                    },
+                    sort: {
+                        columnNumber: 2,
+                        direction: "asc",
+                    },
                 },
             },
         ]);

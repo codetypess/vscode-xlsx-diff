@@ -1,5 +1,4 @@
 import type {
-    CellAlignmentSnapshot,
     SheetCellAlignmentsSnapshot,
     SheetColumnAlignmentsSnapshot,
     SheetRowAlignmentsSnapshot,
@@ -45,6 +44,23 @@ export interface SheetFreezePaneSnapshot {
     activePane: "bottomLeft" | "topRight" | "bottomRight" | null;
 }
 
+export interface SheetRangeSnapshot {
+    startRow: number;
+    endRow: number;
+    startColumn: number;
+    endColumn: number;
+}
+
+export interface SheetAutoFilterSortSnapshot {
+    columnNumber: number;
+    direction: "asc" | "desc";
+}
+
+export interface SheetAutoFilterSnapshot {
+    range: SheetRangeSnapshot;
+    sort: SheetAutoFilterSortSnapshot | null;
+}
+
 export type SheetVisibility = "visible" | "hidden" | "veryHidden";
 
 export interface DefinedNameSnapshot {
@@ -68,6 +84,7 @@ export interface SheetSnapshot {
     rowAlignments?: SheetRowAlignmentsSnapshot;
     columnAlignments?: SheetColumnAlignmentsSnapshot;
     freezePane?: SheetFreezePaneSnapshot | null;
+    autoFilter?: SheetAutoFilterSnapshot | null;
     cells: Record<string, CellSnapshot>;
     signature: string;
 }
@@ -129,6 +146,7 @@ export interface EditorActiveSheetView {
     columnAlignments?: SheetColumnAlignmentsSnapshot;
     cells: Record<string, CellSnapshot>;
     freezePane: SheetFreezePaneSnapshot | null;
+    autoFilter: SheetAutoFilterSnapshot | null;
 }
 
 export interface EditorRenderModel {

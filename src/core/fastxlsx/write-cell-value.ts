@@ -1,12 +1,14 @@
 import { copyFile, mkdir } from "node:fs/promises";
 import * as path from "node:path";
 import * as vscode from "vscode";
-import { getCellAddress } from "../model/cells";
+import { getCellAddress, getRangeAddress } from "../model/cells";
 import type {
     SheetCellAlignmentsSnapshot,
     SheetColumnAlignmentsSnapshot,
     SheetRowAlignmentsSnapshot,
 } from "../model/alignment";
+import type { SheetAutoFilterSnapshot } from "../model/types";
+import type { AutoFilterDefinition } from "fastxlsx";
 import { Workbook } from "./runtime";
 
 export interface CellEdit {
@@ -85,6 +87,7 @@ export interface SheetViewEdit {
         columnCount: number;
         rowCount: number;
     } | null;
+    autoFilter?: SheetAutoFilterSnapshot | null;
     columnWidths?: Array<number | null>;
     rowHeights?: Record<string, number | null>;
     cellAlignments?: SheetCellAlignmentsSnapshot;
@@ -96,6 +99,30 @@ export interface WorkbookEditState {
     cellEdits: CellEdit[];
     sheetEdits: SheetEdit[];
     viewEdits?: SheetViewEdit[];
+}
+
+function createAutoFilterDefinition(
+    currentDefinition: AutoFilterDefinition | null,
+    autoFilter: SheetAutoFilterSnapshot
+): AutoFilterDefinition {
+    const range = getRangeAddress(autoFilter.range);
+    const preservedColumns = currentDefinition?.range === range ? currentDefinition.columns : [];
+
+    return {
+        range,
+        columns: preservedColumns,
+        sortState: autoFilter.sort
+            ? {
+                  range,
+                  conditions: [
+                      {
+                          columnNumber: autoFilter.sort.columnNumber,
+                          descending: autoFilter.sort.direction === "desc",
+                      },
+                  ],
+              }
+            : null,
+    };
 }
 
 /**
@@ -216,6 +243,14 @@ export async function writeWorkbookEditsToDestination(
 
         for (const edit of edits.viewEdits ?? []) {
             const sheet = getSheet(edit.sheetName);
+            if (edit.autoFilter === null) {
+                sheet.removeAutoFilter();
+            } else if (edit.autoFilter) {
+                sheet.setAutoFilterDefinition(
+                    createAutoFilterDefinition(sheet.getAutoFilterDefinition(), edit.autoFilter)
+                );
+            }
+
             if (
                 !edit.freezePane ||
                 (edit.freezePane.columnCount === 0 && edit.freezePane.rowCount === 0)
@@ -225,7 +260,11 @@ export async function writeWorkbookEditsToDestination(
                 sheet.freezePane(edit.freezePane.columnCount, edit.freezePane.rowCount);
             }
 
-            for (let columnIndex = 0; columnIndex < (edit.columnWidths?.length ?? 0); columnIndex += 1) {
+            for (
+                let columnIndex = 0;
+                columnIndex < (edit.columnWidths?.length ?? 0);
+                columnIndex += 1
+            ) {
                 sheet.setColumnWidth(columnIndex + 1, edit.columnWidths?.[columnIndex] ?? null);
             }
 
@@ -233,7 +272,9 @@ export async function writeWorkbookEditsToDestination(
                 sheet.setRowHeight(Number(rowNumberText), rowHeight);
             }
 
-            for (const [columnNumberText, alignment] of Object.entries(edit.columnAlignments ?? {})) {
+            for (const [columnNumberText, alignment] of Object.entries(
+                edit.columnAlignments ?? {}
+            )) {
                 sheet.setColumnStyle(Number(columnNumberText), {
                     applyAlignment: true,
                     alignment,

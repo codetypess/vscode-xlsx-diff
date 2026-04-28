@@ -1,4 +1,5 @@
 import * as React from "react";
+import { AiOutlineSortAscending, AiOutlineSortDescending } from "react-icons/ai";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import type { CellSnapshot, EditorRenderModel } from "../../core/model/types";
@@ -10,6 +11,7 @@ import {
 import { createCellKey, getColumnLabel } from "../../core/model/cells";
 import { formatI18nMessage, RUNTIME_MESSAGES } from "../../i18n/catalog";
 import {
+    EDITOR_EXTRA_PADDING_ROWS,
     EDITOR_VIRTUAL_COLUMN_WIDTH,
     EDITOR_VIRTUAL_HEADER_HEIGHT,
     clampEditorScrollPosition,
@@ -21,7 +23,6 @@ import {
     getEditorColumnWidth,
     getEditorDisplayGridDimensions,
     getEditorDisplayColumnLayout,
-    getEditorDisplayRowLayout,
     getEditorContentSize,
     getEditorFrozenColumnsWidth,
     getEditorFrozenRowsHeight,
@@ -93,7 +94,29 @@ import type {
     EditorAlignmentTargetKind,
     SearchOptions,
 } from "./editor-panel-types";
-import { resolveEditorReplaceResultInSheet } from "./editor-panel-logic";
+import {
+    resolveEditorReplaceResultInSheet,
+    resolveEditorSearchResultInSheet,
+} from "./editor-panel-logic";
+import {
+    canCreateEditorFilterRange,
+    clearEditorFilterColumn,
+    createEditorSheetFilterSnapshot,
+    createEditorSheetFilterState,
+    createEditorSheetFilterStateFromSnapshot,
+    getEditorFilterColumnValues,
+    getEditorVisibleRows,
+    isEditorFilterHeaderCell,
+    normalizeEditorFilterRange,
+    resolveEditorFilterRangeFromActiveCell,
+    resolveEditorFilterRangeFromSelection,
+    toggleEditorSheetFilterState,
+    updateEditorFilterIncludedValues,
+    updateEditorFilterSort,
+    type EditorFilterCellSource,
+    type EditorFilterSortDirection,
+    type EditorSheetFilterState,
+} from "./editor-panel-filter";
 import {
     rebasePendingHistory,
     type PendingHistoryChange as PendingEditChange,
@@ -101,6 +124,7 @@ import {
 } from "./editor-pending-history";
 import { stabilizeIncomingRenderModel } from "./editor-render-stabilizer";
 import { getFreezePaneCountsForCell, hasLockedView } from "../view-lock";
+import { ImSortAlphaAsc, ImSortAlphaDesc } from "react-icons/im";
 
 interface VsCodeApi {
     postMessage(message: EditorWebviewMessage): void;
@@ -204,6 +228,19 @@ interface SearchPanelDragState {
     offsetY: number;
 }
 
+interface FilterMenuState {
+    sheetKey: string;
+    columnNumber: number;
+    left: number;
+    top: number;
+}
+
+interface EditorDisplayRowState {
+    actualRowNumbers: number[];
+    actualToDisplayRowNumbers: Record<string, number>;
+    hiddenActualRowNumbers: number[];
+}
+
 interface ColumnResizeState {
     pointerId: number;
     sheetKey: string;
@@ -292,6 +329,8 @@ let searchFeedback: SearchPanelFeedback | null = null;
 let searchPanelPosition: SearchPanelPosition | null = null;
 let searchSelectionRange: CellRange | null = null;
 let editorMaximumDigitWidth = DEFAULT_MAXIMUM_DIGIT_WIDTH_PX;
+const sheetFilterStates = new Map<string, EditorSheetFilterState | null>();
+let filterMenuState: FilterMenuState | null = null;
 
 function normalizeWorkbookColumnWidth(columnWidth: number): number {
     return Math.round(columnWidth * 256) / 256;
@@ -328,7 +367,9 @@ function getSearchPanelShellElement(): HTMLElement | null {
 }
 
 function useMeasuredMaximumDigitWidth(target: Element | null): number {
-    const [maximumDigitWidth, setMaximumDigitWidth] = React.useState(DEFAULT_MAXIMUM_DIGIT_WIDTH_PX);
+    const [maximumDigitWidth, setMaximumDigitWidth] = React.useState(
+        DEFAULT_MAXIMUM_DIGIT_WIDTH_PX
+    );
 
     React.useLayoutEffect(() => {
         const updateMaximumDigitWidth = (): void => {
@@ -388,11 +429,220 @@ function getSheetColumnLayout(currentModel: EditorRenderModel): PixelColumnLayou
     });
 }
 
-function getSheetRowLayout(currentModel: EditorRenderModel): PixelRowLayout {
-    return createEditorPixelRowLayout({
+function getEffectiveCellValueForModel(
+    currentModel: EditorRenderModel,
+    rowNumber: number,
+    columnNumber: number
+): string {
+    return (
+        pendingEdits.get(getPendingEditKey(currentModel.activeSheet.key, rowNumber, columnNumber))
+            ?.value ??
+        getCellView(rowNumber, columnNumber, currentModel)?.value ??
+        ""
+    );
+}
+
+function createEditorFilterCellSource(currentModel: EditorRenderModel): EditorFilterCellSource {
+    return {
         rowCount: currentModel.activeSheet.rowCount,
-        rowHeights: getEffectiveSheetRowHeights(currentModel),
+        columnCount: currentModel.activeSheet.columnCount,
+        getCellValue: (rowNumber, columnNumber) =>
+            getEffectiveCellValueForModel(currentModel, rowNumber, columnNumber),
+    };
+}
+
+function getStoredSheetFilterState(sheetKey: string): EditorSheetFilterState | null | undefined {
+    return sheetFilterStates.has(sheetKey) ? (sheetFilterStates.get(sheetKey) ?? null) : undefined;
+}
+
+function closeFilterMenu({ refresh = true }: { refresh?: boolean } = {}): void {
+    if (!filterMenuState) {
+        return;
+    }
+
+    filterMenuState = null;
+    if (refresh) {
+        renderApp({ commitEditing: false });
+    }
+}
+
+function getActiveSheetFilterState(
+    currentModel: EditorRenderModel | null = model
+): EditorSheetFilterState | null {
+    if (!currentModel) {
+        return null;
+    }
+
+    const sheetKey = currentModel.activeSheet.key;
+    const filterState =
+        getStoredSheetFilterState(sheetKey) ??
+        createEditorSheetFilterStateFromSnapshot(currentModel.activeSheet.autoFilter);
+    if (!filterState) {
+        return null;
+    }
+
+    const normalizedRange = normalizeEditorFilterRange(
+        createEditorFilterCellSource(currentModel),
+        filterState.range
+    );
+    if (!normalizedRange) {
+        if (sheetFilterStates.has(sheetKey)) {
+            sheetFilterStates.set(sheetKey, null);
+        }
+        if (filterMenuState?.sheetKey === sheetKey) {
+            filterMenuState = null;
+        }
+        return null;
+    }
+
+    if (!areSelectionRangesEqual(normalizedRange, filterState.range)) {
+        const nextFilterState: EditorSheetFilterState = {
+            ...filterState,
+            range: normalizedRange,
+        };
+        sheetFilterStates.set(sheetKey, nextFilterState);
+        return nextFilterState;
+    }
+
+    return filterState;
+}
+
+function setSheetFilterState(sheetKey: string, filterState: EditorSheetFilterState | null): void {
+    sheetFilterStates.set(sheetKey, filterState);
+    if (!filterState && filterMenuState?.sheetKey === sheetKey) {
+        filterMenuState = null;
+    }
+}
+
+function syncActiveSheetFilterStateToHost(
+    currentModel: EditorRenderModel,
+    filterState: EditorSheetFilterState | null
+): void {
+    vscode.postMessage({
+        type: "setFilterState",
+        sheetKey: currentModel.activeSheet.key,
+        filterState: createEditorSheetFilterSnapshot(filterState),
     });
+}
+
+function getVisibleActualRowsForModel(currentModel: EditorRenderModel): {
+    visibleRows: number[];
+    hiddenRows: number[];
+} {
+    return getEditorVisibleRows(
+        createEditorFilterCellSource(currentModel),
+        getActiveSheetFilterState(currentModel)
+    );
+}
+
+function createDisplayRowHeightsForActualRows(
+    currentModel: EditorRenderModel,
+    actualRowNumbers: readonly number[]
+): Readonly<Record<string, number | null>> | undefined {
+    const rowHeights = getEffectiveSheetRowHeights(currentModel);
+    if (!rowHeights) {
+        return undefined;
+    }
+
+    const nextRowHeights: Record<string, number | null> = {};
+    let hasOverrides = false;
+    actualRowNumbers.forEach((actualRowNumber, index) => {
+        const rowHeight = rowHeights[String(actualRowNumber)];
+        if (rowHeight === undefined) {
+            return;
+        }
+
+        hasOverrides = true;
+        nextRowHeights[String(index + 1)] = rowHeight;
+    });
+
+    return hasOverrides ? nextRowHeights : undefined;
+}
+
+function createEditorDisplayRowState(
+    currentModel: EditorRenderModel,
+    visibleRows: readonly number[],
+    hiddenRows: readonly number[],
+    totalDisplayRowCount: number
+): EditorDisplayRowState {
+    const actualRowNumbers = [...visibleRows];
+    let nextSyntheticRowNumber = currentModel.activeSheet.rowCount + 1;
+    while (actualRowNumbers.length < totalDisplayRowCount) {
+        actualRowNumbers.push(nextSyntheticRowNumber);
+        nextSyntheticRowNumber += 1;
+    }
+
+    return {
+        actualRowNumbers,
+        actualToDisplayRowNumbers: Object.fromEntries(
+            actualRowNumbers.map((actualRowNumber, index) => [String(actualRowNumber), index + 1])
+        ),
+        hiddenActualRowNumbers: [...hiddenRows],
+    };
+}
+
+function getDisplayRowNumber(
+    rowState: EditorDisplayRowState,
+    actualRowNumber: number
+): number | null {
+    return rowState.actualToDisplayRowNumbers[String(actualRowNumber)] ?? null;
+}
+
+function getActualRowNumberAtDisplayRow(
+    rowState: EditorDisplayRowState,
+    displayRowNumber: number
+): number | null {
+    return rowState.actualRowNumbers[displayRowNumber - 1] ?? null;
+}
+
+function getNearestVisibleRowNumber(
+    currentModel: EditorRenderModel,
+    rowNumber: number
+): number | null {
+    const visibleRows = getVisibleActualRowsForModel(currentModel).visibleRows;
+    if (visibleRows.length === 0) {
+        return null;
+    }
+
+    if (visibleRows.includes(rowNumber)) {
+        return rowNumber;
+    }
+
+    const nextVisibleRowNumber = visibleRows.find(
+        (visibleRowNumber) => visibleRowNumber >= rowNumber
+    );
+    if (nextVisibleRowNumber) {
+        return nextVisibleRowNumber;
+    }
+
+    return visibleRows[visibleRows.length - 1] ?? null;
+}
+
+function ensureSelectedCellVisibleForFilter(
+    currentModel: EditorRenderModel | null = model
+): boolean {
+    if (!currentModel || !selectedCell) {
+        return false;
+    }
+
+    if (selectedCell.rowNumber > currentModel.activeSheet.rowCount) {
+        return false;
+    }
+
+    const nextVisibleRowNumber = getNearestVisibleRowNumber(currentModel, selectedCell.rowNumber);
+    if (nextVisibleRowNumber === null || nextVisibleRowNumber === selectedCell.rowNumber) {
+        return false;
+    }
+
+    selectedCell = {
+        rowNumber: nextVisibleRowNumber,
+        columnNumber: selectedCell.columnNumber,
+    };
+    selectionAnchorCell = selectedCell;
+    selectionRangeOverride = null;
+    suppressAutoSelection = false;
+    syncSelectedCellToHost();
+    return true;
 }
 
 function clampSearchPanelPosition(
@@ -463,23 +713,40 @@ function getVirtualViewportState(
     const viewportWidth = pane?.clientWidth ?? DEFAULT_EDITOR_VIEWPORT_WIDTH;
     const scrollTop = pane?.scrollTop ?? 0;
     const scrollLeft = pane?.scrollLeft ?? 0;
-    const sheetRowLayout = getSheetRowLayout(currentModel);
     const sheetColumnLayout = getSheetColumnLayout(currentModel);
+    const { visibleRowResult, rowLayout: baseVisibleRowLayout } =
+        createBaseVisibleRowLayout(currentModel);
     const displayGrid = getEditorDisplayGridDimensions({
-        rowCount: currentModel.activeSheet.rowCount,
+        rowCount: visibleRowResult.visibleRows.length,
         columnCount: currentModel.activeSheet.columnCount,
+        rowHeaderLabelCount: getFilterAwareRowHeaderLabelCount(
+            currentModel,
+            visibleRowResult.visibleRows.length
+        ),
         viewportHeight,
         viewportWidth,
-        rowLayout: sheetRowLayout,
+        rowLayout: baseVisibleRowLayout,
         columnLayout: sheetColumnLayout,
     });
-    const displayRowLayout = getEditorDisplayRowLayout(sheetRowLayout, displayGrid.rowCount);
+    const displayRowState = createEditorDisplayRowState(
+        currentModel,
+        visibleRowResult.visibleRows,
+        visibleRowResult.hiddenRows,
+        displayGrid.rowCount
+    );
+    const displayRowLayout = createEditorPixelRowLayout({
+        rowCount: displayRowState.actualRowNumbers.length,
+        rowHeights: createDisplayRowHeightsForActualRows(
+            currentModel,
+            displayRowState.actualRowNumbers
+        ),
+    });
     const displayColumnLayout = getEditorDisplayColumnLayout(
         sheetColumnLayout,
         displayGrid.columnCount
     );
     const { rowCount: frozenRowCount, columnCount: frozenColumnCount } = getFrozenEditorCounts({
-        rowCount: currentModel.activeSheet.rowCount,
+        rowCount: displayRowState.actualRowNumbers.length,
         columnCount: currentModel.activeSheet.columnCount,
         freezePane: currentModel.activeSheet.freezePane,
     });
@@ -516,9 +783,17 @@ function getVirtualViewportState(
         rowHeaderWidth: displayGrid.rowHeaderWidth,
         frozenRowCount,
         frozenColumnCount,
-        frozenRowNumbers: createSequentialNumbers(visibleFrozenRowCount),
+        frozenRowNumbers: createSequentialNumbers(visibleFrozenRowCount)
+            .map((displayRowNumber) =>
+                getActualRowNumberAtDisplayRow(displayRowState, displayRowNumber)
+            )
+            .filter((rowNumber): rowNumber is number => rowNumber !== null),
         frozenColumnNumbers: createSequentialNumbers(visibleFrozenColumnCount),
-        rowNumbers: rowWindow.rowNumbers,
+        rowNumbers: rowWindow.rowNumbers
+            .map((displayRowNumber) =>
+                getActualRowNumberAtDisplayRow(displayRowState, displayRowNumber)
+            )
+            .filter((rowNumber): rowNumber is number => rowNumber !== null),
         columnNumbers: columnWindow.columnNumbers,
     };
 }
@@ -912,10 +1187,7 @@ function getEffectiveCellValue(rowNumber: number, columnNumber: number): string 
         return "";
     }
 
-    return (
-        pendingEdits.get(getPendingEditKey(model.activeSheet.key, rowNumber, columnNumber))
-            ?.value ?? getCellModelValue(rowNumber, columnNumber)
-    );
+    return getEffectiveCellValueForModel(model, rowNumber, columnNumber);
 }
 
 function serializeSelectionToClipboard(): string | null {
@@ -1100,6 +1372,165 @@ function openColumnContextMenu(columnNumber: number, x: number, y: number): void
     renderApp({ commitEditing: false });
 }
 
+function getFilterToolbarActionLabel(currentModel: EditorRenderModel): string {
+    if (
+        canCreateEditorFilterRange(
+            createEditorFilterCellSource(currentModel),
+            getCandidateFilterRange(currentModel)
+        )
+    ) {
+        return STRINGS.filterSelection;
+    }
+
+    return getActiveSheetFilterState(currentModel)
+        ? STRINGS.clearFilterRange
+        : STRINGS.filterSelection;
+}
+
+function getCandidateFilterRange(currentModel: EditorRenderModel): CellRange | null {
+    const source = createEditorFilterCellSource(currentModel);
+    const expandedSelection = getExpandedSelectionRange();
+
+    return expandedSelection
+        ? resolveEditorFilterRangeFromSelection(source, expandedSelection)
+        : resolveEditorFilterRangeFromActiveCell(source, selectedCell);
+}
+
+function canToggleFilterForCurrentSelection(currentModel: EditorRenderModel): boolean {
+    return (
+        canCreateEditorFilterRange(
+            createEditorFilterCellSource(currentModel),
+            getCandidateFilterRange(currentModel)
+        ) || Boolean(getActiveSheetFilterState(currentModel))
+    );
+}
+
+function toggleActiveSheetFilter(): void {
+    if (!model) {
+        return;
+    }
+
+    if (editingCell) {
+        finishEdit({ mode: "commit", refresh: false });
+    }
+
+    const currentFilterState = getActiveSheetFilterState(model);
+    const nextFilterState = toggleEditorSheetFilterState(
+        createEditorFilterCellSource(model),
+        currentFilterState,
+        getCandidateFilterRange(model)
+    );
+
+    if (!nextFilterState && !currentFilterState) {
+        return;
+    }
+
+    setSheetFilterState(model.activeSheet.key, nextFilterState);
+    syncActiveSheetFilterStateToHost(model, nextFilterState);
+    closeFilterMenu({ refresh: false });
+    ensureSelectedCellVisibleForFilter(model);
+    renderApp({ commitEditing: false, sync: true });
+}
+
+function openFilterMenu(rowNumber: number, columnNumber: number, element: HTMLElement): void {
+    const currentModel = model;
+    const filterState = currentModel ? getActiveSheetFilterState(currentModel) : null;
+    if (
+        !currentModel ||
+        !filterState ||
+        !isEditorFilterHeaderCell(filterState, rowNumber, columnNumber)
+    ) {
+        return;
+    }
+
+    if (
+        filterMenuState?.sheetKey === currentModel.activeSheet.key &&
+        filterMenuState.columnNumber === columnNumber
+    ) {
+        closeFilterMenu({ refresh: false });
+        renderApp({ commitEditing: false, sync: true });
+        return;
+    }
+
+    const appRect = getEditorAppElement()?.getBoundingClientRect();
+    const triggerRect = element.getBoundingClientRect();
+    const rawLeft = appRect ? triggerRect.right - appRect.left - 260 : triggerRect.left;
+    const rawTop = appRect ? triggerRect.bottom - appRect.top + 6 : triggerRect.bottom + 6;
+    const appWidth = getEditorAppElement()?.clientWidth ?? window.innerWidth;
+    const appHeight = getEditorAppElement()?.clientHeight ?? window.innerHeight;
+
+    filterMenuState = {
+        sheetKey: currentModel.activeSheet.key,
+        columnNumber,
+        left: Math.max(8, Math.min(rawLeft, appWidth - 288)),
+        top: Math.max(8, Math.min(rawTop, appHeight - 360)),
+    };
+    renderApp({ commitEditing: false, sync: true });
+}
+
+function applyActiveSheetFilterSort(
+    columnNumber: number,
+    direction: EditorFilterSortDirection
+): void {
+    if (!model) {
+        return;
+    }
+
+    const filterState = getActiveSheetFilterState(model);
+    if (!filterState) {
+        return;
+    }
+
+    const nextFilterState = updateEditorFilterSort(filterState, columnNumber, direction);
+    setSheetFilterState(model.activeSheet.key, nextFilterState);
+    syncActiveSheetFilterStateToHost(model, nextFilterState);
+    closeFilterMenu({ refresh: false });
+    ensureSelectedCellVisibleForFilter(model);
+    renderApp({ commitEditing: false, sync: true });
+}
+
+function setActiveSheetFilterIncludedValues(
+    columnNumber: number,
+    includedValues: readonly string[] | null
+): void {
+    if (!model) {
+        return;
+    }
+
+    const filterState = getActiveSheetFilterState(model);
+    if (!filterState) {
+        return;
+    }
+
+    const nextFilterState = updateEditorFilterIncludedValues(
+        filterState,
+        columnNumber,
+        includedValues
+    );
+    setSheetFilterState(model.activeSheet.key, nextFilterState);
+    syncActiveSheetFilterStateToHost(model, nextFilterState);
+    ensureSelectedCellVisibleForFilter(model);
+    renderApp({ commitEditing: false, sync: true });
+}
+
+function clearActiveSheetFilterColumn(columnNumber: number): void {
+    if (!model) {
+        return;
+    }
+
+    const filterState = getActiveSheetFilterState(model);
+    if (!filterState) {
+        return;
+    }
+
+    const nextFilterState = clearEditorFilterColumn(filterState, columnNumber);
+    setSheetFilterState(model.activeSheet.key, nextFilterState);
+    syncActiveSheetFilterStateToHost(model, nextFilterState);
+    closeFilterMenu({ refresh: false });
+    ensureSelectedCellVisibleForFilter(model);
+    renderApp({ commitEditing: false, sync: true });
+}
+
 function requestAddSheet(): void {
     closeContextMenu({ refresh: false });
     vscode.postMessage({ type: "addSheet" });
@@ -1185,7 +1616,9 @@ function updateColumnResize(clientX: number): void {
         Math.min(
             MAX_COLUMN_PIXEL_WIDTH,
             stabilizeColumnPixelWidth(
-                Math.round(columnResizeState.startPixelWidth + clientX - columnResizeState.startClientX),
+                Math.round(
+                    columnResizeState.startPixelWidth + clientX - columnResizeState.startClientX
+                ),
                 editorMaximumDigitWidth
             )
         )
@@ -1201,10 +1634,7 @@ function updateColumnResize(clientX: number): void {
     renderApp({ commitEditing: false });
 }
 
-function stopColumnResize(
-    pointerId?: number,
-    { commit = false }: { commit?: boolean } = {}
-): void {
+function stopColumnResize(pointerId?: number, { commit = false }: { commit?: boolean } = {}): void {
     if (!columnResizeState) {
         return;
     }
@@ -1294,10 +1724,7 @@ function updateRowResize(clientY: number): void {
     renderApp({ commitEditing: false });
 }
 
-function stopRowResize(
-    pointerId?: number,
-    { commit = false }: { commit?: boolean } = {}
-): void {
+function stopRowResize(pointerId?: number, { commit = false }: { commit?: boolean } = {}): void {
     if (!rowResizeState) {
         return;
     }
@@ -1725,23 +2152,36 @@ function revealSelectedCell(): void {
         return;
     }
 
-    const sheetRowLayout = getSheetRowLayout(model);
     const sheetColumnLayout = getSheetColumnLayout(model);
+    const { visibleRowResult, rowLayout: baseVisibleRowLayout } = createBaseVisibleRowLayout(model);
     const displayGrid = getEditorDisplayGridDimensions({
-        rowCount: model.activeSheet.rowCount,
+        rowCount: visibleRowResult.visibleRows.length,
         columnCount: model.activeSheet.columnCount,
+        rowHeaderLabelCount: getFilterAwareRowHeaderLabelCount(
+            model,
+            visibleRowResult.visibleRows.length
+        ),
         viewportHeight: pane.clientHeight,
         viewportWidth: pane.clientWidth,
-        rowLayout: sheetRowLayout,
+        rowLayout: baseVisibleRowLayout,
         columnLayout: sheetColumnLayout,
     });
-    const displayRowLayout = getEditorDisplayRowLayout(sheetRowLayout, displayGrid.rowCount);
+    const displayRowState = createEditorDisplayRowState(
+        model,
+        visibleRowResult.visibleRows,
+        visibleRowResult.hiddenRows,
+        displayGrid.rowCount
+    );
+    const displayRowLayout = createEditorPixelRowLayout({
+        rowCount: displayRowState.actualRowNumbers.length,
+        rowHeights: createDisplayRowHeightsForActualRows(model, displayRowState.actualRowNumbers),
+    });
     const displayColumnLayout = getEditorDisplayColumnLayout(
         sheetColumnLayout,
         displayGrid.columnCount
     );
     const { rowCount: frozenRowCount, columnCount: frozenColumnCount } = getFrozenEditorCounts({
-        rowCount: model.activeSheet.rowCount,
+        rowCount: displayRowState.actualRowNumbers.length,
         columnCount: model.activeSheet.columnCount,
         freezePane: model.activeSheet.freezePane,
     });
@@ -1759,10 +2199,12 @@ function revealSelectedCell(): void {
     let nextTop = pane.scrollTop;
     let nextLeft = pane.scrollLeft;
 
-    if (selectedCell.rowNumber > frozenRowCount) {
+    const selectedDisplayRowNumber = getDisplayRowNumber(displayRowState, selectedCell.rowNumber);
+    if (selectedDisplayRowNumber !== null && selectedDisplayRowNumber > frozenRowCount) {
         const cellTop =
-            EDITOR_VIRTUAL_HEADER_HEIGHT + getEditorRowTop(displayRowLayout, selectedCell.rowNumber);
-        const cellBottom = cellTop + getEditorRowHeight(displayRowLayout, selectedCell.rowNumber);
+            EDITOR_VIRTUAL_HEADER_HEIGHT +
+            getEditorRowTop(displayRowLayout, selectedDisplayRowNumber);
+        const cellBottom = cellTop + getEditorRowHeight(displayRowLayout, selectedDisplayRowNumber);
         const visibleTop = pane.scrollTop + stickyTop;
         const visibleBottom = pane.scrollTop + pane.clientHeight;
 
@@ -1777,7 +2219,8 @@ function revealSelectedCell(): void {
         const cellLeft =
             displayGrid.rowHeaderWidth +
             getEditorColumnLeft(displayColumnLayout, selectedCell.columnNumber);
-        const cellRight = cellLeft + getEditorColumnWidth(displayColumnLayout, selectedCell.columnNumber);
+        const cellRight =
+            cellLeft + getEditorColumnWidth(displayColumnLayout, selectedCell.columnNumber);
         const visibleLeft = pane.scrollLeft + stickyLeft;
         const visibleRight = pane.scrollLeft + pane.clientWidth;
 
@@ -2291,9 +2734,12 @@ function prepareSelectionForRender({
     const previousAnchorCell = selectionAnchorCell;
 
     if (useModelSelection && model?.selection) {
+        const nextRowNumber =
+            getNearestVisibleRowNumber(model, model.selection.rowNumber) ??
+            model.selection.rowNumber;
         clearFillDragState();
         selectedCell = {
-            rowNumber: model.selection.rowNumber,
+            rowNumber: nextRowNumber,
             columnNumber: model.selection.columnNumber,
         };
         selectionAnchorCell = selectedCell;
@@ -2314,9 +2760,12 @@ function prepareSelectionForRender({
     }
 
     if (pendingSelectionAfterRender) {
+        const nextRowNumber =
+            getNearestVisibleRowNumber(model!, pendingSelectionAfterRender.rowNumber) ??
+            pendingSelectionAfterRender.rowNumber;
         clearFillDragState();
         selectedCell = {
-            rowNumber: pendingSelectionAfterRender.rowNumber,
+            rowNumber: nextRowNumber,
             columnNumber: pendingSelectionAfterRender.columnNumber,
         };
         selectionAnchorCell = selectedCell;
@@ -2329,6 +2778,8 @@ function prepareSelectionForRender({
     }
 
     pendingSelectionAfterRender = null;
+
+    ensureSelectedCellVisibleForFilter(model);
 
     if (isCellVisible(selectedCell)) {
         if (
@@ -2350,11 +2801,13 @@ function prepareSelectionForRender({
 
     selectedCell = model?.selection
         ? {
-              rowNumber: model.selection.rowNumber,
+              rowNumber:
+                  getNearestVisibleRowNumber(model, model.selection.rowNumber) ??
+                  model.selection.rowNumber,
               columnNumber: model.selection.columnNumber,
           }
         : model && model.activeSheet.rowCount > 0 && model.activeSheet.columnCount > 0
-          ? { rowNumber: 1, columnNumber: 1 }
+          ? { rowNumber: getNearestVisibleRowNumber(model, 1) ?? 1, columnNumber: 1 }
           : null;
     clearFillDragState();
     selectionRangeOverride = null;
@@ -2731,20 +3184,15 @@ function getSelectionBounds(): {
     }
 
     const pane = getViewportElement();
-    const sheetRowLayout = getSheetRowLayout(model);
-    const sheetColumnLayout = getSheetColumnLayout(model);
-    const displayGrid = getEditorDisplayGridDimensions({
-        rowCount: model.activeSheet.rowCount,
-        columnCount: model.activeSheet.columnCount,
-        viewportHeight: pane?.clientHeight ?? DEFAULT_EDITOR_VIEWPORT_HEIGHT,
-        viewportWidth: pane?.clientWidth ?? DEFAULT_EDITOR_VIEWPORT_WIDTH,
-        rowLayout: sheetRowLayout,
-        columnLayout: sheetColumnLayout,
-    });
+    const { displayGrid, rowState } = createDisplayGridRowState(
+        model,
+        pane?.clientHeight ?? DEFAULT_EDITOR_VIEWPORT_HEIGHT,
+        pane?.clientWidth ?? DEFAULT_EDITOR_VIEWPORT_WIDTH
+    );
 
     return {
         minRow: 1,
-        maxRow: displayGrid.rowCount,
+        maxRow: rowState.actualRowNumbers[rowState.actualRowNumbers.length - 1] ?? 1,
         minColumn: 1,
         maxColumn: displayGrid.columnCount,
     };
@@ -2752,14 +3200,26 @@ function getSelectionBounds(): {
 
 function ensureSelection(): CellPosition | null {
     if (selectedCell) {
+        if (model && selectedCell.rowNumber <= model.activeSheet.rowCount) {
+            const nextVisibleRowNumber = getNearestVisibleRowNumber(model, selectedCell.rowNumber);
+            if (nextVisibleRowNumber !== null && nextVisibleRowNumber !== selectedCell.rowNumber) {
+                selectedCell = {
+                    rowNumber: nextVisibleRowNumber,
+                    columnNumber: selectedCell.columnNumber,
+                };
+            }
+        }
         selectionAnchorCell ??= selectedCell;
         suppressAutoSelection = false;
         return selectedCell;
     }
 
     if (model?.selection) {
+        const rowNumber =
+            getNearestVisibleRowNumber(model, model.selection.rowNumber) ??
+            model.selection.rowNumber;
         selectedCell = {
-            rowNumber: model.selection.rowNumber,
+            rowNumber,
             columnNumber: model.selection.columnNumber,
         };
         selectionAnchorCell = selectedCell;
@@ -2769,8 +3229,9 @@ function ensureSelection(): CellPosition | null {
     }
 
     if (model && model.activeSheet.rowCount > 0 && model.activeSheet.columnCount > 0) {
+        const rowNumber = getNearestVisibleRowNumber(model, 1) ?? 1;
         selectedCell = {
-            rowNumber: 1,
+            rowNumber,
             columnNumber: 1,
         };
         selectionAnchorCell = selectedCell;
@@ -2789,14 +3250,26 @@ function moveSelection(
 ): void {
     const selection = ensureSelection();
     const bounds = getSelectionBounds();
-    if (!selection || !bounds) {
+    if (!selection || !bounds || !model) {
         return;
     }
 
-    const nextRow = Math.max(
-        bounds.minRow,
-        Math.min(bounds.maxRow, selection.rowNumber + rowDelta)
+    const pane = getViewportElement();
+    const { rowState } = createDisplayGridRowState(
+        model,
+        pane?.clientHeight ?? DEFAULT_EDITOR_VIEWPORT_HEIGHT,
+        pane?.clientWidth ?? DEFAULT_EDITOR_VIEWPORT_WIDTH
     );
+    const currentDisplayRowNumber = getDisplayRowNumber(rowState, selection.rowNumber) ?? 1;
+    const nextDisplayRowNumber = Math.max(
+        1,
+        Math.min(rowState.actualRowNumbers.length, currentDisplayRowNumber + rowDelta)
+    );
+    const nextRow =
+        rowDelta === 0
+            ? selection.rowNumber
+            : (getActualRowNumberAtDisplayRow(rowState, nextDisplayRowNumber) ??
+              selection.rowNumber);
     const nextColumn = Math.max(
         bounds.minColumn,
         Math.min(bounds.maxColumn, selection.columnNumber + columnDelta)
@@ -2818,14 +3291,23 @@ function moveSelectionByViewportWindow(direction: -1 | 1): void {
     }
 
     const viewportState = getVirtualViewportState(model);
-    const shiftRowCount = Math.max(
-        1,
-        (viewportState?.rowNumbers.length ?? 1) - 1
+    const pane = getViewportElement();
+    const { rowState } = createDisplayGridRowState(
+        model,
+        pane?.clientHeight ?? DEFAULT_EDITOR_VIEWPORT_HEIGHT,
+        pane?.clientWidth ?? DEFAULT_EDITOR_VIEWPORT_WIDTH
     );
-    const nextRowNumber = Math.max(
+    const shiftRowCount = Math.max(1, (viewportState?.rowNumbers.length ?? 1) - 1);
+    const currentDisplayRowNumber = getDisplayRowNumber(rowState, selection.rowNumber) ?? 1;
+    const nextDisplayRowNumber = Math.max(
         1,
-        Math.min(model.activeSheet.rowCount, selection.rowNumber + direction * shiftRowCount)
+        Math.min(
+            rowState.actualRowNumbers.length,
+            currentDisplayRowNumber + direction * shiftRowCount
+        )
     );
+    const nextRowNumber =
+        getActualRowNumberAtDisplayRow(rowState, nextDisplayRowNumber) ?? selection.rowNumber;
     if (nextRowNumber === selection.rowNumber) {
         return;
     }
@@ -3034,6 +3516,27 @@ function getActiveSheetPendingEdits(): Array<{
         }));
 }
 
+function getVisibleSearchCellsForModel(
+    currentModel: EditorRenderModel
+): Record<string, CellSnapshot> {
+    const filterState = getActiveSheetFilterState(currentModel);
+    if (!filterState) {
+        return currentModel.activeSheet.cells;
+    }
+
+    const visibleRows = new Set(
+        getVisibleActualRowsForModel(currentModel).visibleRows.filter(
+            (rowNumber) => rowNumber <= currentModel.activeSheet.rowCount
+        )
+    );
+
+    return Object.fromEntries(
+        Object.entries(currentModel.activeSheet.cells).filter(([, cell]) =>
+            visibleRows.has(cell.rowNumber)
+        )
+    );
+}
+
 function revealSearchPanelMatch(
     match: { rowNumber: number; columnNumber: number },
     scope: EditorSearchScope,
@@ -3066,24 +3569,56 @@ function revealSearchPanelMatch(
 
 function submitSearch(direction: "next" | "prev"): void {
     const normalizedQuery = searchQuery.trim();
-    if (!normalizedQuery) {
+    if (!normalizedQuery || !model) {
         focusSearchInput();
         return;
     }
 
     const effectiveScope = getEffectiveSearchScope();
     const selectionRange = getActiveSearchSelectionRange(effectiveScope);
+    const result = resolveEditorSearchResultInSheet(
+        {
+            key: model.activeSheet.key,
+            rowCount: model.activeSheet.rowCount,
+            columnCount: model.activeSheet.columnCount,
+            cells: getVisibleSearchCellsForModel(model),
+        },
+        selectedCell,
+        {
+            query: normalizedQuery,
+            direction,
+            options: searchOptions,
+            scope: effectiveScope,
+            selectionRange: selectionRange ?? undefined,
+        },
+        {
+            pendingEdits: getActiveSheetPendingEdits(),
+        }
+    );
 
-    searchFeedback = null;
-    renderApp({ commitEditing: false });
-    vscode.postMessage({
-        type: "search",
-        query: normalizedQuery,
-        direction,
-        options: searchOptions,
-        scope: effectiveScope,
-        selectionRange: selectionRange ?? undefined,
-    });
+    if (result.status !== "matched" || !result.match) {
+        searchFeedback = {
+            status: result.status,
+            message:
+                result.status === "invalid-pattern"
+                    ? STRINGS.invalidSearchPattern
+                    : STRINGS.noSearchMatches,
+        };
+        renderApp({ commitEditing: false, sync: true });
+        return;
+    }
+
+    searchFeedback = {
+        status: "matched",
+        message: getSearchMatchFeedbackMessage(
+            result.match,
+            effectiveScope,
+            selectionRange,
+            result.matchCount,
+            result.matchIndex
+        ),
+    };
+    revealSearchPanelMatch(result.match, effectiveScope, { syncHost: false });
 }
 
 function getSearchMatchFeedbackMessage(
@@ -3131,7 +3666,7 @@ function submitReplace(mode: "single" | "all"): void {
             key: model.activeSheet.key,
             rowCount: model.activeSheet.rowCount,
             columnCount: model.activeSheet.columnCount,
-            cells: model.activeSheet.cells,
+            cells: getVisibleSearchCellsForModel(model),
         },
         selectedCell,
         {
@@ -3373,6 +3908,181 @@ function CellEditor({ edit }: { edit: EditingCell }): React.ReactElement {
     );
 }
 
+function getFilterOptionLabel(value: string): string {
+    return value ? value : STRINGS.filterBlankValue;
+}
+
+function EditorFilterMenu({
+    currentModel,
+    filterState,
+    menuState,
+}: {
+    currentModel: EditorRenderModel;
+    filterState: EditorSheetFilterState | null;
+    menuState: FilterMenuState | null;
+}): React.ReactElement | null {
+    const [query, setQuery] = React.useState("");
+
+    React.useEffect(() => {
+        setQuery("");
+    }, [currentModel.activeSheet.key, menuState?.columnNumber]);
+
+    if (
+        !filterState ||
+        !menuState ||
+        menuState.sheetKey !== currentModel.activeSheet.key ||
+        menuState.columnNumber < filterState.range.startColumn ||
+        menuState.columnNumber > filterState.range.endColumn
+    ) {
+        return null;
+    }
+
+    const filterOptions = getEditorFilterColumnValues(
+        createEditorFilterCellSource(currentModel),
+        filterState,
+        menuState.columnNumber
+    );
+    const allValues = filterOptions.map((option) => option.value);
+    const includedValues =
+        filterState.includedValuesByColumn[String(menuState.columnNumber)] ?? allValues;
+    const includedValuesSet = new Set(includedValues);
+    const normalizedQuery = query.trim().toLowerCase();
+    const filteredOptions = normalizedQuery
+        ? filterOptions.filter((option) =>
+              getFilterOptionLabel(option.value).toLowerCase().includes(normalizedQuery)
+          )
+        : filterOptions;
+    const isAllSelected =
+        filterOptions.length > 0 && includedValues.length === filterOptions.length;
+    const hasColumnCriteria =
+        Boolean(filterState.includedValuesByColumn[String(menuState.columnNumber)]) ||
+        filterState.sort?.columnNumber === menuState.columnNumber;
+
+    return (
+        <div
+            className="filter-menu"
+            data-role="filter-menu"
+            style={{
+                left: `${menuState.left}px`,
+                top: `${menuState.top}px`,
+            }}
+        >
+            <div className="filter-menu__sorts">
+                <button
+                    className={classNames([
+                        "filter-menu__sortButton",
+                        filterState.sort?.columnNumber === menuState.columnNumber &&
+                            filterState.sort.direction === "asc" &&
+                            "is-active",
+                    ])}
+                    type="button"
+                    onClick={() => applyActiveSheetFilterSort(menuState.columnNumber, "asc")}
+                >
+                    <ImSortAlphaAsc aria-hidden />
+                    <span>{STRINGS.sortAscending}</span>
+                </button>
+                <button
+                    className={classNames([
+                        "filter-menu__sortButton",
+                        filterState.sort?.columnNumber === menuState.columnNumber &&
+                            filterState.sort.direction === "desc" &&
+                            "is-active",
+                    ])}
+                    type="button"
+                    onClick={() => applyActiveSheetFilterSort(menuState.columnNumber, "desc")}
+                >
+                    <ImSortAlphaDesc aria-hidden />
+                    <span>{STRINGS.sortDescending}</span>
+                </button>
+            </div>
+            <div className="filter-menu__search">
+                <span className="codicon codicon-search filter-menu__searchIcon" aria-hidden />
+                <input
+                    className="filter-menu__searchInput"
+                    placeholder={STRINGS.filterSearchPlaceholder}
+                    type="text"
+                    value={query}
+                    onChange={(event) => setQuery(event.currentTarget.value)}
+                />
+            </div>
+            <div className="filter-menu__values">
+                {filterOptions.length > 0 ? (
+                    <>
+                        <label className="filter-menu__option">
+                            <input
+                                checked={isAllSelected}
+                                type="checkbox"
+                                onChange={(event) =>
+                                    setActiveSheetFilterIncludedValues(
+                                        menuState.columnNumber,
+                                        event.currentTarget.checked ? null : []
+                                    )
+                                }
+                            />
+                            <span>{STRINGS.filterSelectAll}</span>
+                        </label>
+                        <div className="filter-menu__divider" />
+                        <div className="filter-menu__optionList">
+                            {filteredOptions.map((option) => {
+                                const optionLabel = getFilterOptionLabel(option.value);
+                                const isChecked = includedValuesSet.has(option.value);
+                                return (
+                                    <label
+                                        key={`${menuState.columnNumber}:${option.value}`}
+                                        className="filter-menu__option"
+                                    >
+                                        <input
+                                            checked={isChecked}
+                                            type="checkbox"
+                                            onChange={(event) => {
+                                                const nextIncludedValues = new Set(includedValues);
+                                                if (event.currentTarget.checked) {
+                                                    nextIncludedValues.add(option.value);
+                                                } else {
+                                                    nextIncludedValues.delete(option.value);
+                                                }
+
+                                                const normalizedIncludedValues = allValues.filter(
+                                                    (value) => nextIncludedValues.has(value)
+                                                );
+                                                setActiveSheetFilterIncludedValues(
+                                                    menuState.columnNumber,
+                                                    normalizedIncludedValues.length ===
+                                                        allValues.length
+                                                        ? null
+                                                        : normalizedIncludedValues
+                                                );
+                                            }}
+                                        />
+                                        <span className="filter-menu__optionLabel">
+                                            {optionLabel}
+                                        </span>
+                                        <span className="filter-menu__optionCount">
+                                            {option.count}
+                                        </span>
+                                    </label>
+                                );
+                            })}
+                        </div>
+                    </>
+                ) : (
+                    <div className="filter-menu__empty">{STRINGS.filterNoValues}</div>
+                )}
+            </div>
+            <div className="filter-menu__footer">
+                <button
+                    className="filter-menu__clearButton"
+                    disabled={!hasColumnCriteria}
+                    type="button"
+                    onClick={() => clearActiveSheetFilterColumn(menuState.columnNumber)}
+                >
+                    {STRINGS.filterClearColumn}
+                </button>
+            </div>
+        </div>
+    );
+}
+
 function areSelectionRangesEqual(left: CellRange | null, right: CellRange | null): boolean {
     if (left === right) {
         return true;
@@ -3495,6 +4205,7 @@ function isCellWithinSelectionRange(
 interface EditorVirtualGridMetrics extends VirtualViewportState {
     rowLayout: PixelRowLayout;
     columnLayout: PixelColumnLayout;
+    rowState: EditorDisplayRowState;
     contentWidth: number;
     contentHeight: number;
     frozenRowNumbers: number[];
@@ -3597,6 +4308,24 @@ function getEditorGridLeft(
     return rowHeaderWidth + getEditorColumnLeft(columnLayout, columnNumber);
 }
 
+function getEditorGridTopForActualRow(
+    metrics: Pick<EditorVirtualGridMetrics, "rowLayout" | "rowState">,
+    actualRowNumber: number
+): number | null {
+    const displayRowNumber = getDisplayRowNumber(metrics.rowState, actualRowNumber);
+    return displayRowNumber === null ? null : getEditorGridTop(metrics.rowLayout, displayRowNumber);
+}
+
+function getEditorGridRowHeightForActualRow(
+    metrics: Pick<EditorVirtualGridMetrics, "rowLayout" | "rowState">,
+    actualRowNumber: number
+): number | null {
+    const displayRowNumber = getDisplayRowNumber(metrics.rowState, actualRowNumber);
+    return displayRowNumber === null
+        ? null
+        : getEditorRowHeight(metrics.rowLayout, displayRowNumber);
+}
+
 function getGridLayerForCell(
     metrics: EditorVirtualGridMetrics,
     cell: CellPosition | null
@@ -3629,10 +4358,83 @@ function getGridLayerForCell(
     return "body";
 }
 
+function getFilterAwareRowHeaderLabelCount(
+    currentModel: EditorRenderModel,
+    visibleActualRowCount: number
+): number {
+    return Math.max(
+        currentModel.activeSheet.rowCount + EDITOR_EXTRA_PADDING_ROWS,
+        visibleActualRowCount
+    );
+}
+
+function createBaseVisibleRowLayout(currentModel: EditorRenderModel): {
+    visibleRowResult: {
+        visibleRows: number[];
+        hiddenRows: number[];
+    };
+    rowLayout: PixelRowLayout;
+} {
+    const visibleRowResult = getVisibleActualRowsForModel(currentModel);
+    return {
+        visibleRowResult,
+        rowLayout: createEditorPixelRowLayout({
+            rowCount: visibleRowResult.visibleRows.length,
+            rowHeights: createDisplayRowHeightsForActualRows(
+                currentModel,
+                visibleRowResult.visibleRows
+            ),
+        }),
+    };
+}
+
+function createDisplayGridRowState(
+    currentModel: EditorRenderModel,
+    viewportHeight: number,
+    viewportWidth: number
+): {
+    displayGrid: {
+        rowCount: number;
+        columnCount: number;
+        rowHeaderWidth: number;
+    };
+    rowState: EditorDisplayRowState;
+} {
+    const sheetColumnLayout = getSheetColumnLayout(currentModel);
+    const { visibleRowResult, rowLayout: baseVisibleRowLayout } =
+        createBaseVisibleRowLayout(currentModel);
+    const displayGrid = getEditorDisplayGridDimensions({
+        rowCount: visibleRowResult.visibleRows.length,
+        columnCount: currentModel.activeSheet.columnCount,
+        rowHeaderLabelCount: getFilterAwareRowHeaderLabelCount(
+            currentModel,
+            visibleRowResult.visibleRows.length
+        ),
+        viewportHeight,
+        viewportWidth,
+        rowLayout: baseVisibleRowLayout,
+        columnLayout: sheetColumnLayout,
+    });
+
+    return {
+        displayGrid,
+        rowState: createEditorDisplayRowState(
+            currentModel,
+            visibleRowResult.visibleRows,
+            visibleRowResult.hiddenRows,
+            displayGrid.rowCount
+        ),
+    };
+}
+
 function createEditorVirtualGridMetrics(
     currentModel: EditorRenderModel,
-    sheetRowLayout: PixelRowLayout,
     sheetColumnLayout: PixelColumnLayout,
+    visibleRowResult: {
+        visibleRows: number[];
+        hiddenRows: number[];
+    },
+    baseVisibleRowLayout: PixelRowLayout,
     element: HTMLElement | null,
     fallbackScrollState?: ScrollState | null
 ): EditorVirtualGridMetrics {
@@ -3641,20 +4443,33 @@ function createEditorVirtualGridMetrics(
     const scrollTop = element?.scrollTop ?? fallbackScrollState?.top ?? 0;
     const scrollLeft = element?.scrollLeft ?? fallbackScrollState?.left ?? 0;
     const displayGrid = getEditorDisplayGridDimensions({
-        rowCount: currentModel.activeSheet.rowCount,
+        rowCount: visibleRowResult.visibleRows.length,
         columnCount: currentModel.activeSheet.columnCount,
+        rowHeaderLabelCount: getFilterAwareRowHeaderLabelCount(
+            currentModel,
+            visibleRowResult.visibleRows.length
+        ),
         viewportHeight,
         viewportWidth,
-        rowLayout: sheetRowLayout,
+        rowLayout: baseVisibleRowLayout,
         columnLayout: sheetColumnLayout,
     });
-    const displayRowLayout = getEditorDisplayRowLayout(sheetRowLayout, displayGrid.rowCount);
+    const rowState = createEditorDisplayRowState(
+        currentModel,
+        visibleRowResult.visibleRows,
+        visibleRowResult.hiddenRows,
+        displayGrid.rowCount
+    );
+    const displayRowLayout = createEditorPixelRowLayout({
+        rowCount: rowState.actualRowNumbers.length,
+        rowHeights: createDisplayRowHeightsForActualRows(currentModel, rowState.actualRowNumbers),
+    });
     const displayColumnLayout = getEditorDisplayColumnLayout(
         sheetColumnLayout,
         displayGrid.columnCount
     );
     const { rowCount: frozenRowCount, columnCount: frozenColumnCount } = getFrozenEditorCounts({
-        rowCount: currentModel.activeSheet.rowCount,
+        rowCount: rowState.actualRowNumbers.length,
         columnCount: currentModel.activeSheet.columnCount,
         freezePane: currentModel.activeSheet.freezePane,
     });
@@ -3692,6 +4507,7 @@ function createEditorVirtualGridMetrics(
     return {
         rowLayout: displayRowLayout,
         columnLayout: displayColumnLayout,
+        rowState,
         scrollTop,
         scrollLeft,
         viewportHeight,
@@ -3699,11 +4515,15 @@ function createEditorVirtualGridMetrics(
         rowHeaderWidth: displayGrid.rowHeaderWidth,
         frozenRowCount,
         frozenColumnCount,
-        rowNumbers: rowWindow.rowNumbers,
+        rowNumbers: rowWindow.rowNumbers
+            .map((displayRowNumber) => getActualRowNumberAtDisplayRow(rowState, displayRowNumber))
+            .filter((rowNumber): rowNumber is number => rowNumber !== null),
         columnNumbers: columnWindow.columnNumbers,
         contentWidth: contentSize.width,
         contentHeight: contentSize.height,
-        frozenRowNumbers: createSequentialNumbers(visibleFrozenRowCount),
+        frozenRowNumbers: createSequentialNumbers(visibleFrozenRowCount)
+            .map((displayRowNumber) => getActualRowNumberAtDisplayRow(rowState, displayRowNumber))
+            .filter((rowNumber): rowNumber is number => rowNumber !== null),
         frozenColumnNumbers: createSequentialNumbers(visibleFrozenColumnCount),
         stickyTopHeight:
             EDITOR_VIRTUAL_HEADER_HEIGHT +
@@ -3732,9 +4552,7 @@ function useEditorVirtualGrid(
             ? rowResizeState.previewPixelHeight
             : null;
     const activeResizeRowNumber =
-        rowResizeState?.sheetKey === currentModel.activeSheet.key
-            ? rowResizeState.rowNumber
-            : null;
+        rowResizeState?.sheetKey === currentModel.activeSheet.key ? rowResizeState.rowNumber : null;
     const activeResizePreviewPixelWidth =
         columnResizeState?.sheetKey === currentModel.activeSheet.key
             ? columnResizeState.previewPixelWidth
@@ -3743,18 +4561,16 @@ function useEditorVirtualGrid(
         columnResizeState?.sheetKey === currentModel.activeSheet.key
             ? columnResizeState.columnNumber
             : null;
-    const sheetRowLayout = React.useMemo(
-        () =>
-            createEditorPixelRowLayout({
-                rowCount: currentModel.activeSheet.rowCount,
-                rowHeights: getEffectiveSheetRowHeights(currentModel),
-            }),
+    const { visibleRowResult, rowLayout: baseVisibleRowLayout } = React.useMemo(
+        () => createBaseVisibleRowLayout(currentModel),
         [
             currentModel.activeSheet.key,
             currentModel.activeSheet.rowCount,
+            currentModel.activeSheet.columnCount,
             currentModel.activeSheet.rowHeights,
             activeResizeRowNumber,
             activeResizePreviewPixelHeight,
+            revision,
         ]
     );
     const sheetColumnLayout = React.useMemo(
@@ -3776,8 +4592,9 @@ function useEditorVirtualGrid(
     const [metrics, setMetrics] = React.useState<EditorVirtualGridMetrics>(() =>
         createEditorVirtualGridMetrics(
             currentModel,
-            sheetRowLayout,
             sheetColumnLayout,
+            visibleRowResult,
+            baseVisibleRowLayout,
             null,
             initialScrollState
         )
@@ -3790,8 +4607,9 @@ function useEditorVirtualGrid(
         ) => {
             const nextMetrics = createEditorVirtualGridMetrics(
                 currentModel,
-                sheetRowLayout,
                 sheetColumnLayout,
+                visibleRowResult,
+                baseVisibleRowLayout,
                 element,
                 fallbackScrollState
             );
@@ -3811,14 +4629,30 @@ function useEditorVirtualGrid(
         }
 
         const displayGrid = getEditorDisplayGridDimensions({
-            rowCount: currentModel.activeSheet.rowCount,
+            rowCount: visibleRowResult.visibleRows.length,
             columnCount: currentModel.activeSheet.columnCount,
+            rowHeaderLabelCount: getFilterAwareRowHeaderLabelCount(
+                currentModel,
+                visibleRowResult.visibleRows.length
+            ),
             viewportHeight: element.clientHeight,
             viewportWidth: element.clientWidth,
-            rowLayout: sheetRowLayout,
+            rowLayout: baseVisibleRowLayout,
             columnLayout: sheetColumnLayout,
         });
-        const displayRowLayout = getEditorDisplayRowLayout(sheetRowLayout, displayGrid.rowCount);
+        const displayRowState = createEditorDisplayRowState(
+            currentModel,
+            visibleRowResult.visibleRows,
+            visibleRowResult.hiddenRows,
+            displayGrid.rowCount
+        );
+        const displayRowLayout = createEditorPixelRowLayout({
+            rowCount: displayRowState.actualRowNumbers.length,
+            rowHeights: createDisplayRowHeightsForActualRows(
+                currentModel,
+                displayRowState.actualRowNumbers
+            ),
+        });
         const displayColumnLayout = getEditorDisplayColumnLayout(
             sheetColumnLayout,
             displayGrid.columnCount
@@ -3883,6 +4717,7 @@ function useEditorVirtualGrid(
         activeResizePreviewPixelHeight,
         activeResizeColumnNumber,
         activeResizePreviewPixelWidth,
+        visibleRowResult.visibleRows.join(","),
         initialScrollState?.top ?? 0,
         initialScrollState?.left ?? 0,
         maximumDigitWidth,
@@ -3982,17 +4817,19 @@ const EditorColumnHeaderCell = React.memo(
                 ])}
                 data-column-number={columnNumber}
                 data-role="grid-column-header"
-                style={{
-                    ...getEditorGridItemStyle({
-                        top,
-                        left,
-                        width,
-                        height: EDITOR_VIRTUAL_HEADER_HEIGHT,
-                    }),
-                    minWidth: `${width}px`,
-                    maxWidth: `${width}px`,
-                    "--grid-column-max-width": `${width}px`,
-                } as React.CSSProperties}
+                style={
+                    {
+                        ...getEditorGridItemStyle({
+                            top,
+                            left,
+                            width,
+                            height: EDITOR_VIRTUAL_HEADER_HEIGHT,
+                        }),
+                        minWidth: `${width}px`,
+                        maxWidth: `${width}px`,
+                        "--grid-column-max-width": `${width}px`,
+                    } as React.CSSProperties
+                }
                 onPointerDown={(event) => {
                     if (event.button !== 0) {
                         return;
@@ -4175,7 +5012,10 @@ const EditorRowHeaderCell = React.memo(
                 {canResize ? (
                     <span
                         aria-hidden
-                        className={classNames(["grid__row-resize-handle", isResizing && "is-active"])}
+                        className={classNames([
+                            "grid__row-resize-handle",
+                            isResizing && "is-active",
+                        ])}
                         data-role="grid-row-resize-handle"
                         onPointerDown={(event) => {
                             if (event.button !== 0) {
@@ -4184,7 +5024,13 @@ const EditorRowHeaderCell = React.memo(
 
                             event.preventDefault();
                             event.stopPropagation();
-                            beginRowResize(event.pointerId, sheetKey, rowNumber, height, event.clientY);
+                            beginRowResize(
+                                event.pointerId,
+                                sheetKey,
+                                rowNumber,
+                                height,
+                                event.clientY
+                            );
                         }}
                     />
                 ) : null}
@@ -4213,6 +5059,7 @@ function EditorFillHandle({
     columnNumber,
     rowHeaderWidth,
     rowLayout,
+    rowState,
     columnLayout,
     isActive,
     onPointerDown,
@@ -4222,19 +5069,21 @@ function EditorFillHandle({
     columnNumber: number;
     rowHeaderWidth: number;
     rowLayout: PixelRowLayout;
+    rowState: EditorDisplayRowState;
     columnLayout: PixelColumnLayout;
     isActive: boolean;
     onPointerDown(event: React.PointerEvent<HTMLSpanElement>): void;
     onDoubleClick(event: React.MouseEvent<HTMLSpanElement>): void;
 }): React.ReactElement {
+    const displayRowNumber = getDisplayRowNumber(rowState, rowNumber) ?? 1;
     return (
         <span
             aria-hidden
             className={classNames(["editor-grid__fill-handle", isActive && "is-active"])}
             style={getEditorGridItemStyle({
                 top:
-                    getEditorGridTop(rowLayout, rowNumber) +
-                    getEditorRowHeight(rowLayout, rowNumber) -
+                    getEditorGridTop(rowLayout, displayRowNumber) +
+                    getEditorRowHeight(rowLayout, displayRowNumber) -
                     FILL_HANDLE_HALF_SIZE,
                 left:
                     getEditorGridLeft(rowHeaderWidth, columnLayout, columnNumber) +
@@ -4270,6 +5119,8 @@ const EditorVirtualCell = React.memo(
         pendingEdit,
         fillSourceRange,
         fillPreviewRange,
+        activeFilterState,
+        isFilterMenuOpen,
     }: {
         currentModel: EditorRenderModel;
         rowNumber: number;
@@ -4286,6 +5137,8 @@ const EditorVirtualCell = React.memo(
         pendingEdit: PendingEdit | undefined;
         fillSourceRange: CellRange | null;
         fillPreviewRange: CellRange | null;
+        activeFilterState: EditorSheetFilterState | null;
+        isFilterMenuOpen: boolean;
     }): React.ReactElement {
         const cell = getCellView(rowNumber, columnNumber, currentModel) ?? {
             key: createCellKey(rowNumber, columnNumber),
@@ -4316,6 +5169,10 @@ const EditorVirtualCell = React.memo(
             fillSourceRange &&
             isCellWithinFillPreviewArea(fillSourceRange, fillPreviewRange, rowNumber, columnNumber)
         );
+        const isFilterHeader = isEditorFilterHeaderCell(activeFilterState, rowNumber, columnNumber);
+        const isColumnFilterActive =
+            Boolean(activeFilterState?.includedValuesByColumn[String(columnNumber)]) ||
+            activeFilterState?.sort?.columnNumber === columnNumber;
         const contentAlignmentStyle = getCellContentAlignmentStyle(
             rowNumber,
             columnNumber,
@@ -4333,6 +5190,7 @@ const EditorVirtualCell = React.memo(
                     isActiveRow && "grid__cell--active-row",
                     isActiveColumn && "grid__cell--active-column",
                     !editable && "grid__cell--locked",
+                    isFilterHeader && "grid__cell--filter-header",
                     pendingEdit && "grid__cell--pending",
                     isFillPreview && "grid__cell--fill-preview",
                     isEditing && "grid__cell--editing",
@@ -4342,17 +5200,19 @@ const EditorVirtualCell = React.memo(
                 data-editable={editable}
                 data-role="grid-cell"
                 data-row-number={rowNumber}
-                style={{
-                    ...getEditorGridItemStyle({
-                        top,
-                        left,
-                        width,
-                        height,
-                    }),
-                    minWidth: `${width}px`,
-                    maxWidth: `${width}px`,
-                    "--grid-column-max-width": `${width}px`,
-                } as React.CSSProperties}
+                style={
+                    {
+                        ...getEditorGridItemStyle({
+                            top,
+                            left,
+                            width,
+                            height,
+                        }),
+                        minWidth: `${width}px`,
+                        maxWidth: `${width}px`,
+                        "--grid-column-max-width": `${width}px`,
+                    } as React.CSSProperties
+                }
                 title={getCellTooltip(cell.address, value, formula)}
                 onPointerDown={(event) => {
                     if (event.button !== 0) {
@@ -4413,6 +5273,28 @@ const EditorVirtualCell = React.memo(
                         <CellValue formula={formula} value={value} />
                     )}
                 </div>
+                {isFilterHeader ? (
+                    <button
+                        className={classNames([
+                            "grid__cell-filterButton",
+                            isColumnFilterActive && "is-active",
+                            isFilterMenuOpen && "is-open",
+                        ])}
+                        data-role="filter-trigger"
+                        type="button"
+                        onPointerDown={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                        }}
+                        onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            openFilterMenu(rowNumber, columnNumber, event.currentTarget);
+                        }}
+                    >
+                        <span className="codicon codicon-chevron-down" aria-hidden />
+                    </button>
+                ) : null}
             </div>
         );
     },
@@ -4439,7 +5321,9 @@ const EditorVirtualCell = React.memo(
         areEditingCellsEqual(previous.activeEditingCell, next.activeEditingCell) &&
         arePendingEditsEqual(previous.pendingEdit, next.pendingEdit) &&
         areSelectionRangesEqual(previous.fillSourceRange, next.fillSourceRange) &&
-        areSelectionRangesEqual(previous.fillPreviewRange, next.fillPreviewRange)
+        areSelectionRangesEqual(previous.fillPreviewRange, next.fillPreviewRange) &&
+        previous.activeFilterState === next.activeFilterState &&
+        previous.isFilterMenuOpen === next.isFilterMenuOpen
 );
 
 function EditorVirtualGrid({
@@ -4469,6 +5353,7 @@ function EditorVirtualGrid({
     const activeRowNumber = activeHighlightCell?.rowNumber ?? null;
     const activeColumnNumber = activeHighlightCell?.columnNumber ?? null;
     const activeEditingCell = editingCell;
+    const activeFilterState = getActiveSheetFilterState(currentModel);
     const bodyItems: React.ReactElement[] = [];
     const topItems: React.ReactElement[] = [];
     const leftItems: React.ReactElement[] = [];
@@ -4480,10 +5365,12 @@ function EditorVirtualGrid({
         rowNumber: number,
         columnNumber: number
     ): React.ReactElement => {
-        const top = getEditorGridTop(metrics.rowLayout, rowNumber);
+        const top = getEditorGridTopForActualRow(metrics, rowNumber) ?? 0;
         const left = getEditorGridLeft(metrics.rowHeaderWidth, metrics.columnLayout, columnNumber);
         const width = getEditorColumnWidth(metrics.columnLayout, columnNumber);
-        const height = getEditorRowHeight(metrics.rowLayout, rowNumber);
+        const height =
+            getEditorGridRowHeightForActualRow(metrics, rowNumber) ??
+            metrics.rowLayout.fallbackPixelHeight;
         const key = `${keyPrefix}:${rowNumber}:${columnNumber}`;
 
         const pendingEdit = pendingEdits.get(
@@ -4507,6 +5394,11 @@ function EditorVirtualGrid({
                 pendingEdit={pendingEdit}
                 fillSourceRange={fillSourceRange}
                 fillPreviewRange={fillPreviewRange}
+                activeFilterState={activeFilterState}
+                isFilterMenuOpen={
+                    filterMenuState?.sheetKey === currentModel.activeSheet.key &&
+                    filterMenuState.columnNumber === columnNumber
+                }
             />
         );
     };
@@ -4530,7 +5422,11 @@ function EditorVirtualGrid({
                 hasPending={pendingSummary.columns.has(columnNumber)}
                 activeColumnNumber={activeColumnNumber}
                 selectionRange={selectionRange}
-                rowCount={metrics.rowLayout.totalRowCount}
+                rowCount={
+                    metrics.rowState.actualRowNumbers[
+                        metrics.rowState.actualRowNumbers.length - 1
+                    ] ?? 1
+                }
                 top={0}
                 left={getEditorGridLeft(metrics.rowHeaderWidth, metrics.columnLayout, columnNumber)}
             />
@@ -4556,7 +5452,11 @@ function EditorVirtualGrid({
                 hasPending={pendingSummary.columns.has(columnNumber)}
                 activeColumnNumber={activeColumnNumber}
                 selectionRange={selectionRange}
-                rowCount={metrics.rowLayout.totalRowCount}
+                rowCount={
+                    metrics.rowState.actualRowNumbers[
+                        metrics.rowState.actualRowNumbers.length - 1
+                    ] ?? 1
+                }
                 top={0}
                 left={getEditorGridLeft(metrics.rowHeaderWidth, metrics.columnLayout, columnNumber)}
             />
@@ -4569,7 +5469,7 @@ function EditorVirtualGrid({
                 key={`left:row:${rowNumber}`}
                 sheetKey={currentModel.activeSheet.key}
                 rowNumber={rowNumber}
-                height={getEditorRowHeight(metrics.rowLayout, rowNumber)}
+                height={getEditorGridRowHeightForActualRow(metrics, rowNumber) ?? 0}
                 canResize={currentModel.canEdit}
                 isResizing={
                     rowResizeState?.sheetKey === currentModel.activeSheet.key &&
@@ -4579,7 +5479,7 @@ function EditorVirtualGrid({
                 activeRowNumber={activeRowNumber}
                 selectionRange={selectionRange}
                 columnCount={metrics.columnLayout.totalColumnCount}
-                top={getEditorGridTop(metrics.rowLayout, rowNumber)}
+                top={getEditorGridTopForActualRow(metrics, rowNumber) ?? 0}
                 rowHeaderWidth={metrics.rowHeaderWidth}
             />
         );
@@ -4599,7 +5499,7 @@ function EditorVirtualGrid({
                 key={`corner:row:${rowNumber}`}
                 sheetKey={currentModel.activeSheet.key}
                 rowNumber={rowNumber}
-                height={getEditorRowHeight(metrics.rowLayout, rowNumber)}
+                height={getEditorGridRowHeightForActualRow(metrics, rowNumber) ?? 0}
                 canResize={currentModel.canEdit}
                 isResizing={
                     rowResizeState?.sheetKey === currentModel.activeSheet.key &&
@@ -4609,7 +5509,7 @@ function EditorVirtualGrid({
                 activeRowNumber={activeRowNumber}
                 selectionRange={selectionRange}
                 columnCount={metrics.columnLayout.totalColumnCount}
-                top={getEditorGridTop(metrics.rowLayout, rowNumber)}
+                top={getEditorGridTopForActualRow(metrics, rowNumber) ?? 0}
                 rowHeaderWidth={metrics.rowHeaderWidth}
             />
         );
@@ -4631,6 +5531,7 @@ function EditorVirtualGrid({
                 columnNumber={fillHandleCell.columnNumber}
                 rowHeaderWidth={metrics.rowHeaderWidth}
                 rowLayout={metrics.rowLayout}
+                rowState={metrics.rowState}
                 columnLayout={metrics.columnLayout}
                 isActive={Boolean(fillPreviewRange)}
                 onPointerDown={(event) => {
@@ -4840,6 +5741,7 @@ function EditorApp({ view }: { view: Extract<ViewState, { kind: "app" }> }): Rea
     const maximumDigitWidth = useMeasuredMaximumDigitWidth(getEditorAppElement());
     editorMaximumDigitWidth = maximumDigitWidth;
     const pendingSummary = getPendingSummary(currentModel.activeSheet.key);
+    const activeFilterState = getActiveSheetFilterState(currentModel);
     const activeToolbarAlignment = getActiveToolbarAlignment(currentModel);
     const currentSelectionRange = getExpandedSelectionRange();
     const effectiveScope = getEffectiveSearchScope();
@@ -4852,6 +5754,8 @@ function EditorApp({ view }: { view: Extract<ViewState, { kind: "app" }> }): Rea
     const canUndo = undoStack.length > 0 || currentModel.canUndoStructuralEdits;
     const canRedo = redoStack.length > 0 || currentModel.canRedoStructuralEdits;
     const viewLocked = hasLockedView(currentModel.activeSheet.freezePane);
+    const filterActionLabel = getFilterToolbarActionLabel(currentModel);
+    const canToggleFilter = canToggleFilterForCurrentSelection(currentModel);
 
     return (
         <div
@@ -4867,6 +5771,9 @@ function EditorApp({ view }: { view: Extract<ViewState, { kind: "app" }> }): Rea
                 strings={STRINGS}
                 currentModel={currentModel}
                 isSearchPanelOpen={isSearchPanelOpen}
+                filterActionLabel={filterActionLabel}
+                isFilterButtonEnabled={canToggleFilter}
+                hasActiveFilter={Boolean(activeFilterState)}
                 isSaving={isSaving}
                 hasPendingEdits={hasPendingEdits}
                 canUndo={canUndo}
@@ -4879,6 +5786,7 @@ function EditorApp({ view }: { view: Extract<ViewState, { kind: "app" }> }): Rea
                 canEditSelectedCellValue={canEditSelectedCellValue}
                 getActiveCellEditTarget={() => getActiveToolbarCellEditTarget(currentModel)}
                 onOpenSearch={openSearchPanel}
+                onToggleFilter={toggleActiveSheetFilter}
                 onUndo={undoPendingEdits}
                 onRedo={redoPendingEdits}
                 onReload={requestReload}
@@ -4919,6 +5827,11 @@ function EditorApp({ view }: { view: Extract<ViewState, { kind: "app" }> }): Rea
                 onToggleOption={toggleSearchOption}
                 onSubmitSearch={submitSearch}
                 onSubmitReplace={submitReplace}
+            />
+            <EditorFilterMenu
+                currentModel={currentModel}
+                filterState={activeFilterState}
+                menuState={filterMenuState}
             />
             <section className="panes panes--single">
                 <EditorPane
@@ -4987,6 +5900,8 @@ window.addEventListener("message", (event: MessageEvent<IncomingMessage>) => {
         columnResizeState = null;
         rowResizeState = null;
         stopSearchPanelDrag();
+        sheetFilterStates.clear();
+        filterMenuState = null;
         isSearchPanelOpen = false;
         searchMode = "find";
         searchQuery = "";
@@ -5004,6 +5919,8 @@ window.addEventListener("message", (event: MessageEvent<IncomingMessage>) => {
         columnResizeState = null;
         rowResizeState = null;
         stopSearchPanelDrag();
+        sheetFilterStates.clear();
+        filterMenuState = null;
         isSaving = false;
         renderError(message.message);
         return;
@@ -5022,8 +5939,12 @@ window.addEventListener("message", (event: MessageEvent<IncomingMessage>) => {
             canReuseActiveSheetData: Boolean(message.reuseActiveSheetData),
         });
         isSaving = false;
+        if (filterMenuState && filterMenuState.sheetKey !== model.activeSheet.key) {
+            filterMenuState = null;
+        }
 
         if (message.clearPendingEdits) {
+            sheetFilterStates.clear();
             const pendingEditsBeforeClear = Array.from(pendingEdits.values());
             pendingEdits.clear();
             if (message.preservePendingHistory) {
@@ -5075,6 +5996,12 @@ window.addEventListener("message", (event: MessageEvent<IncomingMessage>) => {
 
 document.addEventListener("keydown", (event: KeyboardEvent) => {
     const isTextInputContext = isTextInputTarget(event.target);
+
+    if (event.key === "Escape" && filterMenuState) {
+        event.preventDefault();
+        closeFilterMenu();
+        return;
+    }
 
     if (event.key === "Escape" && contextMenu) {
         event.preventDefault();
@@ -5230,21 +6157,24 @@ document.addEventListener("copy", (event: ClipboardEvent) => {
 });
 
 document.addEventListener("pointerdown", (event: PointerEvent) => {
-    if (!contextMenu) {
-        return;
-    }
-
     const target = event.target;
     if (!(target instanceof HTMLElement)) {
+        closeFilterMenu();
         closeContextMenu();
         return;
     }
 
-    if (target.closest('[data-role="context-menu"]')) {
-        return;
+    if (
+        filterMenuState &&
+        !target.closest('[data-role="filter-menu"]') &&
+        !target.closest('[data-role="filter-trigger"]')
+    ) {
+        closeFilterMenu();
     }
 
-    closeContextMenu();
+    if (contextMenu && !target.closest('[data-role="context-menu"]')) {
+        closeContextMenu();
+    }
 });
 
 document.addEventListener("pointermove", (event: PointerEvent) => {

@@ -7,9 +7,11 @@ import {
     getCellAddress,
     hasComparableCellContent,
     normalizeCellTextLineEndings,
+    parseRangeAddress,
 } from "../model/cells";
 import { Workbook } from "./runtime";
 import {
+    type SheetAutoFilterSnapshot,
     type WorkbookDetailFact,
     type CellSnapshot,
     type DefinedNameSnapshot,
@@ -19,7 +21,7 @@ import {
     type WorkbookSnapshot,
 } from "../model/types";
 import { cloneCellAlignment } from "../model/alignment";
-import type { CellStyleDefinition } from "fastxlsx";
+import type { AutoFilterDefinition, CellStyleDefinition } from "fastxlsx";
 import {
     getWorkbookResourceDetail,
     getWorkbookResourceName,
@@ -43,6 +45,7 @@ interface SheetReader {
     getRowHeight(rowNumber: number): number | null;
     getMergedRanges(): string[];
     getFreezePane(): SheetFreezePaneSnapshot | null;
+    getAutoFilterDefinition(): AutoFilterDefinition | null;
 }
 
 interface WorkbookReader {
@@ -93,6 +96,17 @@ function createSheetSignature(sheet: SheetSnapshot): string {
         );
     }
 
+    if (sheet.autoFilter) {
+        hash.update(
+            `autoFilter:${sheet.autoFilter.range.startRow}:${sheet.autoFilter.range.endRow}:${sheet.autoFilter.range.startColumn}:${sheet.autoFilter.range.endColumn}\n`
+        );
+        if (sheet.autoFilter.sort) {
+            hash.update(
+                `autoFilterSort:${sheet.autoFilter.sort.columnNumber}:${sheet.autoFilter.sort.direction}\n`
+            );
+        }
+    }
+
     for (const cell of comparableCells) {
         hash.update(
             `${cell.address}\u0000${normalizeCellTextLineEndings(cell.displayValue)}\u0000${normalizeCellTextLineEndings(
@@ -104,10 +118,35 @@ function createSheetSignature(sheet: SheetSnapshot): string {
     return hash.digest("hex");
 }
 
+function createAutoFilterSnapshot(
+    definition: AutoFilterDefinition | null
+): SheetAutoFilterSnapshot | null {
+    if (!definition) {
+        return null;
+    }
+
+    const range = parseRangeAddress(definition.range);
+    if (!range) {
+        return null;
+    }
+
+    const sortCondition = definition.sortState?.conditions[0] ?? null;
+    return {
+        range,
+        sort: sortCondition
+            ? {
+                  columnNumber: sortCondition.columnNumber,
+                  direction: sortCondition.descending ? "desc" : "asc",
+              }
+            : null,
+    };
+}
+
 function loadSheetSnapshot(workbook: WorkbookReader, sheetName: string): SheetSnapshot {
     const sheet = workbook.getSheet(sheetName);
     const cells: Record<string, CellSnapshot> = {};
     const freezePane = sheet.getFreezePane();
+    const autoFilter = createAutoFilterSnapshot(sheet.getAutoFilterDefinition());
     const visibility = workbook.getSheetVisibility(sheetName);
     const columnWidths = Array.from({ length: sheet.columnCount }, (_, index) =>
         sheet.getColumnWidth(index + 1)
@@ -116,16 +155,14 @@ function loadSheetSnapshot(workbook: WorkbookReader, sheetName: string): SheetSn
         Array.from({ length: sheet.columnCount }, (_, index) => index + 1)
             .flatMap((columnNumber) => {
                 const styleId = sheet.getColumnStyleId(columnNumber);
-                const alignment =
-                    !Number.isInteger(styleId)
-                        ? null
-                        : cloneCellAlignment(
-                              workbook.getStyle(styleId as number)?.alignment ?? null
-                          );
+                const alignment = !Number.isInteger(styleId)
+                    ? null
+                    : cloneCellAlignment(workbook.getStyle(styleId as number)?.alignment ?? null);
                 return alignment ? [[String(columnNumber), alignment] as const] : [];
             })
-            .sort(([leftColumnNumber], [rightColumnNumber]) =>
-                Number(leftColumnNumber) - Number(rightColumnNumber)
+            .sort(
+                ([leftColumnNumber], [rightColumnNumber]) =>
+                    Number(leftColumnNumber) - Number(rightColumnNumber)
             )
     );
     const rowHeights = Object.fromEntries(
@@ -137,15 +174,15 @@ function loadSheetSnapshot(workbook: WorkbookReader, sheetName: string): SheetSn
         Array.from({ length: sheet.rowCount }, (_, index) => index + 1)
             .flatMap((rowNumber) => {
                 const styleId = sheet.getRowStyleId(rowNumber);
-                const alignment =
-                    !Number.isInteger(styleId)
-                        ? null
-                        : cloneCellAlignment(
-                              workbook.getStyle(styleId as number)?.alignment ?? null
-                          );
+                const alignment = !Number.isInteger(styleId)
+                    ? null
+                    : cloneCellAlignment(workbook.getStyle(styleId as number)?.alignment ?? null);
                 return alignment ? [[String(rowNumber), alignment] as const] : [];
             })
-            .sort(([leftRowNumber], [rightRowNumber]) => Number(leftRowNumber) - Number(rightRowNumber))
+            .sort(
+                ([leftRowNumber], [rightRowNumber]) =>
+                    Number(leftRowNumber) - Number(rightRowNumber)
+            )
     );
     const cellAlignments = {} as NonNullable<SheetSnapshot["cellAlignments"]>;
 
@@ -154,10 +191,9 @@ function loadSheetSnapshot(workbook: WorkbookReader, sheetName: string): SheetSn
             const displayValue = sheet.getDisplayValue(rowNumber, columnNumber);
             const formula = sheet.getFormula(rowNumber, columnNumber);
             const styleId = sheet.getStyleId(rowNumber, columnNumber);
-            const cellAlignment =
-                !Number.isInteger(styleId)
-                    ? null
-                    : cloneCellAlignment(workbook.getStyle(styleId as number)?.alignment);
+            const cellAlignment = !Number.isInteger(styleId)
+                ? null
+                : cloneCellAlignment(workbook.getStyle(styleId as number)?.alignment);
 
             if (cellAlignment) {
                 cellAlignments[createCellKey(rowNumber, columnNumber)] = cellAlignment;
@@ -192,6 +228,7 @@ function loadSheetSnapshot(workbook: WorkbookReader, sheetName: string): SheetSn
         rowAlignments,
         columnAlignments,
         freezePane: freezePane ? { ...freezePane } : null,
+        autoFilter,
         cells,
         signature: "",
     };

@@ -4,7 +4,11 @@ import type {
     SheetViewEdit,
     WorkbookEditState,
 } from "../../core/fastxlsx/write-cell-value";
-import type { EditorPanelState, SheetSnapshot } from "../../core/model/types";
+import type {
+    EditorPanelState,
+    SheetAutoFilterSnapshot,
+    SheetSnapshot,
+} from "../../core/model/types";
 import type { EditorAlignmentPatch } from "../../core/model/alignment";
 import type { SelectionRange } from "./editor-selection-range";
 
@@ -74,6 +78,11 @@ export type EditorWebviewMessage =
           type: "setPendingEdits";
           edits: EditorPendingEdit[];
       }
+    | {
+          type: "setFilterState";
+          sheetKey: string;
+          filterState: SheetAutoFilterSnapshot | null;
+      }
     | { type: "requestSave" }
     | { type: "pendingEditStateChanged"; hasPendingEdits: boolean }
     | { type: "undoSheetEdit" }
@@ -134,6 +143,15 @@ export interface EditorPanelStrings {
     findPrev: string;
     findNext: string;
     replaceAll: string;
+    filterSelection: string;
+    clearFilterRange: string;
+    sortAscending: string;
+    sortDescending: string;
+    filterSearchPlaceholder: string;
+    filterSelectAll: string;
+    filterClearColumn: string;
+    filterBlankValue: string;
+    filterNoValues: string;
     gotoPlaceholder: string;
     goto: string;
     cancelInput: string;

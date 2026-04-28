@@ -304,7 +304,7 @@ export function findEditorSearchMatchInSheet(
     );
 }
 
-function resolveEditorSearchResultInSheet(
+export function resolveEditorSearchResultInSheet(
     sheet: EditorSearchSheetSource,
     selectedCell: EditorPanelState["selectedCell"],
     request: EditorSearchRequest,

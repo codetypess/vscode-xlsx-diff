@@ -71,10 +71,7 @@ function normalizeColumnWidthsForComparison(
     columnWidths: readonly (number | null | undefined)[] | undefined
 ): Array<number | null> {
     const normalizedWidths = cloneColumnWidths(columnWidths);
-    while (
-        normalizedWidths.length > 0 &&
-        normalizedWidths[normalizedWidths.length - 1] === null
-    ) {
+    while (normalizedWidths.length > 0 && normalizedWidths[normalizedWidths.length - 1] === null) {
         normalizedWidths.pop();
     }
 
@@ -100,7 +97,10 @@ function normalizeRowHeightsForComparison(
     return Object.fromEntries(
         Object.entries(rowHeights ?? {})
             .filter(([, rowHeight]) => rowHeight !== null)
-            .sort(([leftRowNumber], [rightRowNumber]) => Number(leftRowNumber) - Number(rightRowNumber))
+            .sort(
+                ([leftRowNumber], [rightRowNumber]) =>
+                    Number(leftRowNumber) - Number(rightRowNumber)
+            )
     ) as Record<string, number>;
 }
 
@@ -116,9 +116,7 @@ export function areRowHeightsEquivalent(
         return false;
     }
 
-    return leftKeys.every(
-        (rowNumber) => normalizedLeft[rowNumber] === normalizedRight[rowNumber]
-    );
+    return leftKeys.every((rowNumber) => normalizedLeft[rowNumber] === normalizedRight[rowNumber]);
 }
 
 export function areCellAlignmentsEquivalent(
@@ -312,6 +310,11 @@ export function cloneViewEdit(edit: SheetViewEdit): SheetViewEdit {
     return {
         ...edit,
         freezePane: edit.freezePane ? { ...edit.freezePane } : null,
+        ...(edit.autoFilter !== undefined
+            ? {
+                  autoFilter: cloneAutoFilterSnapshot(edit.autoFilter),
+              }
+            : {}),
         ...(edit.columnWidths
             ? {
                   columnWidths: cloneColumnWidths(edit.columnWidths),
@@ -352,6 +355,7 @@ export function cloneSheetSnapshot(
         rowAlignments: cloneRowAlignments(sheet.rowAlignments),
         columnAlignments: cloneColumnAlignments(sheet.columnAlignments),
         freezePane: sheet.freezePane ? { ...sheet.freezePane } : null,
+        autoFilter: cloneAutoFilterSnapshot(sheet.autoFilter),
         cells: { ...sheet.cells },
     };
 }
@@ -384,6 +388,51 @@ export function areFreezePaneCountsEqual(
     return (
         (left?.columnCount ?? 0) === (right?.columnCount ?? 0) &&
         (left?.rowCount ?? 0) === (right?.rowCount ?? 0)
+    );
+}
+
+export function cloneAutoFilterSnapshot(
+    autoFilter: WorkbookSnapshot["sheets"][number]["autoFilter"] | undefined
+): WorkbookSnapshot["sheets"][number]["autoFilter"] {
+    if (autoFilter === undefined) {
+        return undefined;
+    }
+
+    if (autoFilter === null) {
+        return null;
+    }
+
+    return {
+        range: {
+            ...autoFilter.range,
+        },
+        sort: autoFilter.sort
+            ? {
+                  ...autoFilter.sort,
+              }
+            : null,
+    };
+}
+
+export function areAutoFiltersEquivalent(
+    left: WorkbookSnapshot["sheets"][number]["autoFilter"] | undefined,
+    right: WorkbookSnapshot["sheets"][number]["autoFilter"] | undefined
+): boolean {
+    if (left === right) {
+        return true;
+    }
+
+    if (!left || !right) {
+        return left === right;
+    }
+
+    return (
+        left.range.startRow === right.range.startRow &&
+        left.range.endRow === right.range.endRow &&
+        left.range.startColumn === right.range.startColumn &&
+        left.range.endColumn === right.range.endColumn &&
+        (left.sort?.columnNumber ?? null) === (right.sort?.columnNumber ?? null) &&
+        (left.sort?.direction ?? null) === (right.sort?.direction ?? null)
     );
 }
 
@@ -641,7 +690,9 @@ function transformIndexedAlignments(
 
                 if (isRowAxis) {
                     const nextPosition = transformCellPosition(index, 1, edit);
-                    return nextPosition ? [[String(nextPosition.rowNumber), alignment] as const] : [];
+                    return nextPosition
+                        ? [[String(nextPosition.rowNumber), alignment] as const]
+                        : [];
                 }
 
                 const nextPosition = transformCellPosition(1, index, edit);
@@ -649,7 +700,10 @@ function transformIndexedAlignments(
                     ? [[String(nextPosition.columnNumber), alignment] as const]
                     : [];
             })
-            .sort(([leftIndexText], [rightIndexText]) => Number(leftIndexText) - Number(rightIndexText))
+            .sort(
+                ([leftIndexText], [rightIndexText]) =>
+                    Number(leftIndexText) - Number(rightIndexText)
+            )
     );
 }
 
@@ -665,6 +719,139 @@ function transformColumnAlignments(
     edit: GridSheetEdit
 ): WorkbookSnapshot["sheets"][number]["columnAlignments"] {
     return transformIndexedAlignments(columnAlignments, edit, "column");
+}
+
+function transformRangeAxis(
+    start: number,
+    end: number,
+    editStart: number,
+    count: number,
+    kind: "insert" | "delete"
+): { start: number; end: number } | null {
+    if (kind === "insert") {
+        if (editStart <= start) {
+            return {
+                start: start + count,
+                end: end + count,
+            };
+        }
+
+        if (editStart <= end) {
+            return {
+                start,
+                end: end + count,
+            };
+        }
+
+        return { start, end };
+    }
+
+    const lastDeletedIndex = editStart + count - 1;
+    if (lastDeletedIndex < start) {
+        return {
+            start: start - count,
+            end: end - count,
+        };
+    }
+
+    if (editStart > end) {
+        return { start, end };
+    }
+
+    const deletedBeforeStart = Math.max(0, Math.min(lastDeletedIndex, start - 1) - editStart + 1);
+    const deletedWithinRange = Math.max(
+        0,
+        Math.min(lastDeletedIndex, end) - Math.max(editStart, start) + 1
+    );
+    const nextStart = start - deletedBeforeStart;
+    const nextEnd = end - deletedBeforeStart - deletedWithinRange;
+
+    return nextStart <= nextEnd ? { start: nextStart, end: nextEnd } : null;
+}
+
+function transformAutoFilter(
+    autoFilter: WorkbookSnapshot["sheets"][number]["autoFilter"],
+    edit: GridSheetEdit
+): WorkbookSnapshot["sheets"][number]["autoFilter"] {
+    if (!autoFilter) {
+        return null;
+    }
+
+    const nextRowRange =
+        edit.type === "insertRow"
+            ? transformRangeAxis(
+                  autoFilter.range.startRow,
+                  autoFilter.range.endRow,
+                  edit.rowNumber,
+                  edit.count,
+                  "insert"
+              )
+            : edit.type === "deleteRow"
+              ? transformRangeAxis(
+                    autoFilter.range.startRow,
+                    autoFilter.range.endRow,
+                    edit.rowNumber,
+                    edit.count,
+                    "delete"
+                )
+              : {
+                    start: autoFilter.range.startRow,
+                    end: autoFilter.range.endRow,
+                };
+    if (!nextRowRange) {
+        return null;
+    }
+
+    const nextColumnRange =
+        edit.type === "insertColumn"
+            ? transformRangeAxis(
+                  autoFilter.range.startColumn,
+                  autoFilter.range.endColumn,
+                  edit.columnNumber,
+                  edit.count,
+                  "insert"
+              )
+            : edit.type === "deleteColumn"
+              ? transformRangeAxis(
+                    autoFilter.range.startColumn,
+                    autoFilter.range.endColumn,
+                    edit.columnNumber,
+                    edit.count,
+                    "delete"
+                )
+              : {
+                    start: autoFilter.range.startColumn,
+                    end: autoFilter.range.endColumn,
+                };
+    if (!nextColumnRange) {
+        return null;
+    }
+
+    const nextSort = autoFilter.sort
+        ? (() => {
+              if (edit.type !== "insertColumn" && edit.type !== "deleteColumn") {
+                  return { ...autoFilter.sort };
+              }
+
+              const transformed = transformCellPosition(1, autoFilter.sort.columnNumber, edit);
+              return transformed
+                  ? {
+                        ...autoFilter.sort,
+                        columnNumber: transformed.columnNumber,
+                    }
+                  : null;
+          })()
+        : null;
+
+    return {
+        range: {
+            startRow: nextRowRange.start,
+            endRow: nextRowRange.end,
+            startColumn: nextColumnRange.start,
+            endColumn: nextColumnRange.end,
+        },
+        sort: nextSort,
+    };
 }
 
 export function shiftPendingCellEditsForGridSheetEdit(
@@ -750,6 +937,7 @@ export function applyGridSheetEditToSheet(
         cellAlignments: transformCellAlignments(sheet.cellAlignments, edit),
         rowAlignments: transformRowAlignments(sheet.rowAlignments, edit),
         columnAlignments: transformColumnAlignments(sheet.columnAlignments, edit),
+        autoFilter: transformAutoFilter(sheet.autoFilter ?? null, edit),
         cells: nextCells,
         signature: createPendingSheetSignature(
             sheet.name,
@@ -871,6 +1059,7 @@ export function restorePendingWorkbookState(
                     columnAlignments: {},
                     cells: {},
                     freezePane: null,
+                    autoFilter: null,
                     signature: `pending:${edit.sheetKey}:${edit.sheetName}`,
                 },
             };
@@ -950,6 +1139,10 @@ export function restorePendingWorkbookState(
                                     edit.freezePane.rowCount
                                 )
                               : null,
+                          autoFilter:
+                              edit.autoFilter !== undefined
+                                  ? cloneAutoFilterSnapshot(edit.autoFilter)
+                                  : cloneAutoFilterSnapshot(entry.sheet.autoFilter),
                       },
                   }
                 : entry

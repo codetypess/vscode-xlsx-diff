@@ -158,6 +158,7 @@ export function getMinimumVisibleEditorColumnCount({
 export function getEditorDisplayGridDimensions({
     rowCount,
     columnCount,
+    rowHeaderLabelCount = rowCount,
     viewportHeight,
     viewportWidth,
     rowLayout,
@@ -165,6 +166,7 @@ export function getEditorDisplayGridDimensions({
 }: {
     rowCount: number;
     columnCount: number;
+    rowHeaderLabelCount?: number;
     viewportHeight: number;
     viewportWidth: number;
     rowLayout: PixelRowLayout;
@@ -173,7 +175,9 @@ export function getEditorDisplayGridDimensions({
     const displayRowCount =
         Math.max(rowCount, getMinimumVisibleEditorRowCount(viewportHeight, rowLayout)) +
         EDITOR_EXTRA_PADDING_ROWS;
-    const rowHeaderWidth = getEditorRowHeaderWidth(displayRowCount);
+    const rowHeaderWidth = getEditorRowHeaderWidth(
+        Math.max(displayRowCount, rowHeaderLabelCount)
+    );
 
     return {
         rowCount: displayRowCount,
