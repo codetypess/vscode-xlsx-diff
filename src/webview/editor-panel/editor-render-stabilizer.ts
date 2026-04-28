@@ -1,4 +1,5 @@
 import type { EditorRenderModel } from "../../core/model/types";
+import { areCellAlignmentMapsEquivalent } from "../../core/model/alignment";
 
 export function stabilizeIncomingRenderModel(
     previousModel: EditorRenderModel | null,
@@ -38,6 +39,18 @@ export function stabilizeIncomingRenderModel(
         previousRowHeightKeys.every(
             (rowNumber) => previousRowHeights[rowNumber] === nextRowHeights[rowNumber]
         );
+    const reusedActiveSheetCellAlignments = areCellAlignmentMapsEquivalent(
+        previousModel.activeSheet.cellAlignments,
+        nextModel.activeSheet.cellAlignments
+    );
+    const reusedActiveSheetRowAlignments = areCellAlignmentMapsEquivalent(
+        previousModel.activeSheet.rowAlignments,
+        nextModel.activeSheet.rowAlignments
+    );
+    const reusedActiveSheetColumnAlignments = areCellAlignmentMapsEquivalent(
+        previousModel.activeSheet.columnAlignments,
+        nextModel.activeSheet.columnAlignments
+    );
 
     return {
         ...nextModel,
@@ -53,6 +66,15 @@ export function stabilizeIncomingRenderModel(
             rowHeights: reusedActiveSheetRowHeights
                 ? previousModel.activeSheet.rowHeights
                 : nextModel.activeSheet.rowHeights,
+            cellAlignments: reusedActiveSheetCellAlignments
+                ? previousModel.activeSheet.cellAlignments
+                : nextModel.activeSheet.cellAlignments,
+            rowAlignments: reusedActiveSheetRowAlignments
+                ? previousModel.activeSheet.rowAlignments
+                : nextModel.activeSheet.rowAlignments,
+            columnAlignments: reusedActiveSheetColumnAlignments
+                ? previousModel.activeSheet.columnAlignments
+                : nextModel.activeSheet.columnAlignments,
         },
     };
 }

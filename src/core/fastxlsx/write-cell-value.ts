@@ -2,6 +2,11 @@ import { copyFile, mkdir } from "node:fs/promises";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { getCellAddress } from "../model/cells";
+import type {
+    SheetCellAlignmentsSnapshot,
+    SheetColumnAlignmentsSnapshot,
+    SheetRowAlignmentsSnapshot,
+} from "../model/alignment";
 import { Workbook } from "./runtime";
 
 export interface CellEdit {
@@ -82,6 +87,9 @@ export interface SheetViewEdit {
     } | null;
     columnWidths?: Array<number | null>;
     rowHeights?: Record<string, number | null>;
+    cellAlignments?: SheetCellAlignmentsSnapshot;
+    rowAlignments?: SheetRowAlignmentsSnapshot;
+    columnAlignments?: SheetColumnAlignmentsSnapshot;
 }
 
 export interface WorkbookEditState {
@@ -223,6 +231,31 @@ export async function writeWorkbookEditsToDestination(
 
             for (const [rowNumberText, rowHeight] of Object.entries(edit.rowHeights ?? {})) {
                 sheet.setRowHeight(Number(rowNumberText), rowHeight);
+            }
+
+            for (const [columnNumberText, alignment] of Object.entries(edit.columnAlignments ?? {})) {
+                sheet.setColumnStyle(Number(columnNumberText), {
+                    applyAlignment: true,
+                    alignment,
+                });
+            }
+
+            for (const [rowNumberText, alignment] of Object.entries(edit.rowAlignments ?? {})) {
+                sheet.setRowStyle(Number(rowNumberText), {
+                    applyAlignment: true,
+                    alignment,
+                });
+            }
+
+            for (const [cellKey, alignment] of Object.entries(edit.cellAlignments ?? {})) {
+                const [rowNumberText, columnNumberText] = cellKey.split(":");
+                const rowNumber = Number(rowNumberText);
+                const columnNumber = Number(columnNumberText);
+                if (!Number.isInteger(rowNumber) || !Number.isInteger(columnNumber)) {
+                    continue;
+                }
+
+                sheet.setAlignment(rowNumber, columnNumber, alignment);
             }
         }
     });

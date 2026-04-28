@@ -1,4 +1,12 @@
 import { createCellKey, getCellAddress } from "../../core/model/cells";
+import {
+    applyCellAlignmentPatch,
+    areCellAlignmentsEqual,
+    areCellAlignmentMapsEquivalent,
+    cloneCellAlignmentMap,
+    type CellAlignmentSnapshot,
+    type EditorAlignmentPatch,
+} from "../../core/model/alignment";
 import { DEFAULT_PAGE_SIZE } from "../../constants";
 import type {
     CellEdit,
@@ -8,11 +16,13 @@ import type {
 } from "../../core/fastxlsx/write-cell-value";
 import type { EditorPanelState, WorkbookSnapshot } from "../../core/model/types";
 import type {
+    EditorAlignmentTargetKind,
     EditorPendingEdit,
     RestoredStructuralState,
     StructuralSnapshot,
     WorkingSheetEntry,
 } from "./editor-panel-types";
+import type { SelectionRange } from "./editor-selection-range";
 
 export type GridSheetEdit = Extract<
     SheetEdit,
@@ -37,6 +47,24 @@ export function cloneRowHeights(
     rowHeights: Readonly<Record<string, number | null>> | undefined
 ): Record<string, number | null> {
     return { ...(rowHeights ?? {}) };
+}
+
+export function cloneCellAlignments(
+    cellAlignments: Readonly<Record<string, CellAlignmentSnapshot>> | undefined
+): Record<string, CellAlignmentSnapshot> {
+    return cloneCellAlignmentMap(cellAlignments);
+}
+
+export function cloneRowAlignments(
+    rowAlignments: Readonly<Record<string, CellAlignmentSnapshot>> | undefined
+): Record<string, CellAlignmentSnapshot> {
+    return cloneCellAlignmentMap(rowAlignments);
+}
+
+export function cloneColumnAlignments(
+    columnAlignments: Readonly<Record<string, CellAlignmentSnapshot>> | undefined
+): Record<string, CellAlignmentSnapshot> {
+    return cloneCellAlignmentMap(columnAlignments);
 }
 
 function normalizeColumnWidthsForComparison(
@@ -93,6 +121,27 @@ export function areRowHeightsEquivalent(
     );
 }
 
+export function areCellAlignmentsEquivalent(
+    left: Readonly<Record<string, CellAlignmentSnapshot>> | undefined,
+    right: Readonly<Record<string, CellAlignmentSnapshot>> | undefined
+): boolean {
+    return areCellAlignmentMapsEquivalent(left, right);
+}
+
+export function areRowAlignmentsEquivalent(
+    left: Readonly<Record<string, CellAlignmentSnapshot>> | undefined,
+    right: Readonly<Record<string, CellAlignmentSnapshot>> | undefined
+): boolean {
+    return areCellAlignmentMapsEquivalent(left, right);
+}
+
+export function areColumnAlignmentsEquivalent(
+    left: Readonly<Record<string, CellAlignmentSnapshot>> | undefined,
+    right: Readonly<Record<string, CellAlignmentSnapshot>> | undefined
+): boolean {
+    return areCellAlignmentMapsEquivalent(left, right);
+}
+
 export function setSheetColumnWidthSnapshot(
     columnWidths: readonly (number | null | undefined)[] | undefined,
     columnNumber: number,
@@ -122,6 +171,143 @@ export function setSheetRowHeightSnapshot(
     return nextRowHeights;
 }
 
+function setAlignmentSnapshotEntry(
+    alignments: Readonly<Record<string, CellAlignmentSnapshot>> | undefined,
+    key: string,
+    patch: EditorAlignmentPatch
+): Record<string, CellAlignmentSnapshot> {
+    const nextAlignments = cloneCellAlignmentMap(alignments);
+    const nextAlignment = applyCellAlignmentPatch(nextAlignments[key], patch);
+    if (!nextAlignment) {
+        delete nextAlignments[key];
+        return nextAlignments;
+    }
+
+    nextAlignments[key] = nextAlignment;
+    return nextAlignments;
+}
+
+export function setSheetCellAlignmentSnapshot(
+    cellAlignments: Readonly<Record<string, CellAlignmentSnapshot>> | undefined,
+    rowNumber: number,
+    columnNumber: number,
+    patch: EditorAlignmentPatch
+): Record<string, CellAlignmentSnapshot> {
+    return setAlignmentSnapshotEntry(cellAlignments, createCellKey(rowNumber, columnNumber), patch);
+}
+
+export function setSheetRowAlignmentSnapshot(
+    rowAlignments: Readonly<Record<string, CellAlignmentSnapshot>> | undefined,
+    rowNumber: number,
+    patch: EditorAlignmentPatch
+): Record<string, CellAlignmentSnapshot> {
+    return setAlignmentSnapshotEntry(rowAlignments, String(rowNumber), patch);
+}
+
+export function setSheetColumnAlignmentSnapshot(
+    columnAlignments: Readonly<Record<string, CellAlignmentSnapshot>> | undefined,
+    columnNumber: number,
+    patch: EditorAlignmentPatch
+): Record<string, CellAlignmentSnapshot> {
+    return setAlignmentSnapshotEntry(columnAlignments, String(columnNumber), patch);
+}
+
+export function applyAlignmentPatchToSheetSnapshot(
+    sheet: WorkbookSnapshot["sheets"][number],
+    target: EditorAlignmentTargetKind,
+    selection: SelectionRange,
+    patch: EditorAlignmentPatch
+): WorkbookSnapshot["sheets"][number] {
+    if (target === "cell" || target === "range") {
+        const nextCellAlignments = cloneCellAlignments(sheet.cellAlignments);
+        let hasChanges = false;
+
+        for (let rowNumber = selection.startRow; rowNumber <= selection.endRow; rowNumber += 1) {
+            for (
+                let columnNumber = selection.startColumn;
+                columnNumber <= selection.endColumn;
+                columnNumber += 1
+            ) {
+                const cellKey = createCellKey(rowNumber, columnNumber);
+                const nextAlignment = applyCellAlignmentPatch(nextCellAlignments[cellKey], patch);
+                if (areCellAlignmentsEqual(nextCellAlignments[cellKey], nextAlignment)) {
+                    continue;
+                }
+
+                hasChanges = true;
+                if (nextAlignment) {
+                    nextCellAlignments[cellKey] = nextAlignment;
+                } else {
+                    delete nextCellAlignments[cellKey];
+                }
+            }
+        }
+
+        return hasChanges
+            ? {
+                  ...sheet,
+                  cellAlignments: nextCellAlignments,
+              }
+            : sheet;
+    }
+
+    if (target === "row") {
+        const nextRowAlignments = cloneRowAlignments(sheet.rowAlignments);
+        let hasChanges = false;
+
+        for (let rowNumber = selection.startRow; rowNumber <= selection.endRow; rowNumber += 1) {
+            const rowKey = String(rowNumber);
+            const nextAlignment = applyCellAlignmentPatch(nextRowAlignments[rowKey], patch);
+            if (areCellAlignmentsEqual(nextRowAlignments[rowKey], nextAlignment)) {
+                continue;
+            }
+
+            hasChanges = true;
+            if (nextAlignment) {
+                nextRowAlignments[rowKey] = nextAlignment;
+            } else {
+                delete nextRowAlignments[rowKey];
+            }
+        }
+
+        return hasChanges
+            ? {
+                  ...sheet,
+                  rowAlignments: nextRowAlignments,
+              }
+            : sheet;
+    }
+
+    const nextColumnAlignments = cloneColumnAlignments(sheet.columnAlignments);
+    let hasChanges = false;
+
+    for (
+        let columnNumber = selection.startColumn;
+        columnNumber <= selection.endColumn;
+        columnNumber += 1
+    ) {
+        const columnKey = String(columnNumber);
+        const nextAlignment = applyCellAlignmentPatch(nextColumnAlignments[columnKey], patch);
+        if (areCellAlignmentsEqual(nextColumnAlignments[columnKey], nextAlignment)) {
+            continue;
+        }
+
+        hasChanges = true;
+        if (nextAlignment) {
+            nextColumnAlignments[columnKey] = nextAlignment;
+        } else {
+            delete nextColumnAlignments[columnKey];
+        }
+    }
+
+    return hasChanges
+        ? {
+              ...sheet,
+              columnAlignments: nextColumnAlignments,
+          }
+        : sheet;
+}
+
 export function cloneViewEdit(edit: SheetViewEdit): SheetViewEdit {
     return {
         ...edit,
@@ -136,6 +322,21 @@ export function cloneViewEdit(edit: SheetViewEdit): SheetViewEdit {
                   rowHeights: cloneRowHeights(edit.rowHeights),
               }
             : {}),
+        ...(edit.cellAlignments
+            ? {
+                  cellAlignments: cloneCellAlignments(edit.cellAlignments),
+              }
+            : {}),
+        ...(edit.rowAlignments
+            ? {
+                  rowAlignments: cloneRowAlignments(edit.rowAlignments),
+              }
+            : {}),
+        ...(edit.columnAlignments
+            ? {
+                  columnAlignments: cloneColumnAlignments(edit.columnAlignments),
+              }
+            : {}),
     };
 }
 
@@ -147,6 +348,9 @@ export function cloneSheetSnapshot(
         mergedRanges: [...sheet.mergedRanges],
         columnWidths: cloneColumnWidths(sheet.columnWidths),
         rowHeights: cloneRowHeights(sheet.rowHeights),
+        cellAlignments: cloneCellAlignments(sheet.cellAlignments),
+        rowAlignments: cloneRowAlignments(sheet.rowAlignments),
+        columnAlignments: cloneColumnAlignments(sheet.columnAlignments),
         freezePane: sheet.freezePane ? { ...sheet.freezePane } : null,
         cells: { ...sheet.cells },
     };
@@ -384,6 +588,85 @@ function transformRowHeights(
     return nextRowHeights;
 }
 
+function transformCellAlignments(
+    cellAlignments: WorkbookSnapshot["sheets"][number]["cellAlignments"],
+    edit: GridSheetEdit
+): WorkbookSnapshot["sheets"][number]["cellAlignments"] {
+    return Object.fromEntries(
+        Object.entries(cellAlignments ?? {})
+            .flatMap(([cellKey, alignment]) => {
+                const [rowNumberText, columnNumberText] = cellKey.split(":");
+                const rowNumber = Number(rowNumberText);
+                const columnNumber = Number(columnNumberText);
+                if (!Number.isInteger(rowNumber) || !Number.isInteger(columnNumber)) {
+                    return [];
+                }
+
+                const nextPosition = transformCellPosition(rowNumber, columnNumber, edit);
+                if (!nextPosition) {
+                    return [];
+                }
+
+                return [
+                    [
+                        createCellKey(nextPosition.rowNumber, nextPosition.columnNumber),
+                        alignment,
+                    ] as const,
+                ];
+            })
+            .sort(([leftCellKey], [rightCellKey]) => leftCellKey.localeCompare(rightCellKey))
+    );
+}
+
+function transformIndexedAlignments(
+    alignments: Readonly<Record<string, CellAlignmentSnapshot>> | undefined,
+    edit: GridSheetEdit,
+    axis: "row" | "column"
+): Record<string, CellAlignmentSnapshot> {
+    const isRowAxis = axis === "row";
+    if (
+        (isRowAxis && edit.type !== "insertRow" && edit.type !== "deleteRow") ||
+        (!isRowAxis && edit.type !== "insertColumn" && edit.type !== "deleteColumn")
+    ) {
+        return cloneCellAlignmentMap(alignments);
+    }
+
+    return Object.fromEntries(
+        Object.entries(alignments ?? {})
+            .flatMap(([indexText, alignment]) => {
+                const index = Number(indexText);
+                if (!Number.isInteger(index) || index < 1) {
+                    return [];
+                }
+
+                if (isRowAxis) {
+                    const nextPosition = transformCellPosition(index, 1, edit);
+                    return nextPosition ? [[String(nextPosition.rowNumber), alignment] as const] : [];
+                }
+
+                const nextPosition = transformCellPosition(1, index, edit);
+                return nextPosition
+                    ? [[String(nextPosition.columnNumber), alignment] as const]
+                    : [];
+            })
+            .sort(([leftIndexText], [rightIndexText]) => Number(leftIndexText) - Number(rightIndexText))
+    );
+}
+
+function transformRowAlignments(
+    rowAlignments: WorkbookSnapshot["sheets"][number]["rowAlignments"],
+    edit: GridSheetEdit
+): WorkbookSnapshot["sheets"][number]["rowAlignments"] {
+    return transformIndexedAlignments(rowAlignments, edit, "row");
+}
+
+function transformColumnAlignments(
+    columnAlignments: WorkbookSnapshot["sheets"][number]["columnAlignments"],
+    edit: GridSheetEdit
+): WorkbookSnapshot["sheets"][number]["columnAlignments"] {
+    return transformIndexedAlignments(columnAlignments, edit, "column");
+}
+
 export function shiftPendingCellEditsForGridSheetEdit(
     pendingCellEdits: CellEdit[],
     edit: GridSheetEdit
@@ -464,6 +747,9 @@ export function applyGridSheetEditToSheet(
         columnCount,
         columnWidths: transformColumnWidths(sheet.columnWidths, edit),
         rowHeights: transformRowHeights(sheet.rowHeights, edit),
+        cellAlignments: transformCellAlignments(sheet.cellAlignments, edit),
+        rowAlignments: transformRowAlignments(sheet.rowAlignments, edit),
+        columnAlignments: transformColumnAlignments(sheet.columnAlignments, edit),
         cells: nextCells,
         signature: createPendingSheetSignature(
             sheet.name,
@@ -580,6 +866,9 @@ export function restorePendingWorkbookState(
                     mergedRanges: [],
                     columnWidths: [],
                     rowHeights: {},
+                    cellAlignments: {},
+                    rowAlignments: {},
+                    columnAlignments: {},
                     cells: {},
                     freezePane: null,
                     signature: `pending:${edit.sheetKey}:${edit.sheetName}`,
@@ -646,6 +935,15 @@ export function restorePendingWorkbookState(
                           rowHeights: edit.rowHeights
                               ? cloneRowHeights(edit.rowHeights)
                               : cloneRowHeights(entry.sheet.rowHeights),
+                          cellAlignments: edit.cellAlignments
+                              ? cloneCellAlignments(edit.cellAlignments)
+                              : cloneCellAlignments(entry.sheet.cellAlignments),
+                          rowAlignments: edit.rowAlignments
+                              ? cloneRowAlignments(edit.rowAlignments)
+                              : cloneRowAlignments(entry.sheet.rowAlignments),
+                          columnAlignments: edit.columnAlignments
+                              ? cloneColumnAlignments(edit.columnAlignments)
+                              : cloneColumnAlignments(entry.sheet.columnAlignments),
                           freezePane: edit.freezePane
                               ? createFreezePaneSnapshot(
                                     edit.freezePane.columnCount,

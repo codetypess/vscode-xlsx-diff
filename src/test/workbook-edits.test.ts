@@ -31,7 +31,10 @@ suite("Workbook edit writer", () => {
             insertColumn(): void;
             deleteColumn(): void;
             setColumnWidth(): void;
+            setColumnStyle(): void;
             setRowHeight(): void;
+            setRowStyle(): void;
+            setAlignment(): void;
             freezePane(): void;
             unfreezePane(): void;
         }
@@ -85,7 +88,16 @@ suite("Workbook edit writer", () => {
                     setColumnWidth() {
                         mutationContexts.push(inBatch);
                     },
+                    setColumnStyle() {
+                        mutationContexts.push(inBatch);
+                    },
                     setRowHeight() {
+                        mutationContexts.push(inBatch);
+                    },
+                    setRowStyle() {
+                        mutationContexts.push(inBatch);
+                    },
+                    setAlignment() {
                         mutationContexts.push(inBatch);
                     },
                     freezePane() {
@@ -309,6 +321,65 @@ suite("Workbook edit writer", () => {
             assert.strictEqual(snapshot.sheets[0]?.columnCount, 2);
             assert.strictEqual(snapshot.sheets[0]?.cells["2:2"]?.displayValue, "shifted");
             assert.strictEqual(snapshot.sheets[0]?.cells["1:1"], undefined);
+        } finally {
+            await rm(tempDirectory, { recursive: true, force: true });
+        }
+    });
+
+    test("writes and reloads cell, row, and column alignments", async () => {
+        const tempDirectory = await mkdtemp(path.join(os.tmpdir(), "xlsx-diff-"));
+
+        try {
+            const sourcePath = path.join(tempDirectory, "source-alignment.xlsx");
+            const destinationPath = path.join(tempDirectory, "destination-alignment.xlsx");
+            const workbook = Workbook.create("Sheet1");
+            workbook.getSheet("Sheet1").cell("C3").setValue("tail");
+            await workbook.save(sourcePath);
+
+            await writeWorkbookEditsToDestination(
+                vscode.Uri.file(sourcePath),
+                vscode.Uri.file(destinationPath),
+                {
+                    sheetEdits: [],
+                    cellEdits: [],
+                    viewEdits: [
+                        {
+                            sheetKey: "sheet-1",
+                            sheetName: "Sheet1",
+                            freezePane: null,
+                            cellAlignments: {
+                                "2:2": {
+                                    horizontal: "right",
+                                },
+                            },
+                            rowAlignments: {
+                                "2": {
+                                    vertical: "center",
+                                },
+                            },
+                            columnAlignments: {
+                                "3": {
+                                    horizontal: "center",
+                                },
+                            },
+                        },
+                    ],
+                }
+            );
+
+            const savedWorkbook = await Workbook.open(destinationPath);
+            const savedSheet = savedWorkbook.getSheet("Sheet1");
+            assert.strictEqual(savedSheet.getAlignment(2, 2)?.horizontal, "right");
+            assert.strictEqual(savedSheet.getRowStyle(2)?.alignment?.vertical, "center");
+            assert.strictEqual(savedSheet.getColumnStyle(3)?.alignment?.horizontal, "center");
+
+            const snapshot = await loadWorkbookSnapshot(destinationPath);
+            assert.strictEqual(snapshot.sheets[0]?.cellAlignments?.["2:2"]?.horizontal, "right");
+            assert.strictEqual(snapshot.sheets[0]?.rowAlignments?.["2"]?.vertical, "center");
+            assert.strictEqual(
+                snapshot.sheets[0]?.columnAlignments?.["3"]?.horizontal,
+                "center"
+            );
         } finally {
             await rm(tempDirectory, { recursive: true, force: true });
         }

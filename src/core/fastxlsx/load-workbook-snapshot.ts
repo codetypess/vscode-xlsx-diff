@@ -18,6 +18,8 @@ import {
     type SheetVisibility,
     type WorkbookSnapshot,
 } from "../model/types";
+import { cloneCellAlignment } from "../model/alignment";
+import type { CellStyleDefinition } from "fastxlsx";
 import {
     getWorkbookResourceDetail,
     getWorkbookResourceName,
@@ -35,7 +37,9 @@ interface SheetReader {
     getDisplayValue(rowNumber: number, columnNumber: number): string | null;
     getFormula(rowNumber: number, columnNumber: number): string | null;
     getStyleId(rowNumber: number, columnNumber: number): number | null;
+    getColumnStyleId(columnNumber: number): number | null;
     getColumnWidth(columnNumber: number): number | null;
+    getRowStyleId(rowNumber: number): number | null;
     getRowHeight(rowNumber: number): number | null;
     getMergedRanges(): string[];
     getFreezePane(): SheetFreezePaneSnapshot | null;
@@ -45,6 +49,7 @@ interface WorkbookReader {
     getSheet(sheetName: string): SheetReader;
     getSheetNames(): string[];
     getSheetVisibility(sheetName: string): SheetVisibility;
+    getStyle(styleId: number): CellStyleDefinition | null;
     getDefinedNames(): DefinedNameSnapshot[];
 }
 
@@ -107,23 +112,62 @@ function loadSheetSnapshot(workbook: WorkbookReader, sheetName: string): SheetSn
     const columnWidths = Array.from({ length: sheet.columnCount }, (_, index) =>
         sheet.getColumnWidth(index + 1)
     );
+    const columnAlignments = Object.fromEntries(
+        Array.from({ length: sheet.columnCount }, (_, index) => index + 1)
+            .flatMap((columnNumber) => {
+                const styleId = sheet.getColumnStyleId(columnNumber);
+                const alignment =
+                    !Number.isInteger(styleId)
+                        ? null
+                        : cloneCellAlignment(
+                              workbook.getStyle(styleId as number)?.alignment ?? null
+                          );
+                return alignment ? [[String(columnNumber), alignment] as const] : [];
+            })
+            .sort(([leftColumnNumber], [rightColumnNumber]) =>
+                Number(leftColumnNumber) - Number(rightColumnNumber)
+            )
+    );
     const rowHeights = Object.fromEntries(
         Array.from({ length: sheet.rowCount }, (_, index) => index + 1)
             .map((rowNumber) => [String(rowNumber), sheet.getRowHeight(rowNumber)] as const)
             .filter(([, rowHeight]) => rowHeight !== null)
     );
+    const rowAlignments = Object.fromEntries(
+        Array.from({ length: sheet.rowCount }, (_, index) => index + 1)
+            .flatMap((rowNumber) => {
+                const styleId = sheet.getRowStyleId(rowNumber);
+                const alignment =
+                    !Number.isInteger(styleId)
+                        ? null
+                        : cloneCellAlignment(
+                              workbook.getStyle(styleId as number)?.alignment ?? null
+                          );
+                return alignment ? [[String(rowNumber), alignment] as const] : [];
+            })
+            .sort(([leftRowNumber], [rightRowNumber]) => Number(leftRowNumber) - Number(rightRowNumber))
+    );
+    const cellAlignments = {} as NonNullable<SheetSnapshot["cellAlignments"]>;
 
     for (let rowNumber = 1; rowNumber <= sheet.rowCount; rowNumber += 1) {
         for (let columnNumber = 1; columnNumber <= sheet.columnCount; columnNumber += 1) {
             const displayValue = sheet.getDisplayValue(rowNumber, columnNumber);
             const formula = sheet.getFormula(rowNumber, columnNumber);
+            const styleId = sheet.getStyleId(rowNumber, columnNumber);
+            const cellAlignment =
+                !Number.isInteger(styleId)
+                    ? null
+                    : cloneCellAlignment(workbook.getStyle(styleId as number)?.alignment);
+
+            if (cellAlignment) {
+                cellAlignments[createCellKey(rowNumber, columnNumber)] = cellAlignment;
+            }
 
             if (displayValue === null && formula === null) {
                 continue;
             }
 
             const key = createCellKey(rowNumber, columnNumber);
-            const styleId = sheet.getStyleId(rowNumber, columnNumber);
             cells[key] = {
                 key,
                 rowNumber,
@@ -144,6 +188,9 @@ function loadSheetSnapshot(workbook: WorkbookReader, sheetName: string): SheetSn
         mergedRanges: [...sheet.getMergedRanges()].sort((left, right) => left.localeCompare(right)),
         columnWidths,
         rowHeights,
+        cellAlignments,
+        rowAlignments,
+        columnAlignments,
         freezePane: freezePane ? { ...freezePane } : null,
         cells,
         signature: "",

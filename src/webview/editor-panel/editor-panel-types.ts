@@ -5,6 +5,7 @@ import type {
     WorkbookEditState,
 } from "../../core/fastxlsx/write-cell-value";
 import type { EditorPanelState, SheetSnapshot } from "../../core/model/types";
+import type { EditorAlignmentPatch } from "../../core/model/alignment";
 import type { SelectionRange } from "./editor-selection-range";
 
 export interface SearchOptions {
@@ -44,6 +45,8 @@ export interface EditorSearchResultMessage extends EditorSearchResult {
     message?: string;
 }
 
+export type EditorAlignmentTargetKind = "cell" | "row" | "column" | "range";
+
 export type EditorWebviewMessage =
     | { type: "ready" }
     | { type: "setSheet"; sheetKey: string }
@@ -58,6 +61,12 @@ export type EditorWebviewMessage =
     | { type: "deleteColumn"; columnNumber: number }
     | { type: "promptColumnWidth"; columnNumber: number }
     | { type: "setColumnWidth"; columnNumber: number; width: number | null }
+    | {
+          type: "setAlignment";
+          target: EditorAlignmentTargetKind;
+          selection: SelectionRange;
+          alignment: EditorAlignmentPatch;
+      }
     | ({ type: "search" } & EditorSearchRequest)
     | { type: "gotoCell"; reference: string }
     | { type: "selectCell"; rowNumber: number; columnNumber: number }
@@ -150,6 +159,12 @@ export interface EditorPanelStrings {
     searchRegex: string;
     searchMatchCase: string;
     searchWholeWord: string;
+    alignLeft: string;
+    alignCenter: string;
+    alignRight: string;
+    alignTop: string;
+    alignMiddle: string;
+    alignBottom: string;
 }
 
 export interface WorkingSheetEntry {

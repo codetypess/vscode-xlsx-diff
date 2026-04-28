@@ -1,4 +1,13 @@
 import * as React from "react";
+import {
+    MdAlignHorizontalCenter,
+    MdAlignHorizontalLeft,
+    MdAlignHorizontalRight,
+    MdAlignVerticalBottom,
+    MdAlignVerticalCenter,
+    MdAlignVerticalTop,
+} from "react-icons/md";
+import type { EditorAlignmentPatch } from "../../core/model/alignment";
 import type { EditorRenderModel, EditorSheetTabView } from "../../core/model/types";
 import { getMaxVisibleSheetTabsForWidth, partitionSheetTabs } from "../editor-sheet-tabs";
 import type { EditorPanelStrings, SearchOptions } from "./editor-panel-types";
@@ -58,6 +67,8 @@ export function CellValue({
 function ToolbarButton({
     actionLabel,
     icon,
+    iconNode,
+    text,
     className,
     disabled = false,
     isActive = false,
@@ -67,7 +78,9 @@ function ToolbarButton({
     onClick,
 }: {
     actionLabel: string;
-    icon: string;
+    icon?: string;
+    iconNode?: React.ReactNode;
+    text?: string;
     className?: string;
     disabled?: boolean;
     isActive?: boolean;
@@ -93,17 +106,23 @@ function ToolbarButton({
             type="button"
             onClick={onClick}
         >
-            <span
-                className={classNames([
-                    "codicon",
-                    displayedIcon,
-                    "toolbar__button-icon",
-                    iconMirrored && "toolbar__button-icon--flip",
-                    isLoading && "toolbar__button-icon--spin",
-                ])}
-                aria-hidden
-            />
-            {iconOnly ? null : <span>{actionLabel}</span>}
+            {iconNode ? (
+                <span className="toolbar__button-icon toolbar__button-icon--custom" aria-hidden>
+                    {iconNode}
+                </span>
+            ) : displayedIcon ? (
+                <span
+                    className={classNames([
+                        "codicon",
+                        displayedIcon,
+                        "toolbar__button-icon",
+                        iconMirrored && "toolbar__button-icon--flip",
+                        isLoading && "toolbar__button-icon--spin",
+                    ])}
+                    aria-hidden
+                />
+            ) : null}
+            {iconOnly ? null : <span>{text ?? actionLabel}</span>}
         </button>
     );
 }
@@ -440,6 +459,7 @@ export function EditorToolbar({
     getPositionInputValue,
     getCellValueInputValue,
     getCellValueInputPlaceholder,
+    activeAlignment,
     canEditSelectedCellValue,
     getActiveCellEditTarget,
     onOpenSearch,
@@ -450,6 +470,7 @@ export function EditorToolbar({
     onSave,
     onSubmitGoto,
     onCommitCellValue,
+    onApplyAlignment,
     onFinishGridEdit,
 }: {
     strings: EditorPanelStrings;
@@ -463,6 +484,7 @@ export function EditorToolbar({
     getPositionInputValue(): string;
     getCellValueInputValue(): string;
     getCellValueInputPlaceholder(): string;
+    activeAlignment: EditorAlignmentPatch;
     canEditSelectedCellValue(): boolean;
     getActiveCellEditTarget(): ToolbarCellEditTarget | null;
     onOpenSearch(mode: SearchPanelMode): void;
@@ -473,6 +495,7 @@ export function EditorToolbar({
     onSave(): void;
     onSubmitGoto(reference: string): void;
     onCommitCellValue(target: ToolbarCellEditTarget, value: string): void;
+    onApplyAlignment(alignment: EditorAlignmentPatch): void;
     onFinishGridEdit(): void;
 }): React.ReactElement {
     React.useSyncExternalStore(
@@ -700,6 +723,76 @@ export function EditorToolbar({
                     iconOnly={true}
                     onClick={onRedo}
                 />
+                <div className="toolbar__segmented" role="group" aria-label="Horizontal alignment">
+                    <ToolbarButton
+                        actionLabel={strings.alignLeft}
+                        disabled={!currentModel.canEdit || isSaving}
+                        iconNode={<MdAlignHorizontalLeft />}
+                        iconOnly={true}
+                        isActive={activeAlignment.horizontal === "left"}
+                        onClick={() => {
+                            onFinishGridEdit();
+                            onApplyAlignment({ horizontal: "left" });
+                        }}
+                    />
+                    <ToolbarButton
+                        actionLabel={strings.alignCenter}
+                        disabled={!currentModel.canEdit || isSaving}
+                        iconNode={<MdAlignHorizontalCenter />}
+                        iconOnly={true}
+                        isActive={activeAlignment.horizontal === "center"}
+                        onClick={() => {
+                            onFinishGridEdit();
+                            onApplyAlignment({ horizontal: "center" });
+                        }}
+                    />
+                    <ToolbarButton
+                        actionLabel={strings.alignRight}
+                        disabled={!currentModel.canEdit || isSaving}
+                        iconNode={<MdAlignHorizontalRight />}
+                        iconOnly={true}
+                        isActive={activeAlignment.horizontal === "right"}
+                        onClick={() => {
+                            onFinishGridEdit();
+                            onApplyAlignment({ horizontal: "right" });
+                        }}
+                    />
+                </div>
+                <div className="toolbar__segmented" role="group" aria-label="Vertical alignment">
+                    <ToolbarButton
+                        actionLabel={strings.alignTop}
+                        disabled={!currentModel.canEdit || isSaving}
+                        iconNode={<MdAlignVerticalTop />}
+                        iconOnly={true}
+                        isActive={activeAlignment.vertical === "top"}
+                        onClick={() => {
+                            onFinishGridEdit();
+                            onApplyAlignment({ vertical: "top" });
+                        }}
+                    />
+                    <ToolbarButton
+                        actionLabel={strings.alignMiddle}
+                        disabled={!currentModel.canEdit || isSaving}
+                        iconNode={<MdAlignVerticalCenter />}
+                        iconOnly={true}
+                        isActive={activeAlignment.vertical === "center"}
+                        onClick={() => {
+                            onFinishGridEdit();
+                            onApplyAlignment({ vertical: "center" });
+                        }}
+                    />
+                    <ToolbarButton
+                        actionLabel={strings.alignBottom}
+                        disabled={!currentModel.canEdit || isSaving}
+                        iconNode={<MdAlignVerticalBottom />}
+                        iconOnly={true}
+                        isActive={activeAlignment.vertical === "bottom"}
+                        onClick={() => {
+                            onFinishGridEdit();
+                            onApplyAlignment({ vertical: "bottom" });
+                        }}
+                    />
+                </div>
                 <ToolbarButton
                     actionLabel={strings.reload}
                     icon="codicon-refresh"

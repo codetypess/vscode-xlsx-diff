@@ -2,6 +2,11 @@ import * as React from "react";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import type { CellSnapshot, EditorRenderModel } from "../../core/model/types";
+import {
+    mergeCellAlignments,
+    type CellAlignmentSnapshot,
+    type EditorAlignmentPatch,
+} from "../../core/model/alignment";
 import { createCellKey, getColumnLabel } from "../../core/model/cells";
 import { formatI18nMessage, RUNTIME_MESSAGES } from "../../i18n/catalog";
 import {
@@ -85,6 +90,7 @@ import type {
     EditorSearchResultMessage,
     EditorSearchScope,
     EditorWebviewMessage,
+    EditorAlignmentTargetKind,
     SearchOptions,
 } from "./editor-panel-types";
 import { resolveEditorReplaceResultInSheet } from "./editor-panel-logic";
@@ -126,6 +132,11 @@ type IncomingMessage =
 interface CellPosition {
     rowNumber: number;
     columnNumber: number;
+}
+
+interface AlignmentSelectionTarget {
+    target: EditorAlignmentTargetKind;
+    selection: CellRange;
 }
 
 interface EditorGridCellView {
@@ -623,6 +634,128 @@ function getCellView(
     };
 }
 
+function getEffectiveCellAlignment(
+    rowNumber: number,
+    columnNumber: number,
+    currentModel: EditorRenderModel | null = model
+): CellAlignmentSnapshot | null {
+    if (!currentModel) {
+        return null;
+    }
+
+    const cellKey = createCellKey(rowNumber, columnNumber);
+    return mergeCellAlignments(
+        currentModel.activeSheet.columnAlignments?.[String(columnNumber)] ?? null,
+        currentModel.activeSheet.rowAlignments?.[String(rowNumber)] ?? null,
+        currentModel.activeSheet.cellAlignments?.[cellKey] ?? null
+    );
+}
+
+function getCellHorizontalJustifyContent(
+    alignment: CellAlignmentSnapshot | null
+): React.CSSProperties["justifyContent"] {
+    switch (alignment?.horizontal) {
+        case "center":
+        case "centerContinuous":
+            return "center";
+        case "right":
+            return "flex-end";
+        default:
+            return "flex-start";
+    }
+}
+
+function getCellHorizontalTextAlign(
+    alignment: CellAlignmentSnapshot | null
+): React.CSSProperties["textAlign"] {
+    switch (alignment?.horizontal) {
+        case "center":
+        case "centerContinuous":
+            return "center";
+        case "right":
+            return "right";
+        default:
+            return "left";
+    }
+}
+
+function getCellVerticalAlignItems(
+    alignment: CellAlignmentSnapshot | null
+): React.CSSProperties["alignItems"] {
+    switch (alignment?.vertical) {
+        case "center":
+            return "center";
+        case "bottom":
+            return "flex-end";
+        default:
+            return "flex-start";
+    }
+}
+
+function getCellContentAlignmentStyle(
+    rowNumber: number,
+    columnNumber: number,
+    currentModel: EditorRenderModel | null = model
+): React.CSSProperties {
+    const alignment = getEffectiveCellAlignment(rowNumber, columnNumber, currentModel);
+    return {
+        justifyContent: getCellHorizontalJustifyContent(alignment),
+        alignItems: getCellVerticalAlignItems(alignment),
+        textAlign: getCellHorizontalTextAlign(alignment),
+    };
+}
+
+function getToolbarHorizontalAlignment(
+    alignment: CellAlignmentSnapshot | null
+): EditorAlignmentPatch["horizontal"] {
+    switch (alignment?.horizontal) {
+        case "left":
+            return "left";
+        case "center":
+        case "centerContinuous":
+            return "center";
+        case "right":
+            return "right";
+        default:
+            return undefined;
+    }
+}
+
+function getToolbarVerticalAlignment(
+    alignment: CellAlignmentSnapshot | null
+): EditorAlignmentPatch["vertical"] {
+    switch (alignment?.vertical) {
+        case "top":
+            return "top";
+        case "center":
+            return "center";
+        case "bottom":
+            return "bottom";
+        default:
+            return undefined;
+    }
+}
+
+function getActiveToolbarAlignment(
+    currentModel: EditorRenderModel | null = model
+): EditorAlignmentPatch {
+    if (!currentModel || !selectedCell) {
+        return {};
+    }
+
+    const alignment = getEffectiveCellAlignment(
+        selectedCell.rowNumber,
+        selectedCell.columnNumber,
+        currentModel
+    );
+    const horizontal = getToolbarHorizontalAlignment(alignment);
+    const vertical = getToolbarVerticalAlignment(alignment);
+    return {
+        ...(horizontal ? { horizontal } : {}),
+        ...(vertical ? { vertical } : {}),
+    };
+}
+
 function isGridCellEditable(cell: EditorGridCellView | null): boolean {
     return Boolean(model?.canEdit && !cell?.formula);
 }
@@ -649,6 +782,46 @@ function hasExpandedSelection(range: CellRange | null = getSelectionRange()): bo
 function getExpandedSelectionRange(): CellRange | null {
     const range = getSelectionRange();
     return hasExpandedSelection(range) ? range : null;
+}
+
+function getActiveAlignmentSelectionTarget(
+    currentModel: EditorRenderModel | null = model
+): AlignmentSelectionTarget | null {
+    if (!currentModel || !selectedCell) {
+        return null;
+    }
+
+    const expandedSelection = getExpandedSelectionRange();
+    if (!expandedSelection) {
+        return {
+            target: "cell",
+            selection: {
+                startRow: selectedCell.rowNumber,
+                endRow: selectedCell.rowNumber,
+                startColumn: selectedCell.columnNumber,
+                endColumn: selectedCell.columnNumber,
+            },
+        };
+    }
+
+    const selectsAllColumns =
+        expandedSelection.startColumn === 1 &&
+        expandedSelection.endColumn === currentModel.activeSheet.columnCount;
+    const selectsAllRows =
+        expandedSelection.startRow === 1 &&
+        expandedSelection.endRow === currentModel.activeSheet.rowCount;
+
+    if (selectsAllColumns !== selectsAllRows) {
+        return {
+            target: selectsAllColumns ? "row" : "column",
+            selection: expandedSelection,
+        };
+    }
+
+    return {
+        target: "range",
+        selection: expandedSelection,
+    };
 }
 
 function getSelectionRangeAddress(range: CellRange): string {
@@ -4143,6 +4316,11 @@ const EditorVirtualCell = React.memo(
             fillSourceRange &&
             isCellWithinFillPreviewArea(fillSourceRange, fillPreviewRange, rowNumber, columnNumber)
         );
+        const contentAlignmentStyle = getCellContentAlignmentStyle(
+            rowNumber,
+            columnNumber,
+            currentModel
+        );
 
         return (
             <div
@@ -4228,7 +4406,7 @@ const EditorVirtualCell = React.memo(
                     startEditCell(rowNumber, columnNumber, value);
                 }}
             >
-                <div className="grid__cell-content">
+                <div className="grid__cell-content" style={contentAlignmentStyle}>
                     {isEditing && activeEditingCell?.sheetKey === currentModel.activeSheet.key ? (
                         <CellEditor edit={activeEditingCell} />
                     ) : (
@@ -4241,6 +4419,12 @@ const EditorVirtualCell = React.memo(
     (previous, next) =>
         previous.currentModel.activeSheet.key === next.currentModel.activeSheet.key &&
         previous.currentModel.activeSheet.cells === next.currentModel.activeSheet.cells &&
+        previous.currentModel.activeSheet.cellAlignments ===
+            next.currentModel.activeSheet.cellAlignments &&
+        previous.currentModel.activeSheet.rowAlignments ===
+            next.currentModel.activeSheet.rowAlignments &&
+        previous.currentModel.activeSheet.columnAlignments ===
+            next.currentModel.activeSheet.columnAlignments &&
         previous.currentModel.canEdit === next.currentModel.canEdit &&
         previous.rowNumber === next.rowNumber &&
         previous.columnNumber === next.columnNumber &&
@@ -4617,6 +4801,20 @@ function requestReload(): void {
     vscode.postMessage({ type: "reload" });
 }
 
+function applyToolbarAlignment(alignment: EditorAlignmentPatch): void {
+    const target = getActiveAlignmentSelectionTarget();
+    if (!target) {
+        return;
+    }
+
+    vscode.postMessage({
+        type: "setAlignment",
+        target: target.target,
+        selection: target.selection,
+        alignment,
+    });
+}
+
 function finishEditingFromToolbar(): void {
     if (editingCell) {
         finishEdit({ mode: "commit", refresh: false });
@@ -4642,6 +4840,7 @@ function EditorApp({ view }: { view: Extract<ViewState, { kind: "app" }> }): Rea
     const maximumDigitWidth = useMeasuredMaximumDigitWidth(getEditorAppElement());
     editorMaximumDigitWidth = maximumDigitWidth;
     const pendingSummary = getPendingSummary(currentModel.activeSheet.key);
+    const activeToolbarAlignment = getActiveToolbarAlignment(currentModel);
     const currentSelectionRange = getExpandedSelectionRange();
     const effectiveScope = getEffectiveSearchScope();
     const selectionRange =
@@ -4676,6 +4875,7 @@ function EditorApp({ view }: { view: Extract<ViewState, { kind: "app" }> }): Rea
                 getPositionInputValue={getPositionInputValue}
                 getCellValueInputValue={getCellValueInputValue}
                 getCellValueInputPlaceholder={getCellValueInputPlaceholder}
+                activeAlignment={activeToolbarAlignment}
                 canEditSelectedCellValue={canEditSelectedCellValue}
                 getActiveCellEditTarget={() => getActiveToolbarCellEditTarget(currentModel)}
                 onOpenSearch={openSearchPanel}
@@ -4686,6 +4886,7 @@ function EditorApp({ view }: { view: Extract<ViewState, { kind: "app" }> }): Rea
                 onSave={triggerSave}
                 onSubmitGoto={submitGotoSelection}
                 onCommitCellValue={commitToolbarCellValue}
+                onApplyAlignment={applyToolbarAlignment}
                 onFinishGridEdit={finishEditingFromToolbar}
             />
             <SearchPanel

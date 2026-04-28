@@ -7,6 +7,7 @@ import {
     type SheetEdit,
     type SheetViewEdit,
 } from "../../core/fastxlsx/write-cell-value";
+import type { EditorAlignmentPatch } from "../../core/model/alignment";
 import type { EditorPanelState, EditorRenderModel, WorkbookSnapshot } from "../../core/model/types";
 import { getHtmlLanguageTag } from "../../display-language";
 import { toErrorMessage } from "../../error-message";
@@ -22,13 +23,20 @@ import {
     validateEditorSheetName,
 } from "./editor-panel-logic";
 import {
+    applyAlignmentPatchToSheetSnapshot,
     applyGridSheetEditToSheet,
+    areCellAlignmentsEquivalent,
     areColumnWidthsEquivalent,
+    areColumnAlignmentsEquivalent,
     areFreezePaneCountsEqual,
     areRowHeightsEquivalent,
+    areRowAlignmentsEquivalent,
     captureStructuralSnapshot,
+    cloneCellAlignments,
     cloneColumnWidths,
+    cloneColumnAlignments,
     cloneRowHeights,
+    cloneRowAlignments,
     createCommittedWorkbookState,
     createFreezePaneSnapshot,
     createPendingWorkbookEditState,
@@ -44,6 +52,7 @@ import {
     shiftPendingCellEditsForGridSheetEdit,
 } from "./editor-panel-state";
 import type {
+    EditorAlignmentTargetKind,
     EditorPanelStrings,
     EditorSearchResultMessage,
     EditorWebviewMessage,
@@ -51,6 +60,7 @@ import type {
     WorkingSheetEntry,
     XlsxEditorPanelController,
 } from "./editor-panel-types";
+import type { SelectionRange } from "./editor-selection-range";
 import {
     createEditorRenderModel,
     createInitialEditorPanelState,
@@ -494,6 +504,13 @@ export class XlsxEditorPanel {
                 case "setColumnWidth":
                     await this.setPendingColumnWidth(message.columnNumber, message.width);
                     return;
+                case "setAlignment":
+                    await this.setPendingAlignment(
+                        message.target,
+                        message.selection,
+                        message.alignment
+                    );
+                    return;
                 case "search": {
                     if (!this.getWorkingWorkbook()) {
                         return;
@@ -918,7 +935,26 @@ export class XlsxEditorPanel {
             baselineSheet?.columnWidths,
             entry.sheet.columnWidths
         );
-        if (!hasFreezePaneChange && !hasColumnWidthChange && !hasRowHeightChange) {
+        const hasCellAlignmentChange = !areCellAlignmentsEquivalent(
+            baselineSheet?.cellAlignments,
+            entry.sheet.cellAlignments
+        );
+        const hasRowAlignmentChange = !areRowAlignmentsEquivalent(
+            baselineSheet?.rowAlignments,
+            entry.sheet.rowAlignments
+        );
+        const hasColumnAlignmentChange = !areColumnAlignmentsEquivalent(
+            baselineSheet?.columnAlignments,
+            entry.sheet.columnAlignments
+        );
+        if (
+            !hasFreezePaneChange &&
+            !hasColumnWidthChange &&
+            !hasRowHeightChange &&
+            !hasCellAlignmentChange &&
+            !hasRowAlignmentChange &&
+            !hasColumnAlignmentChange
+        ) {
             this.pendingViewEdits = this.pendingViewEdits.filter(
                 (edit) => edit.sheetKey !== sheetKey
             );
@@ -942,6 +978,21 @@ export class XlsxEditorPanel {
             ...(hasRowHeightChange
                 ? {
                       rowHeights: cloneRowHeights(entry.sheet.rowHeights),
+                  }
+                : {}),
+            ...(hasCellAlignmentChange
+                ? {
+                      cellAlignments: cloneCellAlignments(entry.sheet.cellAlignments),
+                  }
+                : {}),
+            ...(hasRowAlignmentChange
+                ? {
+                      rowAlignments: cloneRowAlignments(entry.sheet.rowAlignments),
+                  }
+                : {}),
+            ...(hasColumnAlignmentChange
+                ? {
+                      columnAlignments: cloneColumnAlignments(entry.sheet.columnAlignments),
                   }
                 : {}),
         };
@@ -1234,6 +1285,87 @@ export class XlsxEditorPanel {
         );
     }
 
+    private async setPendingAlignment(
+        target: EditorAlignmentTargetKind,
+        selection: SelectionRange,
+        alignment: EditorAlignmentPatch
+    ): Promise<void> {
+        const workbook = this.getWorkingWorkbook();
+        const activeEntry = this.getActiveSheetEntry();
+        if (!workbook || workbook.isReadonly || !activeEntry) {
+            return;
+        }
+
+        if (!alignment.horizontal && !alignment.vertical) {
+            return;
+        }
+
+        const normalizedSelection: SelectionRange = {
+            startRow: Math.min(selection.startRow, selection.endRow),
+            endRow: Math.max(selection.startRow, selection.endRow),
+            startColumn: Math.min(selection.startColumn, selection.endColumn),
+            endColumn: Math.max(selection.startColumn, selection.endColumn),
+        };
+        const isSelectionInBounds =
+            Number.isInteger(normalizedSelection.startRow) &&
+            Number.isInteger(normalizedSelection.endRow) &&
+            Number.isInteger(normalizedSelection.startColumn) &&
+            Number.isInteger(normalizedSelection.endColumn) &&
+            normalizedSelection.startRow >= 1 &&
+            normalizedSelection.startColumn >= 1 &&
+            normalizedSelection.endRow <= activeEntry.sheet.rowCount &&
+            normalizedSelection.endColumn <= activeEntry.sheet.columnCount;
+        if (!isSelectionInBounds) {
+            return;
+        }
+
+        const selectsAllColumns =
+            normalizedSelection.startColumn === 1 &&
+            normalizedSelection.endColumn === activeEntry.sheet.columnCount;
+        const selectsAllRows =
+            normalizedSelection.startRow === 1 &&
+            normalizedSelection.endRow === activeEntry.sheet.rowCount;
+        if (
+            (target === "cell" &&
+                (normalizedSelection.startRow !== normalizedSelection.endRow ||
+                    normalizedSelection.startColumn !== normalizedSelection.endColumn)) ||
+            (target === "row" && !selectsAllColumns) ||
+            (target === "column" && !selectsAllRows)
+        ) {
+            return;
+        }
+
+        const previewSheet = applyAlignmentPatchToSheetSnapshot(
+            activeEntry.sheet,
+            target,
+            normalizedSelection,
+            alignment
+        );
+        if (previewSheet === activeEntry.sheet) {
+            return;
+        }
+
+        await this.commitStructuralMutation(
+            () => {
+                const entry = this.getActiveSheetEntry();
+                if (!entry) {
+                    return;
+                }
+
+                entry.sheet = applyAlignmentPatchToSheetSnapshot(
+                    entry.sheet,
+                    target,
+                    normalizedSelection,
+                    alignment
+                );
+                this.syncPendingSheetViewEdit(entry.key);
+            },
+            {
+                resetPendingHistory: false,
+            }
+        );
+    }
+
     private async toggleViewLock(columnCount: number, rowCount: number): Promise<void> {
         const workbook = this.getWorkingWorkbook();
         const activeEntry = this.getActiveSheetEntry();
@@ -1358,6 +1490,9 @@ export class XlsxEditorPanel {
                     mergedRanges: [],
                     columnWidths: [],
                     rowHeights: {},
+                    cellAlignments: {},
+                    rowAlignments: {},
+                    columnAlignments: {},
                     cells: {},
                     freezePane: null,
                     signature: `pending:${sheetKey}:${sheetName}`,
@@ -1532,6 +1667,7 @@ export class XlsxEditorPanel {
                 edit
             );
             this.pendingSheetEdits = [...this.pendingSheetEdits, edit];
+            this.syncPendingSheetViewEdit(entry.key);
             this.setActiveSheetSelection(
                 rowNumber,
                 Math.min(
@@ -1576,6 +1712,7 @@ export class XlsxEditorPanel {
                 edit
             );
             this.pendingSheetEdits = [...this.pendingSheetEdits, edit];
+            this.syncPendingSheetViewEdit(entry.key);
             this.setActiveSheetSelection(
                 Math.min(rowNumber, Math.max(entry.sheet.rowCount, 1)),
                 Math.min(

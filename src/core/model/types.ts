@@ -1,3 +1,10 @@
+import type {
+    CellAlignmentSnapshot,
+    SheetCellAlignmentsSnapshot,
+    SheetColumnAlignmentsSnapshot,
+    SheetRowAlignmentsSnapshot,
+} from "./alignment";
+
 export type SheetComparisonKind = "matched" | "renamed" | "added" | "removed";
 export type CellDiffStatus = "equal" | "modified" | "added" | "removed";
 
@@ -57,6 +64,9 @@ export interface SheetSnapshot {
     mergedRanges: string[];
     columnWidths?: Array<number | null>;
     rowHeights?: SheetRowHeightsSnapshot;
+    cellAlignments?: SheetCellAlignmentsSnapshot;
+    rowAlignments?: SheetRowAlignmentsSnapshot;
+    columnAlignments?: SheetColumnAlignmentsSnapshot;
     freezePane?: SheetFreezePaneSnapshot | null;
     cells: Record<string, CellSnapshot>;
     signature: string;
@@ -114,6 +124,9 @@ export interface EditorActiveSheetView {
     columns: string[];
     columnWidths?: Array<number | null>;
     rowHeights?: SheetRowHeightsSnapshot;
+    cellAlignments?: SheetCellAlignmentsSnapshot;
+    rowAlignments?: SheetRowAlignmentsSnapshot;
+    columnAlignments?: SheetColumnAlignmentsSnapshot;
     cells: Record<string, CellSnapshot>;
     freezePane: SheetFreezePaneSnapshot | null;
 }

@@ -5,6 +5,7 @@ import {
     type SheetViewEdit,
     type WorkbookEditState,
 } from "../../core/fastxlsx/write-cell-value";
+import { areCellAlignmentMapsEquivalent, cloneCellAlignmentMap } from "../../core/model/alignment";
 
 async function writePendingWorkbookEditsToDestination(
     sourceUri: vscode.Uri,
@@ -133,6 +134,38 @@ function compareViewEdits(left: SheetViewEdit, right: SheetViewEdit): number {
         return (leftWidth ?? -1) - (rightWidth ?? -1);
     }
 
+    const leftRowHeightKeys = Object.keys(left.rowHeights ?? {});
+    const rightRowHeightKeys = Object.keys(right.rowHeights ?? {});
+    if (leftRowHeightKeys.length !== rightRowHeightKeys.length) {
+        return leftRowHeightKeys.length - rightRowHeightKeys.length;
+    }
+
+    for (const rowNumber of leftRowHeightKeys.sort((a, b) => Number(a) - Number(b))) {
+        const leftHeight = left.rowHeights?.[rowNumber] ?? null;
+        const rightHeight = right.rowHeights?.[rowNumber] ?? null;
+        if (leftHeight !== rightHeight) {
+            return (leftHeight ?? -1) - (rightHeight ?? -1);
+        }
+    }
+
+    const leftCellAlignmentKeys = Object.keys(left.cellAlignments ?? {});
+    const rightCellAlignmentKeys = Object.keys(right.cellAlignments ?? {});
+    if (leftCellAlignmentKeys.length !== rightCellAlignmentKeys.length) {
+        return leftCellAlignmentKeys.length - rightCellAlignmentKeys.length;
+    }
+
+    const leftRowAlignmentKeys = Object.keys(left.rowAlignments ?? {});
+    const rightRowAlignmentKeys = Object.keys(right.rowAlignments ?? {});
+    if (leftRowAlignmentKeys.length !== rightRowAlignmentKeys.length) {
+        return leftRowAlignmentKeys.length - rightRowAlignmentKeys.length;
+    }
+
+    const leftColumnAlignmentKeys = Object.keys(left.columnAlignments ?? {});
+    const rightColumnAlignmentKeys = Object.keys(right.columnAlignments ?? {});
+    if (leftColumnAlignmentKeys.length !== rightColumnAlignmentKeys.length) {
+        return leftColumnAlignmentKeys.length - rightColumnAlignmentKeys.length;
+    }
+
     return 0;
 }
 
@@ -148,6 +181,21 @@ function cloneViewEdit(edit: SheetViewEdit): SheetViewEdit {
         ...(edit.rowHeights
             ? {
                   rowHeights: { ...edit.rowHeights },
+              }
+            : {}),
+        ...(edit.cellAlignments
+            ? {
+                  cellAlignments: cloneCellAlignmentMap(edit.cellAlignments),
+              }
+            : {}),
+        ...(edit.rowAlignments
+            ? {
+                  rowAlignments: cloneCellAlignmentMap(edit.rowAlignments),
+              }
+            : {}),
+        ...(edit.columnAlignments
+            ? {
+                  columnAlignments: cloneCellAlignmentMap(edit.columnAlignments),
               }
             : {}),
     };
@@ -177,7 +225,10 @@ function areViewEditsEqual(
                 Object.keys(other.rowHeights ?? {}).length &&
             Object.entries(edit.rowHeights ?? {}).every(
                 ([rowNumber, rowHeight]) => rowHeight === (other.rowHeights?.[rowNumber] ?? null)
-            )
+            ) &&
+            areCellAlignmentMapsEquivalent(edit.cellAlignments, other.cellAlignments) &&
+            areCellAlignmentMapsEquivalent(edit.rowAlignments, other.rowAlignments) &&
+            areCellAlignmentMapsEquivalent(edit.columnAlignments, other.columnAlignments)
         );
     });
 }

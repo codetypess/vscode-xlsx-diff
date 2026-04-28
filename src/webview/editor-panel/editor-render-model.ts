@@ -1,5 +1,8 @@
 import { createCellKey, getColumnLabel } from "../../core/model/cells";
 import {
+    cloneCellAlignmentMap,
+} from "../../core/model/alignment";
+import {
     type EditorPanelState,
     type EditorRenderModel,
     type EditorSelectedCell,
@@ -221,6 +224,9 @@ export function createEditorRenderModel(
                 columns: [],
                 columnWidths: [],
                 rowHeights: {},
+                cellAlignments: {},
+                rowAlignments: {},
+                columnAlignments: {},
                 cells: {},
                 freezePane: null,
             },
@@ -256,6 +262,9 @@ export function createEditorRenderModel(
             columns,
             columnWidths: [...(activeSheet.columnWidths ?? [])],
             rowHeights: { ...(activeSheet.rowHeights ?? {}) },
+            cellAlignments: cloneCellAlignmentMap(activeSheet.cellAlignments),
+            rowAlignments: cloneCellAlignmentMap(activeSheet.rowAlignments),
+            columnAlignments: cloneCellAlignmentMap(activeSheet.columnAlignments),
             cells: activeSheet.cells,
             freezePane: activeSheet.freezePane ?? null,
         },

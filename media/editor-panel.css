@@ -79,6 +79,18 @@ body {
     gap: 4px;
 }
 
+.toolbar__segmented {
+    display: inline-flex;
+    gap: 1px;
+    padding: 1px;
+    border-radius: 7px;
+    background: color-mix(
+        in srgb,
+        var(--vscode-editorWidget-border, var(--vscode-panel-border)) 24%,
+        transparent 76%
+    );
+}
+
 .toolbar__group--grow {
     flex: 1 1 auto;
     min-width: 0;
@@ -233,6 +245,13 @@ body {
     justify-content: center;
 }
 
+.toolbar__button--compact-label {
+    min-width: 30px;
+    padding-inline: 8px;
+    justify-content: center;
+    font-weight: 600;
+}
+
 .toolbar__button-icon {
     display: inline-flex;
     align-items: center;
@@ -241,6 +260,12 @@ body {
     font-size: 16px;
     line-height: 1;
     opacity: 1;
+}
+
+.toolbar__button-icon--custom svg {
+    width: 16px;
+    height: 16px;
+    display: block;
 }
 
 .toolbar__button-icon--flip {
@@ -1151,6 +1176,7 @@ body {
 .grid__cell-content {
     display: flex;
     align-items: flex-start;
+    justify-content: flex-start;
     gap: 6px;
     min-height: 18px;
     max-width: calc(var(--grid-column-max-width) - 14px);
@@ -1160,6 +1186,7 @@ body {
 
 .grid__cell-value {
     flex: 1 1 auto;
+    min-width: 0;
     display: -webkit-box;
     overflow: hidden;
     white-space: pre-wrap;
