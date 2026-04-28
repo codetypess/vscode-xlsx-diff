@@ -59,6 +59,13 @@ export function convertPixelsToWorkbookColumnWidth(
     return Math.round((normalizedPixels / mdw - Math.trunc(128 / mdw) / 256) * 256) / 256;
 }
 
+export function stabilizeColumnPixelWidth(pixels: number, maximumDigitWidth: number): number {
+    return convertWorkbookColumnWidthToPixels(
+        convertPixelsToWorkbookColumnWidth(pixels, maximumDigitWidth),
+        maximumDigitWidth
+    );
+}
+
 export function resolveColumnPixelWidth(
     workbookWidth: number | null | undefined,
     {

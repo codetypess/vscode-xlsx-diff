@@ -478,6 +478,9 @@ export class XlsxEditorPanel {
                 case "promptColumnWidth":
                     await this.promptPendingColumnWidth(message.columnNumber);
                     return;
+                case "setColumnWidth":
+                    await this.setPendingColumnWidth(message.columnNumber, message.width);
+                    return;
                 case "search": {
                     if (!this.getWorkingWorkbook()) {
                         return;

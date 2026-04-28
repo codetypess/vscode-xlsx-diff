@@ -923,6 +923,11 @@ body {
     background: color-mix(in srgb, var(--vscode-editor-background) 94%, black 6%);
 }
 
+.app--column-resizing,
+.app--column-resizing * {
+    cursor: col-resize !important;
+}
+
 [data-role="grid-column-header"],
 [data-role="grid-row-header"] {
     cursor: pointer;
@@ -1018,6 +1023,41 @@ body {
     max-width: var(--grid-column-max-width);
     text-align: left;
     user-select: none;
+}
+
+.grid__column--resizing {
+    box-shadow: inset -1px 0 0 var(--vscode-focusBorder);
+}
+
+.grid__column-resize-handle {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 10px;
+    height: 100%;
+    cursor: col-resize;
+    touch-action: none;
+}
+
+.grid__column-resize-handle::before {
+    content: "";
+    position: absolute;
+    top: 5px;
+    bottom: 5px;
+    right: 1px;
+    width: 2px;
+    border-radius: 999px;
+    background: color-mix(
+        in srgb,
+        var(--vscode-descriptionForeground) 36%,
+        transparent 64%
+    );
+    transition: background 120ms ease;
+}
+
+.grid__column:hover .grid__column-resize-handle::before,
+.grid__column-resize-handle.is-active::before {
+    background: var(--vscode-focusBorder);
 }
 
 .grid__cell {

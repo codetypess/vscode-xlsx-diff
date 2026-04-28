@@ -55,6 +55,7 @@ export type EditorWebviewMessage =
     | { type: "insertColumn"; columnNumber: number }
     | { type: "deleteColumn"; columnNumber: number }
     | { type: "promptColumnWidth"; columnNumber: number }
+    | { type: "setColumnWidth"; columnNumber: number; width: number | null }
     | ({ type: "search" } & EditorSearchRequest)
     | { type: "gotoCell"; reference: string }
     | { type: "selectCell"; rowNumber: number; columnNumber: number }

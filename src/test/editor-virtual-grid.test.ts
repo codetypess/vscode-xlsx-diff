@@ -3,6 +3,11 @@
 
 import * as assert from "assert";
 import {
+    convertPixelsToWorkbookColumnWidth,
+    convertWorkbookColumnWidthToPixels,
+    stabilizeColumnPixelWidth,
+} from "../webview/column-layout";
+import {
     EDITOR_VIRTUAL_COLUMN_WIDTH,
     EDITOR_VIRTUAL_HEADER_HEIGHT,
     EDITOR_VIRTUAL_ROW_HEIGHT,
@@ -169,5 +174,21 @@ suite("Editor virtual grid helpers", () => {
             }).columnCount,
             12
         );
+    });
+
+    test("normalizes drag-resized pixel widths to stable workbook-backed sizes", () => {
+        const maximumDigitWidth = 7;
+
+        for (const pixelWidth of [40, 61, 84, 120, 140, 240]) {
+            const stabilizedPixelWidth = stabilizeColumnPixelWidth(pixelWidth, maximumDigitWidth);
+            const workbookWidth = convertPixelsToWorkbookColumnWidth(
+                stabilizedPixelWidth,
+                maximumDigitWidth
+            );
+            assert.strictEqual(
+                convertWorkbookColumnWidthToPixels(workbookWidth, maximumDigitWidth),
+                stabilizedPixelWidth
+            );
+        }
     });
 });
