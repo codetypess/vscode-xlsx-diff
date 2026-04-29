@@ -50,7 +50,6 @@ import {
     getSelectionExtendAnchorCell as getControllerSelectionExtendAnchorCell,
     getSelectionRange as getControllerSelectionRange,
     isActiveSelectionCell as isControllerActiveSelectionCell,
-    isSimpleSelectionState as isControllerSimpleSelectionState,
     setSelectedCell as setControllerSelectedCell,
     setSelectionAnchorCell as setControllerSelectionAnchorCell,
     setSuppressAutoSelection as setControllerSuppressAutoSelection,
@@ -63,12 +62,7 @@ import {
     type SelectionControllerState,
     type SelectionDragState,
 } from "./editor-selection-controller";
-import {
-    isSelectionFocusCell,
-    shouldResetInvisibleSelectionAnchor,
-    shouldSyncLocalSelectionDomFromModelSelection,
-    shouldUseLocalSimpleSelectionUpdate,
-} from "./editor-selection-render";
+import { clipSelectionRangeToVisibleGrid } from "./editor-selection-overlay";
 import {
     createColumnSelectionSpanRange,
     createRowSelectionSpanRange,
@@ -1063,23 +1057,6 @@ function normalizeSearchPanelState(): void {
         searchSelectionRange = null;
         return;
     }
-}
-
-function getSelectionOutlineClasses(
-    rowNumber: number,
-    columnNumber: number,
-    range: CellRange | null
-): Array<string | false> {
-    if (!range) {
-        return [];
-    }
-
-    return [
-        rowNumber === range.startRow && "grid__cell--selection-top",
-        rowNumber === range.endRow && "grid__cell--selection-bottom",
-        columnNumber === range.startColumn && "grid__cell--selection-left",
-        columnNumber === range.endColumn && "grid__cell--selection-right",
-    ];
 }
 
 function getSelectionStartCell(): CellPosition | null {
@@ -2422,18 +2399,6 @@ function syncSelectedCellToHost(): void {
     });
 }
 
-function isSimpleSelection(
-    cell: CellPosition | null,
-    anchorCell: CellPosition | null = selectionAnchorCell,
-    selectionRange: CellRange | null = selectionRangeOverride
-): boolean {
-    return isControllerSimpleSelectionState({
-        selectedCell: cell,
-        selectionAnchorCell: anchorCell,
-        selectionRangeOverride: selectionRange,
-    });
-}
-
 function getRenderedCellElements(
     cell: Pick<CellPosition, "rowNumber" | "columnNumber"> | null
 ): HTMLElement[] {
@@ -2446,124 +2411,6 @@ function getRenderedCellElements(
             `[data-role="grid-cell"][data-row-number="${cell.rowNumber}"][data-column-number="${cell.columnNumber}"]`
         )
     );
-}
-
-function setRenderedPrimarySelectionState(
-    cell: Pick<CellPosition, "rowNumber" | "columnNumber"> | null,
-    isSelected: boolean
-): void {
-    for (const element of getRenderedCellElements(cell)) {
-        element.classList.toggle("grid__cell--selected-range", isSelected);
-        element.classList.toggle("grid__cell--selected", isSelected);
-        element.classList.toggle("grid__cell--selection-top", isSelected);
-        element.classList.toggle("grid__cell--selection-right", isSelected);
-        element.classList.toggle("grid__cell--selection-bottom", isSelected);
-        element.classList.toggle("grid__cell--selection-left", isSelected);
-        element.setAttribute("aria-selected", String(isSelected));
-    }
-}
-
-function setRenderedRowSelectionState(rowNumber: number, isActive: boolean): void {
-    for (const header of document.querySelectorAll<HTMLElement>(
-        `[data-role="grid-row-header"][data-row-number="${rowNumber}"]`
-    )) {
-        header.classList.toggle("grid__row-number--active", isActive);
-    }
-
-    for (const cell of document.querySelectorAll<HTMLElement>(
-        `[data-role="grid-cell"][data-row-number="${rowNumber}"]`
-    )) {
-        cell.classList.toggle("grid__cell--active-row", isActive);
-    }
-}
-
-function setRenderedColumnSelectionState(columnNumber: number, isActive: boolean): void {
-    for (const header of document.querySelectorAll<HTMLElement>(
-        `[data-role="grid-column-header"][data-column-number="${columnNumber}"]`
-    )) {
-        header.classList.toggle("grid__column--active", isActive);
-    }
-
-    for (const cell of document.querySelectorAll<HTMLElement>(
-        `[data-role="grid-cell"][data-column-number="${columnNumber}"]`
-    )) {
-        cell.classList.toggle("grid__cell--active-column", isActive);
-    }
-}
-
-function updateSelectedCellAddressBadge(): void {
-    const badge = document.querySelector<HTMLElement>('[data-role="selected-cell-address"]');
-    if (!badge) {
-        return;
-    }
-
-    const address = getSelectedCellAddress();
-    badge.textContent = address;
-    badge.title = `${STRINGS.selectedCell}: ${address}`;
-}
-
-function syncLocalSimpleSelectionDom(
-    previousCell: CellPosition | null,
-    nextCell: CellPosition | null
-): void {
-    if (
-        previousCell &&
-        (!nextCell ||
-            previousCell.rowNumber !== nextCell.rowNumber ||
-            previousCell.columnNumber !== nextCell.columnNumber)
-    ) {
-        setRenderedPrimarySelectionState(previousCell, false);
-    }
-
-    if (previousCell && (!nextCell || previousCell.rowNumber !== nextCell.rowNumber)) {
-        setRenderedRowSelectionState(previousCell.rowNumber, false);
-    }
-
-    if (previousCell && (!nextCell || previousCell.columnNumber !== nextCell.columnNumber)) {
-        setRenderedColumnSelectionState(previousCell.columnNumber, false);
-    }
-
-    if (
-        nextCell &&
-        (!previousCell ||
-            previousCell.rowNumber !== nextCell.rowNumber ||
-            previousCell.columnNumber !== nextCell.columnNumber)
-    ) {
-        setRenderedPrimarySelectionState(nextCell, true);
-    }
-
-    if (nextCell && (!previousCell || previousCell.rowNumber !== nextCell.rowNumber)) {
-        setRenderedRowSelectionState(nextCell.rowNumber, true);
-    }
-
-    if (nextCell && (!previousCell || previousCell.columnNumber !== nextCell.columnNumber)) {
-        setRenderedColumnSelectionState(nextCell.columnNumber, true);
-    }
-
-    updateSelectedCellAddressBadge();
-}
-
-function canUseLocalSimpleSelectionUpdate(
-    nextCell: CellPosition | null,
-    {
-        anchorCell,
-        selectionRange,
-        forceRender = false,
-    }: {
-        anchorCell: CellPosition | null;
-        selectionRange: CellRange | null;
-        forceRender?: boolean;
-    }
-): boolean {
-    return shouldUseLocalSimpleSelectionUpdate({
-        hasNextCell: Boolean(nextCell),
-        hasModel: Boolean(model),
-        hasEditingCell: Boolean(editingCell),
-        isNextCellVisible: isCellVisible(nextCell),
-        hasExpandedSelection: hasExpandedSelection(),
-        isSimpleSelection: isSimpleSelection(nextCell, anchorCell, selectionRange),
-        forceRender,
-    });
 }
 
 function setSelectedCellLocal(
@@ -2584,7 +2431,7 @@ function setSelectedCellLocal(
         forceRender?: boolean;
     } = {}
 ): void {
-    const previousCell = selectedCell;
+    void forceRender;
     const nextSelectionState = setControllerSelectedCell(
         getSelectionControllerState(),
         nextCell,
@@ -2593,14 +2440,7 @@ function setSelectedCellLocal(
             selectionRangeOverride: selectionRange ?? null,
         }
     );
-    const nextSelectionRange = getControllerSelectionRange(nextSelectionState);
     const shouldClearSearchFeedback = clearSearchFeedback && Boolean(searchFeedback);
-    const shouldForceRenderForFillHandle = Boolean(getFillHandleCell(nextSelectionRange));
-    const canUseLocalUpdate = canUseLocalSimpleSelectionUpdate(nextSelectionState.selectedCell, {
-        anchorCell: nextSelectionState.selectionAnchorCell,
-        selectionRange: nextSelectionRange,
-        forceRender: forceRender || shouldClearSearchFeedback || shouldForceRenderForFillHandle,
-    });
 
     clearFillDragState();
     applySelectionControllerState(nextSelectionState);
@@ -2611,15 +2451,6 @@ function setSelectedCellLocal(
 
     if (syncHost) {
         syncSelectedCellToHost();
-    }
-
-    if (canUseLocalUpdate) {
-        syncLocalSimpleSelectionDom(previousCell, nextCell);
-        notifyEditorToolbarSync();
-        if (reveal) {
-            revealSelectedCell();
-        }
-        return;
     }
 
     renderApp({
@@ -2636,8 +2467,6 @@ function prepareSelectionForRender({
     useModelSelection: boolean;
 }): boolean {
     let shouldReveal = revealSelection;
-    const previousCell = selectedCell;
-    const previousAnchorCell = selectionAnchorCell;
 
     if (useModelSelection && model?.selection) {
         const nextRowNumber =
@@ -2652,15 +2481,6 @@ function prepareSelectionForRender({
                 })
             )
         );
-        if (
-            shouldSyncLocalSelectionDomFromModelSelection(
-                previousCell,
-                previousAnchorCell,
-                selectedCell
-            )
-        ) {
-            syncLocalSimpleSelectionDom(previousCell, selectedCell);
-        }
         syncSelectedCellToHost();
         return shouldReveal;
     }
@@ -2691,11 +2511,9 @@ function prepareSelectionForRender({
 
     if (isCellVisible(selectedCell)) {
         if (
-            shouldResetInvisibleSelectionAnchor({
-                hasSelectionRangeOverride: Boolean(selectionRangeOverride),
-                hasExpandedSelection: hasExpandedSelection(),
-                isAnchorVisible: isCellVisible(selectionAnchorCell),
-            })
+            !selectionRangeOverride &&
+            !hasExpandedSelection() &&
+            !isCellVisible(selectionAnchorCell)
         ) {
             updateSelectionControllerState((state) =>
                 syncControllerSelectionAnchorToSelectedCell(state)
@@ -4361,6 +4179,264 @@ function getGridLayerForCell(
     return "body";
 }
 
+interface SelectionOverlayRect {
+    top: number;
+    left: number;
+    width: number;
+    height: number;
+}
+
+interface SelectionOverlayRangeRect extends SelectionOverlayRect {
+    showTopBorder: boolean;
+    showRightBorder: boolean;
+    showBottomBorder: boolean;
+    showLeftBorder: boolean;
+}
+
+function getGridLayerRowNumbers(
+    metrics: EditorVirtualGridMetrics,
+    layer: GridLayerKind
+): readonly number[] {
+    if (layer === "top" || layer === "corner") {
+        return metrics.frozenRowNumbers;
+    }
+
+    return metrics.rowNumbers;
+}
+
+function getGridLayerColumnNumbers(
+    metrics: EditorVirtualGridMetrics,
+    layer: GridLayerKind
+): readonly number[] {
+    if (layer === "left" || layer === "corner") {
+        return metrics.frozenColumnNumbers;
+    }
+
+    return metrics.columnNumbers;
+}
+
+function createSelectionOverlayRect(
+    metrics: EditorVirtualGridMetrics,
+    selectionRange: CellRange | null,
+    layer: GridLayerKind
+): SelectionOverlayRect | null {
+    const visibleRange = clipSelectionRangeToVisibleGrid(
+        selectionRange,
+        getGridLayerRowNumbers(metrics, layer),
+        getGridLayerColumnNumbers(metrics, layer)
+    );
+    if (!visibleRange) {
+        return null;
+    }
+
+    const top = getEditorGridTopForActualRow(metrics, visibleRange.startRow);
+    const bottomTop = getEditorGridTopForActualRow(metrics, visibleRange.endRow);
+    if (top === null || bottomTop === null) {
+        return null;
+    }
+
+    const left = getEditorGridLeft(
+        metrics.rowHeaderWidth,
+        metrics.columnLayout,
+        visibleRange.startColumn
+    );
+    const right =
+        getEditorGridLeft(metrics.rowHeaderWidth, metrics.columnLayout, visibleRange.endColumn) +
+        getEditorColumnWidth(metrics.columnLayout, visibleRange.endColumn);
+    const bottom =
+        bottomTop + (getEditorGridRowHeightForActualRow(metrics, visibleRange.endRow) ?? 0);
+
+    return {
+        top,
+        left,
+        width: right - left,
+        height: bottom - top,
+    };
+}
+
+function createSelectionOverlayRangeRect(
+    metrics: EditorVirtualGridMetrics,
+    selectionRange: CellRange | null,
+    layer: GridLayerKind
+): SelectionOverlayRangeRect | null {
+    const visibleRange = clipSelectionRangeToVisibleGrid(
+        selectionRange,
+        getGridLayerRowNumbers(metrics, layer),
+        getGridLayerColumnNumbers(metrics, layer)
+    );
+    if (!selectionRange || !visibleRange) {
+        return null;
+    }
+
+    const rect = createSelectionOverlayRect(metrics, selectionRange, layer);
+    if (!rect) {
+        return null;
+    }
+
+    return {
+        ...rect,
+        showTopBorder: visibleRange.startRow === selectionRange.startRow,
+        showRightBorder: visibleRange.endColumn === selectionRange.endColumn,
+        showBottomBorder: visibleRange.endRow === selectionRange.endRow,
+        showLeftBorder: visibleRange.startColumn === selectionRange.startColumn,
+    };
+}
+
+function createSelectionOverlayCellRect(
+    metrics: EditorVirtualGridMetrics,
+    cell: CellPosition | null,
+    layer: GridLayerKind
+): SelectionOverlayRect | null {
+    if (!cell || getGridLayerForCell(metrics, cell) !== layer) {
+        return null;
+    }
+
+    return createSelectionOverlayRect(
+        metrics,
+        {
+            startRow: cell.rowNumber,
+            endRow: cell.rowNumber,
+            startColumn: cell.columnNumber,
+            endColumn: cell.columnNumber,
+        },
+        layer
+    );
+}
+
+function getLastNumber(values: readonly number[]): number | null {
+    return values[values.length - 1] ?? null;
+}
+
+function createSelectionOverlayRowRect(
+    metrics: EditorVirtualGridMetrics,
+    rowNumber: number | null,
+    layer: GridLayerKind
+): SelectionOverlayRect | null {
+    const columnNumbers = getGridLayerColumnNumbers(metrics, layer);
+    const startColumn = columnNumbers[0] ?? null;
+    const endColumn = getLastNumber(columnNumbers);
+    if (rowNumber === null || startColumn === null || endColumn === null) {
+        return null;
+    }
+
+    return createSelectionOverlayRect(
+        metrics,
+        {
+            startRow: rowNumber,
+            endRow: rowNumber,
+            startColumn,
+            endColumn,
+        },
+        layer
+    );
+}
+
+function createSelectionOverlayColumnRect(
+    metrics: EditorVirtualGridMetrics,
+    columnNumber: number | null,
+    layer: GridLayerKind
+): SelectionOverlayRect | null {
+    const rowNumbers = getGridLayerRowNumbers(metrics, layer);
+    const startRow = rowNumbers[0] ?? null;
+    const endRow = getLastNumber(rowNumbers);
+    if (columnNumber === null || startRow === null || endRow === null) {
+        return null;
+    }
+
+    return createSelectionOverlayRect(
+        metrics,
+        {
+            startRow,
+            endRow,
+            startColumn: columnNumber,
+            endColumn: columnNumber,
+        },
+        layer
+    );
+}
+
+function getSelectionOverlayStyle(
+    rect: SelectionOverlayRect,
+    borders?: Pick<
+        SelectionOverlayRangeRect,
+        "showTopBorder" | "showRightBorder" | "showBottomBorder" | "showLeftBorder"
+    >
+): React.CSSProperties {
+    return {
+        ...getEditorGridItemStyle(rect),
+        ...(borders
+            ? ({
+                  "--selection-overlay-border-top": borders.showTopBorder ? "2px" : "0px",
+                  "--selection-overlay-border-right": borders.showRightBorder ? "2px" : "0px",
+                  "--selection-overlay-border-bottom": borders.showBottomBorder ? "2px" : "0px",
+                  "--selection-overlay-border-left": borders.showLeftBorder ? "2px" : "0px",
+              } as React.CSSProperties)
+            : {}),
+    };
+}
+
+function EditorSelectionOverlay({
+    metrics,
+    layer,
+    selectionRange,
+    activeRowNumber,
+    activeColumnNumber,
+    currentSelection,
+    showPrimarySelectionFrame,
+}: {
+    metrics: EditorVirtualGridMetrics;
+    layer: GridLayerKind;
+    selectionRange: CellRange | null;
+    activeRowNumber: number | null;
+    activeColumnNumber: number | null;
+    currentSelection: CellPosition | null;
+    showPrimarySelectionFrame: boolean;
+}): React.ReactElement | null {
+    const activeRowRect = createSelectionOverlayRowRect(metrics, activeRowNumber, layer);
+    const activeColumnRect = createSelectionOverlayColumnRect(metrics, activeColumnNumber, layer);
+    const rangeRect = createSelectionOverlayRangeRect(metrics, selectionRange, layer);
+    const primaryCellRect = showPrimarySelectionFrame
+        ? createSelectionOverlayCellRect(metrics, currentSelection, layer)
+        : null;
+
+    if (!activeRowRect && !activeColumnRect && !rangeRect && !primaryCellRect) {
+        return null;
+    }
+
+    return (
+        <>
+            {activeRowRect ? (
+                <div
+                    aria-hidden
+                    className="editor-grid__selection-overlay editor-grid__selection-overlay--active-row"
+                    style={getSelectionOverlayStyle(activeRowRect)}
+                />
+            ) : null}
+            {activeColumnRect ? (
+                <div
+                    aria-hidden
+                    className="editor-grid__selection-overlay editor-grid__selection-overlay--active-column"
+                    style={getSelectionOverlayStyle(activeColumnRect)}
+                />
+            ) : null}
+            {rangeRect ? (
+                <div
+                    aria-hidden
+                    className="editor-grid__selection-overlay editor-grid__selection-overlay--range"
+                    style={getSelectionOverlayStyle(rangeRect, rangeRect)}
+                />
+            ) : null}
+            {primaryCellRect ? (
+                <div
+                    aria-hidden
+                    className="editor-grid__selection-overlay editor-grid__selection-overlay--primary"
+                    style={getSelectionOverlayStyle(primaryCellRect)}
+                />
+            ) : null}
+        </>
+    );
+}
+
 function getFilterAwareRowHeaderLabelCount(
     currentModel: EditorRenderModel,
     visibleActualRowCount: number
@@ -4817,9 +4893,7 @@ const EditorColumnHeaderCell = React.memo(
         canResize,
         isResizing,
         hasPending,
-        activeColumnNumber,
-        selectionRange,
-        rowCount,
+        isActive,
         top,
         left,
     }: {
@@ -4830,16 +4904,10 @@ const EditorColumnHeaderCell = React.memo(
         canResize: boolean;
         isResizing: boolean;
         hasPending: boolean;
-        activeColumnNumber: number | null;
-        selectionRange: CellRange | null;
-        rowCount: number;
+        isActive: boolean;
         top: number;
         left: number;
     }): React.ReactElement {
-        const isActiveColumn =
-            isActiveHighlightColumn(activeColumnNumber, columnNumber) ||
-            isColumnHeaderWithinSelectionRange(selectionRange, columnNumber, rowCount);
-
         return (
             <div
                 className={classNames([
@@ -4848,7 +4916,7 @@ const EditorColumnHeaderCell = React.memo(
                     "grid__column",
                     hasPending && "grid__column--diff",
                     hasPending && "grid__column--pending",
-                    isActiveColumn && "grid__column--active",
+                    isActive && "grid__column--active",
                     isResizing && "grid__column--resizing",
                 ])}
                 data-column-number={columnNumber}
@@ -4946,9 +5014,7 @@ const EditorColumnHeaderCell = React.memo(
         previous.canResize === next.canResize &&
         previous.isResizing === next.isResizing &&
         previous.hasPending === next.hasPending &&
-        previous.activeColumnNumber === next.activeColumnNumber &&
-        previous.rowCount === next.rowCount &&
-        areSelectionRangesEqual(previous.selectionRange, next.selectionRange) &&
+        previous.isActive === next.isActive &&
         previous.top === next.top &&
         previous.left === next.left
 );
@@ -4958,25 +5024,17 @@ const EditorRowHeaderCell = React.memo(
         rowNumber,
         height,
         hasPending,
-        activeRowNumber,
-        selectionRange,
-        columnCount,
+        isActive,
         top,
         rowHeaderWidth,
     }: {
         rowNumber: number;
         height: number;
         hasPending: boolean;
-        activeRowNumber: number | null;
-        selectionRange: CellRange | null;
-        columnCount: number;
+        isActive: boolean;
         top: number;
         rowHeaderWidth: number;
     }): React.ReactElement {
-        const isActiveRow =
-            isActiveHighlightRow(activeRowNumber, rowNumber) ||
-            isRowHeaderWithinSelectionRange(selectionRange, rowNumber, columnCount);
-
         return (
             <div
                 className={classNames([
@@ -4984,7 +5042,7 @@ const EditorRowHeaderCell = React.memo(
                     "editor-grid__item--row-header",
                     "grid__row-number",
                     hasPending && "grid__row-number--pending",
-                    isActiveRow && "grid__row-number--active",
+                    isActive && "grid__row-number--active",
                 ])}
                 data-role="grid-row-header"
                 data-row-number={rowNumber}
@@ -5045,9 +5103,7 @@ const EditorRowHeaderCell = React.memo(
         previous.rowNumber === next.rowNumber &&
         previous.height === next.height &&
         previous.hasPending === next.hasPending &&
-        previous.activeRowNumber === next.activeRowNumber &&
-        previous.columnCount === next.columnCount &&
-        areSelectionRangesEqual(previous.selectionRange, next.selectionRange) &&
+        previous.isActive === next.isActive &&
         previous.top === next.top &&
         previous.rowHeaderWidth === next.rowHeaderWidth
 );
@@ -5112,10 +5168,7 @@ const EditorVirtualCell = React.memo(
         height,
         top,
         left,
-        selectionRange,
-        activeRowNumber,
-        activeColumnNumber,
-        currentSelection,
+        isSelectionFocus,
         activeEditingCell,
         pendingEdit,
         fillSourceRange,
@@ -5132,10 +5185,7 @@ const EditorVirtualCell = React.memo(
         height: number;
         top: number;
         left: number;
-        selectionRange: CellRange | null;
-        activeRowNumber: number | null;
-        activeColumnNumber: number | null;
-        currentSelection: CellPosition | null;
+        isSelectionFocus: boolean;
         activeEditingCell: EditingCell | null;
         pendingEdit: PendingEdit | undefined;
         fillSourceRange: CellRange | null;
@@ -5156,17 +5206,6 @@ const EditorVirtualCell = React.memo(
         const value = pendingEdit?.value ?? cell.value;
         const formula = pendingEdit ? null : cell.formula;
         const editable = Boolean(currentModel.canEdit && !cell.formula);
-        const isPrimarySelection = isSelectionFocusCell(currentSelection, rowNumber, columnNumber);
-        const isSelected = isCellWithinSelectionRange(selectionRange, rowNumber, columnNumber);
-        const isSearchFocusedSelection =
-            searchFeedback?.status === "matched" ||
-            searchFeedback?.status === "replaced" ||
-            searchFeedback?.status === "no-change";
-        const showPrimarySelectionFrame =
-            isPrimarySelection &&
-            (!hasExpandedSelectionRange(selectionRange) || isSearchFocusedSelection);
-        const isActiveRow = isActiveHighlightRow(activeRowNumber, rowNumber);
-        const isActiveColumn = isActiveHighlightColumn(activeColumnNumber, columnNumber);
         const isEditing =
             activeEditingCell?.rowNumber === rowNumber &&
             activeEditingCell.columnNumber === columnNumber;
@@ -5185,21 +5224,16 @@ const EditorVirtualCell = React.memo(
 
         return (
             <div
-                aria-selected={isSelected}
+                aria-selected={isSelectionFocus}
                 className={classNames([
                     "editor-grid__item",
                     "grid__cell",
-                    isSelected && "grid__cell--selected-range",
-                    showPrimarySelectionFrame && "grid__cell--selected",
-                    isActiveRow && "grid__cell--active-row",
-                    isActiveColumn && "grid__cell--active-column",
                     !editable && "grid__cell--locked",
                     isFilterHeader && "grid__cell--filter-header",
                     pendingEdit && "grid__cell--pending",
                     isFillPreview && "grid__cell--fill-preview",
                     isEditing && "grid__cell--editing",
                     shouldSpillIntoNextCells && "grid__cell--overflow-spill",
-                    ...getSelectionOutlineClasses(rowNumber, columnNumber, selectionRange),
                 ])}
                 data-column-number={columnNumber}
                 data-editable={editable}
@@ -5324,10 +5358,7 @@ const EditorVirtualCell = React.memo(
         previous.height === next.height &&
         previous.top === next.top &&
         previous.left === next.left &&
-        previous.activeRowNumber === next.activeRowNumber &&
-        previous.activeColumnNumber === next.activeColumnNumber &&
-        areSelectionRangesEqual(previous.selectionRange, next.selectionRange) &&
-        areCellPositionsEqual(previous.currentSelection, next.currentSelection) &&
+        previous.isSelectionFocus === next.isSelectionFocus &&
         areEditingCellsEqual(previous.activeEditingCell, next.activeEditingCell) &&
         arePendingEditsEqual(previous.pendingEdit, next.pendingEdit) &&
         areSelectionRangesEqual(previous.fillSourceRange, next.fillSourceRange) &&
@@ -5366,6 +5397,13 @@ function EditorVirtualGrid({
     const activeColumnNumber = activeHighlightCell?.columnNumber ?? null;
     const activeEditingCell = editingCell;
     const activeFilterState = getActiveSheetFilterState(currentModel);
+    const isSearchFocusedSelection =
+        searchFeedback?.status === "matched" ||
+        searchFeedback?.status === "replaced" ||
+        searchFeedback?.status === "no-change";
+    const showPrimarySelectionFrame =
+        Boolean(currentSelection) &&
+        (!hasExpandedSelectionRange(selectionRange) || isSearchFocusedSelection);
     const bodyItems: React.ReactElement[] = [];
     const topItems: React.ReactElement[] = [];
     const leftItems: React.ReactElement[] = [];
@@ -5428,10 +5466,13 @@ function EditorVirtualGrid({
                 height={height}
                 top={top}
                 left={left}
-                selectionRange={selectionRange}
-                activeRowNumber={activeRowNumber}
-                activeColumnNumber={activeColumnNumber}
-                currentSelection={currentSelection}
+                isSelectionFocus={
+                    Boolean(
+                        currentSelection &&
+                            currentSelection.rowNumber === rowNumber &&
+                            currentSelection.columnNumber === columnNumber
+                    )
+                }
                 activeEditingCell={activeEditingCell}
                 pendingEdit={pendingEdit}
                 fillSourceRange={fillSourceRange}
@@ -5464,12 +5505,15 @@ function EditorVirtualGrid({
                     columnResizeState.columnNumber === columnNumber
                 }
                 hasPending={pendingSummary.columns.has(columnNumber)}
-                activeColumnNumber={activeColumnNumber}
-                selectionRange={selectionRange}
-                rowCount={
-                    metrics.rowState.actualRowNumbers[
-                        metrics.rowState.actualRowNumbers.length - 1
-                    ] ?? 1
+                isActive={
+                    isActiveHighlightColumn(activeColumnNumber, columnNumber) ||
+                    isColumnHeaderWithinSelectionRange(
+                        selectionRange,
+                        columnNumber,
+                        metrics.rowState.actualRowNumbers[
+                            metrics.rowState.actualRowNumbers.length - 1
+                        ] ?? 1
+                    )
                 }
                 top={0}
                 left={getEditorGridLeft(metrics.rowHeaderWidth, metrics.columnLayout, columnNumber)}
@@ -5494,12 +5538,15 @@ function EditorVirtualGrid({
                     columnResizeState.columnNumber === columnNumber
                 }
                 hasPending={pendingSummary.columns.has(columnNumber)}
-                activeColumnNumber={activeColumnNumber}
-                selectionRange={selectionRange}
-                rowCount={
-                    metrics.rowState.actualRowNumbers[
-                        metrics.rowState.actualRowNumbers.length - 1
-                    ] ?? 1
+                isActive={
+                    isActiveHighlightColumn(activeColumnNumber, columnNumber) ||
+                    isColumnHeaderWithinSelectionRange(
+                        selectionRange,
+                        columnNumber,
+                        metrics.rowState.actualRowNumbers[
+                            metrics.rowState.actualRowNumbers.length - 1
+                        ] ?? 1
+                    )
                 }
                 top={0}
                 left={getEditorGridLeft(metrics.rowHeaderWidth, metrics.columnLayout, columnNumber)}
@@ -5514,9 +5561,14 @@ function EditorVirtualGrid({
                 rowNumber={rowNumber}
                 height={getEditorGridRowHeightForActualRow(metrics, rowNumber) ?? 0}
                 hasPending={pendingSummary.rows.has(rowNumber)}
-                activeRowNumber={activeRowNumber}
-                selectionRange={selectionRange}
-                columnCount={metrics.columnLayout.totalColumnCount}
+                isActive={
+                    isActiveHighlightRow(activeRowNumber, rowNumber) ||
+                    isRowHeaderWithinSelectionRange(
+                        selectionRange,
+                        rowNumber,
+                        metrics.columnLayout.totalColumnCount
+                    )
+                }
                 top={getEditorGridTopForActualRow(metrics, rowNumber) ?? 0}
                 rowHeaderWidth={metrics.rowHeaderWidth}
             />
@@ -5554,9 +5606,14 @@ function EditorVirtualGrid({
                 rowNumber={rowNumber}
                 height={getEditorGridRowHeightForActualRow(metrics, rowNumber) ?? 0}
                 hasPending={pendingSummary.rows.has(rowNumber)}
-                activeRowNumber={activeRowNumber}
-                selectionRange={selectionRange}
-                columnCount={metrics.columnLayout.totalColumnCount}
+                isActive={
+                    isActiveHighlightRow(activeRowNumber, rowNumber) ||
+                    isRowHeaderWithinSelectionRange(
+                        selectionRange,
+                        rowNumber,
+                        metrics.columnLayout.totalColumnCount
+                    )
+                }
                 top={getEditorGridTopForActualRow(metrics, rowNumber) ?? 0}
                 rowHeaderWidth={metrics.rowHeaderWidth}
             />
@@ -5679,7 +5736,18 @@ function EditorVirtualGrid({
                         height: `${metrics.contentHeight}px`,
                     }}
                 >
-                    <div className="editor-grid__layer editor-grid__layer--body">{bodyItems}</div>
+                    <div className="editor-grid__layer editor-grid__layer--body">
+                        {bodyItems}
+                        <EditorSelectionOverlay
+                            metrics={metrics}
+                            layer="body"
+                            selectionRange={selectionRange}
+                            activeRowNumber={activeRowNumber}
+                            activeColumnNumber={activeColumnNumber}
+                            currentSelection={currentSelection}
+                            showPrimarySelectionFrame={showPrimarySelectionFrame}
+                        />
+                    </div>
                     <div
                         className="editor-grid__overlay editor-grid__overlay--top"
                         style={{
@@ -5696,6 +5764,15 @@ function EditorVirtualGrid({
                             }}
                         >
                             {topItems}
+                            <EditorSelectionOverlay
+                                metrics={metrics}
+                                layer="top"
+                                selectionRange={selectionRange}
+                                activeRowNumber={activeRowNumber}
+                                activeColumnNumber={activeColumnNumber}
+                                currentSelection={currentSelection}
+                                showPrimarySelectionFrame={showPrimarySelectionFrame}
+                            />
                         </div>
                     </div>
                     <div
@@ -5714,6 +5791,15 @@ function EditorVirtualGrid({
                             }}
                         >
                             {leftItems}
+                            <EditorSelectionOverlay
+                                metrics={metrics}
+                                layer="left"
+                                selectionRange={selectionRange}
+                                activeRowNumber={activeRowNumber}
+                                activeColumnNumber={activeColumnNumber}
+                                currentSelection={currentSelection}
+                                showPrimarySelectionFrame={showPrimarySelectionFrame}
+                            />
                         </div>
                     </div>
                     <div
@@ -5732,6 +5818,15 @@ function EditorVirtualGrid({
                             }}
                         >
                             {cornerItems}
+                            <EditorSelectionOverlay
+                                metrics={metrics}
+                                layer="corner"
+                                selectionRange={selectionRange}
+                                activeRowNumber={activeRowNumber}
+                                activeColumnNumber={activeColumnNumber}
+                                currentSelection={currentSelection}
+                                showPrimarySelectionFrame={showPrimarySelectionFrame}
+                            />
                         </div>
                     </div>
                 </div>

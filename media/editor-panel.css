@@ -1114,10 +1114,6 @@ body {
 }
 
 .grid__cell {
-    --grid-selection-border-top: 0px;
-    --grid-selection-border-right: 0px;
-    --grid-selection-border-bottom: 0px;
-    --grid-selection-border-left: 0px;
     background: var(--vscode-editor-background);
     padding: 3px 7px;
     line-height: 1.25;
@@ -1141,7 +1137,6 @@ body {
     background: color-mix(in srgb, var(--vscode-editor-background) 92%, white 8%);
 }
 
-.grid__cell--active-row,
 .grid__row-number--active {
     background: color-mix(
         in srgb,
@@ -1150,7 +1145,6 @@ body {
     );
 }
 
-.grid__cell--active-column,
 .grid__column--active {
     background: color-mix(
         in srgb,
@@ -1336,12 +1330,58 @@ body {
     background: var(--vscode-editorWarning-foreground, #cca700);
 }
 
-.grid__cell--selected {
+.editor-grid__selection-overlay {
+    --selection-overlay-border-top: 0px;
+    --selection-overlay-border-right: 0px;
+    --selection-overlay-border-bottom: 0px;
+    --selection-overlay-border-left: 0px;
+    position: absolute;
+    top: 0;
+    left: 0;
+    box-sizing: border-box;
+    pointer-events: none;
+}
+
+.editor-grid__selection-overlay--active-row {
+    background: color-mix(
+        in srgb,
+        var(--vscode-editorInfo-foreground, #3794ff) 8%,
+        transparent 92%
+    );
+    z-index: 2;
+}
+
+.editor-grid__selection-overlay--active-column {
+    background: color-mix(
+        in srgb,
+        var(--vscode-editorInfo-foreground, #3794ff) 10%,
+        transparent 90%
+    );
     z-index: 3;
 }
 
-.grid__cell--selected-range {
+.editor-grid__selection-overlay--range {
     background: color-mix(in srgb, var(--vscode-focusBorder) 16%, transparent 84%);
+    z-index: 4;
+}
+
+.editor-grid__selection-overlay--range::before {
+    content: "";
+    position: absolute;
+    inset: -1px;
+    border-style: solid;
+    border-color: var(--vscode-focusBorder);
+    border-width: var(--selection-overlay-border-top) var(--selection-overlay-border-right)
+        var(--selection-overlay-border-bottom) var(--selection-overlay-border-left);
+}
+
+.editor-grid__selection-overlay--primary {
+    border: 2px solid var(--vscode-focusBorder);
+    box-shadow:
+        inset 0 0 0 1px color-mix(in srgb, var(--vscode-editor-background) 82%, white 18%),
+        0 0 0 1px color-mix(in srgb, var(--vscode-focusBorder) 36%, transparent 64%);
+    border-radius: 2px;
+    z-index: 5;
 }
 
 .grid__cell--fill-preview {
@@ -1353,46 +1393,6 @@ body {
     outline: 2px dashed color-mix(in srgb, var(--vscode-focusBorder) 84%, transparent 16%);
     outline-offset: -2px;
     z-index: 2;
-}
-
-.grid__cell--selection-top {
-    --grid-selection-border-top: 2px;
-}
-
-.grid__cell--selection-right {
-    --grid-selection-border-right: 2px;
-}
-
-.grid__cell--selection-bottom {
-    --grid-selection-border-bottom: 2px;
-}
-
-.grid__cell--selection-left {
-    --grid-selection-border-left: 2px;
-}
-
-.grid__cell--selected-range::before {
-    content: "";
-    position: absolute;
-    inset: -1px;
-    border-style: solid;
-    border-color: var(--vscode-focusBorder);
-    border-width: var(--grid-selection-border-top) var(--grid-selection-border-right)
-        var(--grid-selection-border-bottom) var(--grid-selection-border-left);
-    pointer-events: none;
-    z-index: 2;
-}
-
-.grid__cell--selected::after {
-    content: "";
-    position: absolute;
-    inset: -1px;
-    border: 2px solid var(--vscode-focusBorder);
-    box-shadow:
-        inset 0 0 0 1px color-mix(in srgb, var(--vscode-editor-background) 82%, white 18%),
-        0 0 0 1px color-mix(in srgb, var(--vscode-focusBorder) 36%, transparent 64%);
-    border-radius: 2px;
-    pointer-events: none;
 }
 
 .editor-grid__fill-handle {
