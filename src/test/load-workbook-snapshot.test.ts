@@ -58,4 +58,35 @@ suite("Load workbook snapshot", () => {
             await rm(tempDirectory, { recursive: true, force: true });
         }
     });
+
+    test("normalizes numeric display values with Excel-like formatting", async () => {
+        const tempDirectory = await mkdtemp(path.join(os.tmpdir(), "xlsx-diff-load-"));
+
+        try {
+            const workbookPath = path.join(tempDirectory, "numeric-display.xlsx");
+            const workbook = Workbook.create("Sheet1");
+            const sheet = workbook.getSheet("Sheet1");
+
+            sheet.cell("A1").setValue(0.1 + 0.2);
+            sheet.cell("A2").setValue(0.1 + 0.2);
+            sheet.cell("A2").setNumberFormat("0.00");
+            sheet.cell("A3").setValue(1234.5);
+            sheet.cell("A3").setNumberFormat("#,##0.00");
+            sheet.cell("A4").setValue(0.1234);
+            sheet.cell("A4").setNumberFormat("0.00%");
+
+            await workbook.save(workbookPath);
+
+            const snapshot = await loadWorkbookSnapshot(vscode.Uri.file(workbookPath));
+            const activeSheet = snapshot.sheets[0];
+
+            assert.ok(activeSheet);
+            assert.strictEqual(activeSheet?.cells["1:1"]?.displayValue, "0.3");
+            assert.strictEqual(activeSheet?.cells["2:1"]?.displayValue, "0.30");
+            assert.strictEqual(activeSheet?.cells["3:1"]?.displayValue, "1,234.50");
+            assert.strictEqual(activeSheet?.cells["4:1"]?.displayValue, "12.34%");
+        } finally {
+            await rm(tempDirectory, { recursive: true, force: true });
+        }
+    });
 });

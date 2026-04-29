@@ -21,7 +21,12 @@ import {
     type WorkbookSnapshot,
 } from "../model/types";
 import { cloneCellAlignment } from "../model/alignment";
-import type { AutoFilterDefinition, CellStyleDefinition } from "fastxlsx";
+import type {
+    AutoFilterDefinition,
+    CellNumberFormatDefinition,
+    CellStyleDefinition,
+    CellValue,
+} from "fastxlsx";
 import {
     getWorkbookResourceDetail,
     getWorkbookResourceName,
@@ -31,13 +36,19 @@ import {
     isWorkbookResourceReadOnly,
     readWorkbookResourceArchive,
 } from "../../workbook/resource-uri";
+import { formatExcelLikeDisplayValue } from "./excel-display-format";
 
 interface SheetReader {
     name: string;
     rowCount: number;
     columnCount: number;
+    getCell(rowNumber: number, columnNumber: number): CellValue;
     getDisplayValue(rowNumber: number, columnNumber: number): string | null;
     getFormula(rowNumber: number, columnNumber: number): string | null;
+    getNumberFormat(
+        rowNumber: number,
+        columnNumber: number
+    ): CellNumberFormatDefinition | null;
     getStyleId(rowNumber: number, columnNumber: number): number | null;
     getColumnStyleId(columnNumber: number): number | null;
     getColumnWidth(columnNumber: number): number | null;
@@ -218,18 +229,25 @@ function loadSheetSnapshot(workbook: WorkbookReader, sheetName: string): SheetSn
 
     for (let rowNumber = 1; rowNumber <= sheet.rowCount; rowNumber += 1) {
         for (let columnNumber = 1; columnNumber <= sheet.columnCount; columnNumber += 1) {
+            const rawValue = sheet.getCell(rowNumber, columnNumber);
             const displayValue = sheet.getDisplayValue(rowNumber, columnNumber);
             const formula = sheet.getFormula(rowNumber, columnNumber);
+            const numberFormat = sheet.getNumberFormat(rowNumber, columnNumber);
             const styleId = sheet.getStyleId(rowNumber, columnNumber);
             const cellAlignment = !Number.isInteger(styleId)
                 ? null
                 : cloneCellAlignment(workbook.getStyle(styleId as number)?.alignment);
+            const normalizedDisplayValue = formatExcelLikeDisplayValue({
+                rawValue,
+                displayValue,
+                numberFormatCode: numberFormat?.code ?? null,
+            });
 
             if (cellAlignment) {
                 cellAlignments[createCellKey(rowNumber, columnNumber)] = cellAlignment;
             }
 
-            if (displayValue === null && formula === null) {
+            if (rawValue === null && displayValue === null && formula === null) {
                 continue;
             }
 
@@ -239,7 +257,7 @@ function loadSheetSnapshot(workbook: WorkbookReader, sheetName: string): SheetSn
                 rowNumber,
                 columnNumber,
                 address: getCellAddress(rowNumber, columnNumber),
-                displayValue: displayValue ?? "",
+                displayValue: normalizedDisplayValue ?? "",
                 formula,
                 styleId,
             };
