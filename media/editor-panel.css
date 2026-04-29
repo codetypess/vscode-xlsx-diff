@@ -953,11 +953,6 @@ body {
     cursor: col-resize !important;
 }
 
-.app--row-resizing,
-.app--row-resizing * {
-    cursor: row-resize !important;
-}
-
 [data-role="grid-column-header"],
 [data-role="grid-row-header"] {
     cursor: pointer;
@@ -1059,10 +1054,6 @@ body {
     box-shadow: none;
 }
 
-.grid__row-number--resizing {
-    box-shadow: none;
-}
-
 .grid__column-resize-handle {
     position: absolute;
     top: 0;
@@ -1091,37 +1082,6 @@ body {
 
 .grid__column:hover .grid__column-resize-handle::before,
 .grid__column-resize-handle.is-active::before {
-    background: var(--vscode-focusBorder);
-}
-
-.grid__row-resize-handle {
-    position: absolute;
-    right: 0;
-    bottom: 0;
-    left: 0;
-    height: 10px;
-    cursor: row-resize;
-    touch-action: none;
-}
-
-.grid__row-resize-handle::before {
-    content: "";
-    position: absolute;
-    right: 5px;
-    bottom: 1px;
-    left: 5px;
-    height: 2px;
-    border-radius: 999px;
-    background: color-mix(
-        in srgb,
-        var(--vscode-descriptionForeground) 36%,
-        transparent 64%
-    );
-    opacity: 0;
-}
-
-.grid__row-number:hover .grid__row-resize-handle::before,
-.grid__row-resize-handle.is-active::before {
     background: var(--vscode-focusBorder);
 }
 

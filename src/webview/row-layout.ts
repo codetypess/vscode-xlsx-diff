@@ -1,4 +1,4 @@
-export const DEFAULT_WORKBOOK_ROW_HEIGHT = 15;
+export const DEFAULT_WORKBOOK_ROW_HEIGHT = 16;
 export const DEFAULT_ROW_PIXEL_HEIGHT = 28;
 export const MIN_ROW_PIXEL_HEIGHT = 14;
 export const MAX_ROW_PIXEL_HEIGHT = 512;

@@ -40,7 +40,15 @@ export function cloneSheetEdit(edit: SheetEdit): SheetEdit {
 export function cloneColumnWidths(
     columnWidths: readonly (number | null | undefined)[] | undefined
 ): Array<number | null> {
-    return (columnWidths ?? []).map((columnWidth) => columnWidth ?? null);
+    const nextColumnWidths = (columnWidths ?? []).map((columnWidth) => columnWidth ?? null);
+    while (
+        nextColumnWidths.length > 0 &&
+        nextColumnWidths[nextColumnWidths.length - 1] === null
+    ) {
+        nextColumnWidths.pop();
+    }
+
+    return nextColumnWidths;
 }
 
 export function cloneRowHeights(
@@ -151,7 +159,7 @@ export function setSheetColumnWidthSnapshot(
     }
 
     nextColumnWidths[columnNumber - 1] = nextWidth;
-    return nextColumnWidths;
+    return cloneColumnWidths(nextColumnWidths);
 }
 
 export function setSheetRowHeightSnapshot(
@@ -589,11 +597,11 @@ function transformColumnWidths(
             0,
             ...Array.from({ length: edit.count }, () => null)
         );
-        return nextWidths;
+        return cloneColumnWidths(nextWidths);
     }
 
     nextWidths.splice(edit.columnNumber - 1, edit.count);
-    return nextWidths;
+    return cloneColumnWidths(nextWidths);
 }
 
 function transformRowHeights(

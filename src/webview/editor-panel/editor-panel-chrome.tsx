@@ -3,9 +3,6 @@ import {
     MdAlignHorizontalCenter,
     MdAlignHorizontalLeft,
     MdAlignHorizontalRight,
-    MdAlignVerticalBottom,
-    MdAlignVerticalCenter,
-    MdAlignVerticalTop,
 } from "react-icons/md";
 import type { EditorAlignmentPatch } from "../../core/model/alignment";
 import type { EditorRenderModel, EditorSheetTabView } from "../../core/model/types";
@@ -774,41 +771,6 @@ export function EditorToolbar({
                         }}
                     />
                 </div>
-                <div className="toolbar__segmented" role="group" aria-label="Vertical alignment">
-                    <ToolbarButton
-                        actionLabel={strings.alignTop}
-                        disabled={!currentModel.canEdit || isSaving}
-                        iconNode={<MdAlignVerticalTop />}
-                        iconOnly={true}
-                        isActive={activeAlignment.vertical === "top"}
-                        onClick={() => {
-                            onFinishGridEdit();
-                            onApplyAlignment({ vertical: "top" });
-                        }}
-                    />
-                    <ToolbarButton
-                        actionLabel={strings.alignMiddle}
-                        disabled={!currentModel.canEdit || isSaving}
-                        iconNode={<MdAlignVerticalCenter />}
-                        iconOnly={true}
-                        isActive={activeAlignment.vertical === "center"}
-                        onClick={() => {
-                            onFinishGridEdit();
-                            onApplyAlignment({ vertical: "center" });
-                        }}
-                    />
-                    <ToolbarButton
-                        actionLabel={strings.alignBottom}
-                        disabled={!currentModel.canEdit || isSaving}
-                        iconNode={<MdAlignVerticalBottom />}
-                        iconOnly={true}
-                        isActive={activeAlignment.vertical === "bottom"}
-                        onClick={() => {
-                            onFinishGridEdit();
-                            onApplyAlignment({ vertical: "bottom" });
-                        }}
-                    />
-                </div>
                 <ToolbarButton
                     actionLabel={strings.reload}
                     icon="codicon-refresh"
@@ -1157,7 +1119,6 @@ export function TabContextMenu({
     onRequestRenameSheet,
     onRequestInsertRow,
     onRequestDeleteRow,
-    onRequestPromptRowHeight,
     onRequestInsertColumn,
     onRequestDeleteColumn,
     onRequestPromptColumnWidth,
@@ -1170,7 +1131,6 @@ export function TabContextMenu({
     onRequestRenameSheet(sheetKey: string): void;
     onRequestInsertRow(rowNumber: number): void;
     onRequestDeleteRow(rowNumber: number): void;
-    onRequestPromptRowHeight(rowNumber: number): void;
     onRequestInsertColumn(columnNumber: number): void;
     onRequestDeleteColumn(columnNumber: number): void;
     onRequestPromptColumnWidth(columnNumber: number): void;
@@ -1180,7 +1140,7 @@ export function TabContextMenu({
     }
 
     const estimatedMenuHeight =
-        contextMenu.kind === "column" || contextMenu.kind === "row" ? 168 : 132;
+        contextMenu.kind === "column" ? 168 : 132;
     const menuStyle: React.CSSProperties = {
         left: Math.max(8, Math.min(contextMenu.x, window.innerWidth - 188)),
         top: Math.max(8, Math.min(contextMenu.y, window.innerHeight - estimatedMenuHeight)),
@@ -1218,14 +1178,6 @@ export function TabContextMenu({
     if (contextMenu.kind === "row") {
         return (
             <div className="context-menu" data-role="context-menu" style={menuStyle}>
-                <button
-                    className="context-menu__item"
-                    type="button"
-                    onClick={() => onRequestPromptRowHeight(contextMenu.rowNumber)}
-                >
-                    <span className="codicon codicon-symbol-number context-menu__icon" aria-hidden />
-                    <span>{strings.setRowHeight}</span>
-                </button>
                 <button
                     className="context-menu__item"
                     type="button"

@@ -1,5 +1,9 @@
 import * as assert from "assert";
+import { mkdtemp, rm } from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import * as vscode from "vscode";
+import { Workbook } from "../core/fastxlsx/runtime";
 import { loadWorkbookSnapshot } from "../core/fastxlsx/load-workbook-snapshot";
 
 function createSvnTreeEmptyUri(label = "repo/item.xlsx (deleted)") {
@@ -28,5 +32,30 @@ suite("Load workbook snapshot", () => {
         assert.deepStrictEqual(snapshot.definedNames, []);
         assert.deepStrictEqual(snapshot.sheets, []);
         assert.ok(["Empty workbook", "空工作簿"].includes(snapshot.modifiedTimeLabel ?? ""));
+    });
+
+    test("keeps explicit widths sparse and ignores row heights when loading workbook snapshots", async () => {
+        const tempDirectory = await mkdtemp(path.join(os.tmpdir(), "xlsx-diff-load-"));
+
+        try {
+            const workbookPath = path.join(tempDirectory, "sparse-dimensions.xlsx");
+            const workbook = Workbook.create("Sheet1");
+            const sheet = workbook.getSheet("Sheet1");
+            sheet.cell("J10").setValue("tail");
+            sheet.setColumnWidth(2, 15.125);
+            sheet.setRowHeight(3, 18.13);
+            await workbook.save(workbookPath);
+
+            const snapshot = await loadWorkbookSnapshot(vscode.Uri.file(workbookPath));
+            const activeSheet = snapshot.sheets[0];
+
+            assert.ok(activeSheet);
+            assert.strictEqual(activeSheet?.columnCount, 10);
+            assert.strictEqual(activeSheet?.rowCount, 10);
+            assert.deepStrictEqual(activeSheet?.columnWidths, [null, 15.125]);
+            assert.strictEqual(activeSheet?.rowHeights, undefined);
+        } finally {
+            await rm(tempDirectory, { recursive: true, force: true });
+        }
     });
 });

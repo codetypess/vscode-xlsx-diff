@@ -62,4 +62,33 @@ suite("Editor panel column widths", () => {
         assert.strictEqual(commitCount, 0);
         assert.deepStrictEqual(activeEntry.sheet.columnWidths, [8.7109375, 15.125, 12]);
     });
+
+    test("drops trailing default-width placeholders after resetting the last custom column", async () => {
+        const panel = Object.create(XlsxEditorPanel.prototype) as any;
+        const activeEntry = {
+            key: "sheet:0",
+            sheet: {
+                name: "Sheet1",
+                columnCount: 3,
+                columnWidths: [8.7109375, 15.125],
+            },
+        };
+        let committedOptions: { resetPendingHistory?: boolean } | null = null;
+
+        panel.getWorkingWorkbook = () => ({ isReadonly: false });
+        panel.getActiveSheetEntry = () => activeEntry;
+        panel.commitStructuralMutation = async (
+            mutate: () => void,
+            options: { resetPendingHistory?: boolean }
+        ) => {
+            committedOptions = options;
+            mutate();
+        };
+        panel.syncPendingSheetViewEdit = () => undefined;
+
+        await panel.setPendingColumnWidth(2, null);
+
+        assert.deepStrictEqual(activeEntry.sheet.columnWidths, [8.7109375]);
+        assert.deepStrictEqual(committedOptions, { resetPendingHistory: false });
+    });
 });

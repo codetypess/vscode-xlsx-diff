@@ -40,25 +40,12 @@ export function getCellHorizontalTextAlign(
     }
 }
 
-export function getCellVerticalAlignItems(
-    alignment: CellAlignmentSnapshot | null
-): CellContentAlignmentStyle["alignItems"] {
-    switch (alignment?.vertical) {
-        case "center":
-            return "center";
-        case "bottom":
-            return "flex-end";
-        default:
-            return "flex-start";
-    }
-}
-
 export function getCellContentAlignmentStyle(
     alignment: CellAlignmentSnapshot | null
 ): CellContentAlignmentStyle {
     return {
         justifyContent: getCellHorizontalJustifyContent(alignment),
-        alignItems: getCellVerticalAlignItems(alignment),
+        alignItems: "flex-start",
         textAlign: getCellHorizontalTextAlign(alignment),
         height: "100%",
         maxHeight: "100%",
@@ -76,21 +63,6 @@ export function getToolbarHorizontalAlignment(
             return "center";
         case "right":
             return "right";
-        default:
-            return undefined;
-    }
-}
-
-export function getToolbarVerticalAlignment(
-    alignment: CellAlignmentSnapshot | null
-): "top" | "center" | "bottom" | undefined {
-    switch (alignment?.vertical) {
-        case "top":
-            return "top";
-        case "center":
-            return "center";
-        case "bottom":
-            return "bottom";
         default:
             return undefined;
     }

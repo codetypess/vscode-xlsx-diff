@@ -45,7 +45,6 @@ import {
     isGridSheetEdit,
     restorePendingWorkbookState,
     setSheetColumnWidthSnapshot,
-    setSheetRowHeightSnapshot,
     createWorkingSheetEntries,
     createWorkingWorkbook,
     mapPendingCellEditsToWebview,
@@ -79,10 +78,6 @@ function getWebviewStrings(): EditorPanelStrings {
 
 function normalizeWorkbookColumnWidth(columnWidth: number): number {
     return Math.round(columnWidth * 256) / 256;
-}
-
-function normalizeWorkbookRowHeight(rowHeight: number): number {
-    return Math.round(rowHeight * 100) / 100;
 }
 
 export class XlsxEditorPanel {
@@ -487,12 +482,6 @@ export class XlsxEditorPanel {
                     return;
                 case "deleteRow":
                     await this.deletePendingRow(message.rowNumber);
-                    return;
-                case "promptRowHeight":
-                    await this.promptPendingRowHeight(message.rowNumber);
-                    return;
-                case "setRowHeight":
-                    await this.setPendingRowHeight(message.rowNumber, message.height);
                     return;
                 case "insertColumn":
                     await this.insertPendingColumn(message.columnNumber);
@@ -1060,20 +1049,6 @@ export class XlsxEditorPanel {
         return undefined;
     }
 
-    private validateRowHeight(value: string): string | undefined {
-        const trimmedValue = value.trim();
-        if (trimmedValue.length === 0) {
-            return undefined;
-        }
-
-        const nextHeight = Number(trimmedValue);
-        if (!Number.isFinite(nextHeight) || nextHeight <= 0) {
-            return getWebviewStrings().invalidRowHeight;
-        }
-
-        return undefined;
-    }
-
     private updatePendingRename(sheetKey: string, previousName: string, nextName: string): void {
         const addSheetEdit = this.pendingSheetEdits.find(
             (edit) => edit.type === "addSheet" && edit.sheetKey === sheetKey
@@ -1168,39 +1143,6 @@ export class XlsxEditorPanel {
         );
     }
 
-    private async promptPendingRowHeight(rowNumber: number): Promise<void> {
-        const workbook = this.getWorkingWorkbook();
-        const activeEntry = this.getActiveSheetEntry();
-        if (
-            !workbook ||
-            workbook.isReadonly ||
-            !activeEntry ||
-            !Number.isInteger(rowNumber) ||
-            rowNumber < 1 ||
-            rowNumber > activeEntry.sheet.rowCount
-        ) {
-            return;
-        }
-
-        const strings = getWebviewStrings();
-        const currentHeight = activeEntry.sheet.rowHeights?.[String(rowNumber)] ?? null;
-        const nextValue = await vscode.window.showInputBox({
-            prompt: strings.setRowHeightPrompt,
-            title: strings.setRowHeightTitle,
-            value: currentHeight === null ? "" : String(currentHeight),
-            validateInput: (value) => this.validateRowHeight(value),
-        });
-        if (nextValue === undefined) {
-            return;
-        }
-
-        const trimmedValue = nextValue.trim();
-        await this.setPendingRowHeight(
-            rowNumber,
-            trimmedValue.length === 0 ? null : normalizeWorkbookRowHeight(Number(trimmedValue))
-        );
-    }
-
     private async setPendingColumnWidth(
         columnNumber: number,
         nextWidth: number | null
@@ -1254,57 +1196,6 @@ export class XlsxEditorPanel {
         );
     }
 
-    private async setPendingRowHeight(rowNumber: number, nextHeight: number | null): Promise<void> {
-        const workbook = this.getWorkingWorkbook();
-        const activeEntry = this.getActiveSheetEntry();
-        if (
-            !workbook ||
-            workbook.isReadonly ||
-            !activeEntry ||
-            !Number.isInteger(rowNumber) ||
-            rowNumber < 1 ||
-            rowNumber > activeEntry.sheet.rowCount
-        ) {
-            return;
-        }
-
-        const normalizedHeight =
-            nextHeight === null ? null : normalizeWorkbookRowHeight(nextHeight);
-        if (
-            normalizedHeight !== null &&
-            (!Number.isFinite(normalizedHeight) || normalizedHeight <= 0)
-        ) {
-            return;
-        }
-
-        const currentHeight = activeEntry.sheet.rowHeights?.[String(rowNumber)] ?? null;
-        if (currentHeight === normalizedHeight) {
-            return;
-        }
-
-        await this.commitStructuralMutation(
-            () => {
-                const entry = this.getActiveSheetEntry();
-                if (!entry) {
-                    return;
-                }
-
-                entry.sheet = {
-                    ...entry.sheet,
-                    rowHeights: setSheetRowHeightSnapshot(
-                        entry.sheet.rowHeights,
-                        rowNumber,
-                        normalizedHeight
-                    ),
-                };
-                this.syncPendingSheetViewEdit(entry.key);
-            },
-            {
-                resetPendingHistory: false,
-            }
-        );
-    }
-
     private async setPendingAlignment(
         target: EditorAlignmentTargetKind,
         selection: SelectionRange,
@@ -1316,9 +1207,13 @@ export class XlsxEditorPanel {
             return;
         }
 
-        if (!alignment.horizontal && !alignment.vertical) {
+        if (!alignment.horizontal) {
             return;
         }
+
+        const nextAlignment: EditorAlignmentPatch = {
+            horizontal: alignment.horizontal,
+        };
 
         const normalizedSelection: SelectionRange = {
             startRow: Math.min(selection.startRow, selection.endRow),
@@ -1359,7 +1254,7 @@ export class XlsxEditorPanel {
             activeEntry.sheet,
             target,
             normalizedSelection,
-            alignment
+            nextAlignment
         );
         if (previewSheet === activeEntry.sheet) {
             return;
@@ -1376,7 +1271,7 @@ export class XlsxEditorPanel {
                     entry.sheet,
                     target,
                     normalizedSelection,
-                    alignment
+                    nextAlignment
                 );
                 this.syncPendingSheetViewEdit(entry.key);
             },

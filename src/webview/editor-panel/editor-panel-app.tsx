@@ -42,10 +42,6 @@ import {
     type PixelColumnLayout,
 } from "../column-layout";
 import {
-    MAX_ROW_PIXEL_HEIGHT,
-    MIN_ROW_PIXEL_HEIGHT,
-    convertPixelsToWorkbookRowHeight,
-    stabilizeRowPixelHeight,
     type PixelRowLayout,
 } from "../row-layout";
 import {
@@ -87,7 +83,6 @@ import {
 import {
     getCellContentAlignmentStyle,
     getToolbarHorizontalAlignment,
-    getToolbarVerticalAlignment,
 } from "./editor-cell-alignment";
 import { notifyEditorToolbarSync } from "./editor-toolbar-sync";
 import { type ToolbarCellEditTarget } from "./editor-toolbar-input";
@@ -256,16 +251,6 @@ interface ColumnResizeState {
     isDragging: boolean;
 }
 
-interface RowResizeState {
-    pointerId: number;
-    sheetKey: string;
-    rowNumber: number;
-    startClientY: number;
-    startPixelHeight: number;
-    previewPixelHeight: number;
-    isDragging: boolean;
-}
-
 type ViewState =
     | { kind: "loading"; message: string }
     | { kind: "error"; message: string }
@@ -307,7 +292,6 @@ let fillDragState: FillDragState | null = null;
 let lastFillHandleClickState: FillHandleClickState | null = null;
 let searchPanelDragState: SearchPanelDragState | null = null;
 let columnResizeState: ColumnResizeState | null = null;
-let rowResizeState: RowResizeState | null = null;
 let suppressNextCellClick = false;
 let suppressNextRowHeaderClick = false;
 let suppressNextColumnHeaderClick = false;
@@ -336,13 +320,15 @@ let searchSelectionRange: CellRange | null = null;
 let editorMaximumDigitWidth = DEFAULT_MAXIMUM_DIGIT_WIDTH_PX;
 const sheetFilterStates = new Map<string, EditorSheetFilterState | null>();
 let filterMenuState: FilterMenuState | null = null;
+let latestVirtualGridCache:
+    | {
+          model: EditorRenderModel;
+          metrics: EditorVirtualGridMetrics;
+      }
+    | null = null;
 
 function normalizeWorkbookColumnWidth(columnWidth: number): number {
     return Math.round(columnWidth * 256) / 256;
-}
-
-function normalizeWorkbookRowHeight(rowHeight: number): number {
-    return Math.round(rowHeight * 100) / 100;
 }
 
 interface VirtualViewportState {
@@ -408,22 +394,6 @@ function getEffectiveSheetColumnWidths(
         convertPixelsToWorkbookColumnWidth(activeResize.previewPixelWidth, maximumDigitWidth)
     );
     return nextColumnWidths;
-}
-
-function getEffectiveSheetRowHeights(
-    currentModel: EditorRenderModel
-): Readonly<Record<string, number | null>> | undefined {
-    const activeResize = rowResizeState;
-    if (!activeResize || activeResize.sheetKey !== currentModel.activeSheet.key) {
-        return currentModel.activeSheet.rowHeights;
-    }
-
-    return {
-        ...(currentModel.activeSheet.rowHeights ?? {}),
-        [String(activeResize.rowNumber)]: normalizeWorkbookRowHeight(
-            convertPixelsToWorkbookRowHeight(activeResize.previewPixelHeight)
-        ),
-    };
 }
 
 function getSheetColumnLayout(currentModel: EditorRenderModel): PixelColumnLayout {
@@ -538,30 +508,6 @@ function getVisibleActualRowsForModel(currentModel: EditorRenderModel): {
         createEditorFilterCellSource(currentModel),
         getActiveSheetFilterState(currentModel)
     );
-}
-
-function createDisplayRowHeightsForActualRows(
-    currentModel: EditorRenderModel,
-    actualRowNumbers: readonly number[]
-): Readonly<Record<string, number | null>> | undefined {
-    const rowHeights = getEffectiveSheetRowHeights(currentModel);
-    if (!rowHeights) {
-        return undefined;
-    }
-
-    const nextRowHeights: Record<string, number | null> = {};
-    let hasOverrides = false;
-    actualRowNumbers.forEach((actualRowNumber, index) => {
-        const rowHeight = rowHeights[String(actualRowNumber)];
-        if (rowHeight === undefined) {
-            return;
-        }
-
-        hasOverrides = true;
-        nextRowHeights[String(index + 1)] = rowHeight;
-    });
-
-    return hasOverrides ? nextRowHeights : undefined;
 }
 
 function createEditorDisplayRowState(
@@ -713,6 +659,11 @@ function getVirtualViewportState(
         return null;
     }
 
+    const cachedMetrics = getCachedVirtualGridMetrics(currentModel);
+    if (cachedMetrics) {
+        return createVirtualViewportStateFromMetrics(cachedMetrics, getViewportElement());
+    }
+
     const pane = getViewportElement();
     const viewportHeight = pane?.clientHeight ?? DEFAULT_EDITOR_VIEWPORT_HEIGHT;
     const viewportWidth = pane?.clientWidth ?? DEFAULT_EDITOR_VIEWPORT_WIDTH;
@@ -741,10 +692,6 @@ function getVirtualViewportState(
     );
     const displayRowLayout = createEditorPixelRowLayout({
         rowCount: displayRowState.actualRowNumbers.length,
-        rowHeights: createDisplayRowHeightsForActualRows(
-            currentModel,
-            displayRowState.actualRowNumbers
-        ),
     });
     const displayColumnLayout = getEditorDisplayColumnLayout(
         sheetColumnLayout,
@@ -944,10 +891,8 @@ function getActiveToolbarAlignment(
         currentModel
     );
     const horizontal = getToolbarHorizontalAlignment(alignment);
-    const vertical = getToolbarVerticalAlignment(alignment);
     return {
         ...(horizontal ? { horizontal } : {}),
-        ...(vertical ? { vertical } : {}),
     };
 }
 
@@ -1476,11 +1421,6 @@ function requestDeleteRow(rowNumber: number): void {
     vscode.postMessage({ type: "deleteRow", rowNumber });
 }
 
-function requestPromptRowHeight(rowNumber: number): void {
-    closeContextMenu({ refresh: false });
-    vscode.postMessage({ type: "promptRowHeight", rowNumber });
-}
-
 function requestInsertColumn(columnNumber: number): void {
     closeContextMenu({ refresh: false });
     vscode.postMessage({ type: "insertColumn", columnNumber });
@@ -1585,93 +1525,6 @@ function stopColumnResize(pointerId?: number, { commit = false }: { commit?: boo
                 activeResize.previewPixelWidth,
                 editorMaximumDigitWidth
             )
-        ),
-    });
-}
-
-function beginRowResize(
-    pointerId: number,
-    sheetKey: string,
-    rowNumber: number,
-    startPixelHeight: number,
-    clientY: number
-): void {
-    if (!model?.canEdit) {
-        return;
-    }
-
-    if (editingCell) {
-        finishEdit({ mode: "commit", refresh: false });
-    }
-
-    closeContextMenu({ refresh: false });
-    clearBrowserTextSelection();
-    suppressNextRowHeaderClick = true;
-    rowResizeState = {
-        pointerId,
-        sheetKey,
-        rowNumber,
-        startClientY: clientY,
-        startPixelHeight,
-        previewPixelHeight: startPixelHeight,
-        isDragging: true,
-    };
-    renderApp({ commitEditing: false });
-}
-
-function updateRowResize(clientY: number): void {
-    if (!rowResizeState?.isDragging) {
-        return;
-    }
-
-    const nextPixelHeight = Math.max(
-        MIN_ROW_PIXEL_HEIGHT,
-        Math.min(
-            MAX_ROW_PIXEL_HEIGHT,
-            stabilizeRowPixelHeight(
-                Math.round(rowResizeState.startPixelHeight + clientY - rowResizeState.startClientY)
-            )
-        )
-    );
-    if (nextPixelHeight === rowResizeState.previewPixelHeight) {
-        return;
-    }
-
-    rowResizeState = {
-        ...rowResizeState,
-        previewPixelHeight: nextPixelHeight,
-    };
-    renderApp({ commitEditing: false });
-}
-
-function stopRowResize(pointerId?: number, { commit = false }: { commit?: boolean } = {}): void {
-    if (!rowResizeState) {
-        return;
-    }
-
-    if (pointerId !== undefined && rowResizeState.pointerId !== pointerId) {
-        return;
-    }
-
-    const activeResize = rowResizeState;
-    const didChange = activeResize.previewPixelHeight !== activeResize.startPixelHeight;
-    if (!commit || !didChange) {
-        rowResizeState = null;
-        renderApp({ commitEditing: false });
-        return;
-    }
-
-    rowResizeState = {
-        ...activeResize,
-        startPixelHeight: activeResize.previewPixelHeight,
-        isDragging: false,
-    };
-    renderApp({ commitEditing: false });
-    vscode.postMessage({
-        type: "setRowHeight",
-        rowNumber: activeResize.rowNumber,
-        height: normalizeWorkbookRowHeight(
-            convertPixelsToWorkbookRowHeight(activeResize.previewPixelHeight)
         ),
     });
 }
@@ -2072,6 +1925,62 @@ function revealSelectedCell(): void {
         return;
     }
 
+    const cachedMetrics = getCachedVirtualGridMetrics(model);
+    if (cachedMetrics) {
+        let nextTop = pane.scrollTop;
+        let nextLeft = pane.scrollLeft;
+
+        const selectedDisplayRowNumber = getDisplayRowNumber(
+            cachedMetrics.rowState,
+            selectedCell.rowNumber
+        );
+        if (
+            selectedDisplayRowNumber !== null &&
+            selectedDisplayRowNumber > cachedMetrics.frozenRowCount
+        ) {
+            const cellTop =
+                EDITOR_VIRTUAL_HEADER_HEIGHT +
+                getEditorRowTop(cachedMetrics.rowLayout, selectedDisplayRowNumber);
+            const cellBottom =
+                cellTop + getEditorRowHeight(cachedMetrics.rowLayout, selectedDisplayRowNumber);
+            const visibleTop = pane.scrollTop + cachedMetrics.stickyTopHeight;
+            const visibleBottom = pane.scrollTop + pane.clientHeight;
+
+            if (cellTop < visibleTop) {
+                nextTop = cellTop - cachedMetrics.stickyTopHeight;
+            } else if (cellBottom > visibleBottom) {
+                nextTop = cellBottom - pane.clientHeight;
+            }
+        }
+
+        if (selectedCell.columnNumber > cachedMetrics.frozenColumnCount) {
+            const cellLeft =
+                cachedMetrics.rowHeaderWidth +
+                getEditorColumnLeft(cachedMetrics.columnLayout, selectedCell.columnNumber);
+            const cellRight =
+                cellLeft +
+                getEditorColumnWidth(cachedMetrics.columnLayout, selectedCell.columnNumber);
+            const visibleLeft = pane.scrollLeft + cachedMetrics.stickyLeftWidth;
+            const visibleRight = pane.scrollLeft + pane.clientWidth;
+
+            if (cellLeft < visibleLeft) {
+                nextLeft = cellLeft - cachedMetrics.stickyLeftWidth;
+            } else if (cellRight > visibleRight) {
+                nextLeft = cellRight - pane.clientWidth;
+            }
+        }
+
+        pane.scrollTop = clampEditorScrollPosition(
+            nextTop,
+            cachedMetrics.contentHeight - pane.clientHeight
+        );
+        pane.scrollLeft = clampEditorScrollPosition(
+            nextLeft,
+            cachedMetrics.contentWidth - pane.clientWidth
+        );
+        return;
+    }
+
     const sheetColumnLayout = getSheetColumnLayout(model);
     const { visibleRowResult, rowLayout: baseVisibleRowLayout } = createBaseVisibleRowLayout(model);
     const displayGrid = getEditorDisplayGridDimensions({
@@ -2094,7 +2003,6 @@ function revealSelectedCell(): void {
     );
     const displayRowLayout = createEditorPixelRowLayout({
         rowCount: displayRowState.actualRowNumbers.length,
-        rowHeights: createDisplayRowHeightsForActualRows(model, displayRowState.actualRowNumbers),
     });
     const displayColumnLayout = getEditorDisplayColumnLayout(
         sheetColumnLayout,
@@ -2158,6 +2066,10 @@ function revealSelectedCell(): void {
 function isCellVisible(cell: CellPosition | null): boolean {
     if (!cell || !model) {
         return false;
+    }
+
+    if (getRenderedCellElements(cell).length > 0) {
+        return true;
     }
 
     const viewportState = getVirtualViewportState(model);
@@ -3103,6 +3015,19 @@ function getSelectionBounds(): {
         return null;
     }
 
+    const cachedMetrics = getCachedVirtualGridMetrics(model);
+    if (cachedMetrics) {
+        return {
+            minRow: 1,
+            maxRow:
+                cachedMetrics.rowState.actualRowNumbers[
+                    cachedMetrics.rowState.actualRowNumbers.length - 1
+                ] ?? 1,
+            minColumn: 1,
+            maxColumn: cachedMetrics.columnLayout.totalColumnCount,
+        };
+    }
+
     const pane = getViewportElement();
     const { displayGrid, rowState } = createDisplayGridRowState(
         model,
@@ -3175,11 +3100,13 @@ function moveSelection(
     }
 
     const pane = getViewportElement();
-    const { rowState } = createDisplayGridRowState(
-        model,
-        pane?.clientHeight ?? DEFAULT_EDITOR_VIEWPORT_HEIGHT,
-        pane?.clientWidth ?? DEFAULT_EDITOR_VIEWPORT_WIDTH
-    );
+    const rowState =
+        getCachedVirtualGridMetrics(model)?.rowState ??
+        createDisplayGridRowState(
+            model,
+            pane?.clientHeight ?? DEFAULT_EDITOR_VIEWPORT_HEIGHT,
+            pane?.clientWidth ?? DEFAULT_EDITOR_VIEWPORT_WIDTH
+        ).rowState;
     const currentDisplayRowNumber = getDisplayRowNumber(rowState, selection.rowNumber) ?? 1;
     const nextDisplayRowNumber = Math.max(
         1,
@@ -3212,11 +3139,13 @@ function moveSelectionByViewportWindow(direction: -1 | 1): void {
 
     const viewportState = getVirtualViewportState(model);
     const pane = getViewportElement();
-    const { rowState } = createDisplayGridRowState(
-        model,
-        pane?.clientHeight ?? DEFAULT_EDITOR_VIEWPORT_HEIGHT,
-        pane?.clientWidth ?? DEFAULT_EDITOR_VIEWPORT_WIDTH
-    );
+    const rowState =
+        getCachedVirtualGridMetrics(model)?.rowState ??
+        createDisplayGridRowState(
+            model,
+            pane?.clientHeight ?? DEFAULT_EDITOR_VIEWPORT_HEIGHT,
+            pane?.clientWidth ?? DEFAULT_EDITOR_VIEWPORT_WIDTH
+        ).rowState;
     const shiftRowCount = Math.max(1, (viewportState?.rowNumbers.length ?? 1) - 1);
     const currentDisplayRowNumber = getDisplayRowNumber(rowState, selection.rowNumber) ?? 1;
     const nextDisplayRowNumber = Math.max(
@@ -4138,6 +4067,72 @@ function createSequentialNumbers(count: number): number[] {
     return Array.from({ length: count }, (_, index) => index + 1);
 }
 
+function getCachedVirtualGridMetrics(
+    currentModel: EditorRenderModel | null
+): EditorVirtualGridMetrics | null {
+    if (!currentModel || !latestVirtualGridCache || latestVirtualGridCache.model !== currentModel) {
+        return null;
+    }
+
+    return latestVirtualGridCache.metrics;
+}
+
+function createVirtualViewportStateFromMetrics(
+    metrics: EditorVirtualGridMetrics,
+    element: HTMLElement | null
+): VirtualViewportState {
+    const viewportHeight = element?.clientHeight ?? metrics.viewportHeight;
+    const viewportWidth = element?.clientWidth ?? metrics.viewportWidth;
+    const scrollTop = element?.scrollTop ?? metrics.scrollTop;
+    const scrollLeft = element?.scrollLeft ?? metrics.scrollLeft;
+    const { rowCount: visibleFrozenRowCount, columnCount: visibleFrozenColumnCount } =
+        getVisibleFrozenEditorCounts({
+            frozenRowCount: metrics.frozenRowCount,
+            frozenColumnCount: metrics.frozenColumnCount,
+            viewportHeight,
+            viewportWidth,
+            rowHeaderWidth: metrics.rowHeaderWidth,
+            rowLayout: metrics.rowLayout,
+            columnLayout: metrics.columnLayout,
+        });
+    const rowWindow = createEditorRowWindow({
+        rowLayout: metrics.rowLayout,
+        totalRows: metrics.rowLayout.totalRowCount,
+        frozenRowCount: metrics.frozenRowCount,
+        scrollTop,
+        viewportHeight,
+    });
+    const columnWindow = createEditorColumnWindow({
+        columnLayout: metrics.columnLayout,
+        frozenColumnCount: metrics.frozenColumnCount,
+        scrollLeft,
+        viewportWidth,
+        rowHeaderWidth: metrics.rowHeaderWidth,
+    });
+
+    return {
+        scrollTop,
+        scrollLeft,
+        viewportHeight,
+        viewportWidth,
+        rowHeaderWidth: metrics.rowHeaderWidth,
+        frozenRowCount: metrics.frozenRowCount,
+        frozenColumnCount: metrics.frozenColumnCount,
+        frozenRowNumbers: createSequentialNumbers(visibleFrozenRowCount)
+            .map((displayRowNumber) =>
+                getActualRowNumberAtDisplayRow(metrics.rowState, displayRowNumber)
+            )
+            .filter((rowNumber): rowNumber is number => rowNumber !== null),
+        frozenColumnNumbers: createSequentialNumbers(visibleFrozenColumnCount),
+        rowNumbers: rowWindow.rowNumbers
+            .map((displayRowNumber) =>
+                getActualRowNumberAtDisplayRow(metrics.rowState, displayRowNumber)
+            )
+            .filter((rowNumber): rowNumber is number => rowNumber !== null),
+        columnNumbers: columnWindow.columnNumbers,
+    };
+}
+
 function areNumberArraysEqual(left: number[], right: number[]): boolean {
     if (left.length !== right.length) {
         return false;
@@ -4300,10 +4295,6 @@ function createBaseVisibleRowLayout(currentModel: EditorRenderModel): {
         visibleRowResult,
         rowLayout: createEditorPixelRowLayout({
             rowCount: visibleRowResult.visibleRows.length,
-            rowHeights: createDisplayRowHeightsForActualRows(
-                currentModel,
-                visibleRowResult.visibleRows
-            ),
         }),
     };
 }
@@ -4382,7 +4373,6 @@ function createEditorVirtualGridMetrics(
     );
     const displayRowLayout = createEditorPixelRowLayout({
         rowCount: rowState.actualRowNumbers.length,
-        rowHeights: createDisplayRowHeightsForActualRows(currentModel, rowState.actualRowNumbers),
     });
     const displayColumnLayout = getEditorDisplayColumnLayout(
         sheetColumnLayout,
@@ -4467,12 +4457,6 @@ function useEditorVirtualGrid(
     const viewportRef = React.useRef<HTMLDivElement | null>(null);
     const scrollFrameRef = React.useRef(0);
     const latestScrollElementRef = React.useRef<HTMLDivElement | null>(null);
-    const activeResizePreviewPixelHeight =
-        rowResizeState?.sheetKey === currentModel.activeSheet.key
-            ? rowResizeState.previewPixelHeight
-            : null;
-    const activeResizeRowNumber =
-        rowResizeState?.sheetKey === currentModel.activeSheet.key ? rowResizeState.rowNumber : null;
     const activeResizePreviewPixelWidth =
         columnResizeState?.sheetKey === currentModel.activeSheet.key
             ? columnResizeState.previewPixelWidth
@@ -4487,9 +4471,6 @@ function useEditorVirtualGrid(
             currentModel.activeSheet.key,
             currentModel.activeSheet.rowCount,
             currentModel.activeSheet.columnCount,
-            currentModel.activeSheet.rowHeights,
-            activeResizeRowNumber,
-            activeResizePreviewPixelHeight,
             revision,
         ]
     );
@@ -4542,6 +4523,22 @@ function useEditorVirtualGrid(
     );
 
     React.useLayoutEffect(() => {
+        latestVirtualGridCache = {
+            model: currentModel,
+            metrics,
+        };
+
+        return () => {
+            if (
+                latestVirtualGridCache?.model === currentModel &&
+                latestVirtualGridCache.metrics === metrics
+            ) {
+                latestVirtualGridCache = null;
+            }
+        };
+    }, [currentModel, metrics]);
+
+    React.useLayoutEffect(() => {
         const element = viewportRef.current;
         if (!element) {
             syncMetrics(null, initialScrollState, { force: true });
@@ -4568,10 +4565,6 @@ function useEditorVirtualGrid(
         );
         const displayRowLayout = createEditorPixelRowLayout({
             rowCount: displayRowState.actualRowNumbers.length,
-            rowHeights: createDisplayRowHeightsForActualRows(
-                currentModel,
-                displayRowState.actualRowNumbers
-            ),
         });
         const displayColumnLayout = getEditorDisplayColumnLayout(
             sheetColumnLayout,
@@ -4629,12 +4622,9 @@ function useEditorVirtualGrid(
         currentModel.activeSheet.key,
         currentModel.activeSheet.rowCount,
         currentModel.activeSheet.columnCount,
-        currentModel.activeSheet.rowHeights,
         currentModel.activeSheet.columnWidths,
         currentModel.activeSheet.freezePane?.rowCount ?? 0,
         currentModel.activeSheet.freezePane?.columnCount ?? 0,
-        activeResizeRowNumber,
-        activeResizePreviewPixelHeight,
         activeResizeColumnNumber,
         activeResizePreviewPixelWidth,
         visibleRowResult.visibleRows.join(","),
@@ -4839,11 +4829,8 @@ const EditorColumnHeaderCell = React.memo(
 
 const EditorRowHeaderCell = React.memo(
     function EditorRowHeaderCell({
-        sheetKey,
         rowNumber,
         height,
-        canResize,
-        isResizing,
         hasPending,
         activeRowNumber,
         selectionRange,
@@ -4851,11 +4838,8 @@ const EditorRowHeaderCell = React.memo(
         top,
         rowHeaderWidth,
     }: {
-        sheetKey: string;
         rowNumber: number;
         height: number;
-        canResize: boolean;
-        isResizing: boolean;
         hasPending: boolean;
         activeRowNumber: number | null;
         selectionRange: CellRange | null;
@@ -4873,7 +4857,6 @@ const EditorRowHeaderCell = React.memo(
                     "editor-grid__item",
                     "editor-grid__item--row-header",
                     "grid__row-number",
-                    isResizing && "grid__row-number--resizing",
                     hasPending && "grid__row-number--pending",
                     isActiveRow && "grid__row-number--active",
                 ])}
@@ -4929,40 +4912,12 @@ const EditorRowHeaderCell = React.memo(
                     {hasPending ? <PendingMarker /> : null}
                     <span>{rowNumber}</span>
                 </span>
-                {canResize ? (
-                    <span
-                        aria-hidden
-                        className={classNames([
-                            "grid__row-resize-handle",
-                            isResizing && "is-active",
-                        ])}
-                        data-role="grid-row-resize-handle"
-                        onPointerDown={(event) => {
-                            if (event.button !== 0) {
-                                return;
-                            }
-
-                            event.preventDefault();
-                            event.stopPropagation();
-                            beginRowResize(
-                                event.pointerId,
-                                sheetKey,
-                                rowNumber,
-                                height,
-                                event.clientY
-                            );
-                        }}
-                    />
-                ) : null}
             </div>
         );
     },
     (previous, next) =>
-        previous.sheetKey === next.sheetKey &&
         previous.rowNumber === next.rowNumber &&
         previous.height === next.height &&
-        previous.canResize === next.canResize &&
-        previous.isResizing === next.isResizing &&
         previous.hasPending === next.hasPending &&
         previous.activeRowNumber === next.activeRowNumber &&
         previous.columnCount === next.columnCount &&
@@ -5385,14 +5340,8 @@ function EditorVirtualGrid({
         leftItems.push(
             <EditorRowHeaderCell
                 key={`left:row:${rowNumber}`}
-                sheetKey={currentModel.activeSheet.key}
                 rowNumber={rowNumber}
                 height={getEditorGridRowHeightForActualRow(metrics, rowNumber) ?? 0}
-                canResize={currentModel.canEdit}
-                isResizing={
-                    rowResizeState?.sheetKey === currentModel.activeSheet.key &&
-                    rowResizeState.rowNumber === rowNumber
-                }
                 hasPending={pendingSummary.rows.has(rowNumber)}
                 activeRowNumber={activeRowNumber}
                 selectionRange={selectionRange}
@@ -5415,14 +5364,8 @@ function EditorVirtualGrid({
         cornerItems.push(
             <EditorRowHeaderCell
                 key={`corner:row:${rowNumber}`}
-                sheetKey={currentModel.activeSheet.key}
                 rowNumber={rowNumber}
                 height={getEditorGridRowHeightForActualRow(metrics, rowNumber) ?? 0}
-                canResize={currentModel.canEdit}
-                isResizing={
-                    rowResizeState?.sheetKey === currentModel.activeSheet.key &&
-                    rowResizeState.rowNumber === rowNumber
-                }
                 hasPending={pendingSummary.rows.has(rowNumber)}
                 activeRowNumber={activeRowNumber}
                 selectionRange={selectionRange}
@@ -5681,7 +5624,6 @@ function EditorApp({ view }: { view: Extract<ViewState, { kind: "app" }> }): Rea
                 "app",
                 "app--editor",
                 columnResizeState?.isDragging && "app--column-resizing",
-                rowResizeState?.isDragging && "app--row-resizing",
             ])}
             data-role="editor-app"
         >
@@ -5778,7 +5720,6 @@ function EditorApp({ view }: { view: Extract<ViewState, { kind: "app" }> }): Rea
                 onRequestRenameSheet={requestRenameSheet}
                 onRequestInsertRow={requestInsertRow}
                 onRequestDeleteRow={requestDeleteRow}
-                onRequestPromptRowHeight={requestPromptRowHeight}
                 onRequestInsertColumn={requestInsertColumn}
                 onRequestDeleteColumn={requestDeleteColumn}
                 onRequestPromptColumnWidth={requestPromptColumnWidth}
@@ -5816,7 +5757,6 @@ window.addEventListener("message", (event: MessageEvent<IncomingMessage>) => {
     if (message.type === "loading") {
         clearFillDragState();
         columnResizeState = null;
-        rowResizeState = null;
         stopSearchPanelDrag();
         sheetFilterStates.clear();
         filterMenuState = null;
@@ -5835,7 +5775,6 @@ window.addEventListener("message", (event: MessageEvent<IncomingMessage>) => {
     if (message.type === "error") {
         clearFillDragState();
         columnResizeState = null;
-        rowResizeState = null;
         stopSearchPanelDrag();
         sheetFilterStates.clear();
         filterMenuState = null;
@@ -5852,7 +5791,6 @@ window.addEventListener("message", (event: MessageEvent<IncomingMessage>) => {
     if (message.type === "render") {
         clearFillDragState();
         columnResizeState = null;
-        rowResizeState = null;
         model = stabilizeIncomingRenderModel(model, message.payload, {
             canReuseActiveSheetData: Boolean(message.reuseActiveSheetData),
         });
@@ -6107,17 +6045,6 @@ document.addEventListener("pointermove", (event: PointerEvent) => {
         return;
     }
 
-    if (rowResizeState?.isDragging && rowResizeState.pointerId === event.pointerId) {
-        if ((event.buttons & 1) === 0) {
-            stopRowResize(event.pointerId, { commit: true });
-            return;
-        }
-
-        event.preventDefault();
-        updateRowResize(event.clientY);
-        return;
-    }
-
     if (searchPanelDragState && searchPanelDragState.pointerId === event.pointerId) {
         event.preventDefault();
         updateSearchPanelDrag(event.clientX, event.clientY);
@@ -6189,7 +6116,6 @@ document.addEventListener("pointermove", (event: PointerEvent) => {
 
 document.addEventListener("pointerup", (event: PointerEvent) => {
     stopColumnResize(event.pointerId, { commit: true });
-    stopRowResize(event.pointerId, { commit: true });
     stopSearchPanelDrag(event.pointerId);
     stopFillDrag(event.pointerId, { commit: true, timeStamp: event.timeStamp });
     stopSelectionDrag(event.pointerId);
@@ -6198,7 +6124,6 @@ document.addEventListener("pointerup", (event: PointerEvent) => {
 
 document.addEventListener("pointercancel", (event: PointerEvent) => {
     stopColumnResize(event.pointerId);
-    stopRowResize(event.pointerId);
     stopSearchPanelDrag(event.pointerId);
     stopFillDrag(event.pointerId);
     stopSelectionDrag(event.pointerId);

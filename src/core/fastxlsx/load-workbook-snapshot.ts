@@ -42,7 +42,6 @@ interface SheetReader {
     getColumnStyleId(columnNumber: number): number | null;
     getColumnWidth(columnNumber: number): number | null;
     getRowStyleId(rowNumber: number): number | null;
-    getRowHeight(rowNumber: number): number | null;
     getMergedRanges(): string[];
     getFreezePane(): SheetFreezePaneSnapshot | null;
     getAutoFilterDefinition(): AutoFilterDefinition | null;
@@ -142,15 +141,32 @@ function createAutoFilterSnapshot(
     };
 }
 
+function createSparseColumnWidthsSnapshot(sheet: SheetReader): Array<number | null> {
+    const columnWidths: Array<number | null> = [];
+
+    for (let columnNumber = 1; columnNumber <= sheet.columnCount; columnNumber += 1) {
+        const columnWidth = sheet.getColumnWidth(columnNumber);
+        if (columnWidth === null) {
+            continue;
+        }
+
+        while (columnWidths.length < columnNumber - 1) {
+            columnWidths.push(null);
+        }
+
+        columnWidths.push(columnWidth);
+    }
+
+    return columnWidths;
+}
+
 function loadSheetSnapshot(workbook: WorkbookReader, sheetName: string): SheetSnapshot {
     const sheet = workbook.getSheet(sheetName);
     const cells: Record<string, CellSnapshot> = {};
     const freezePane = sheet.getFreezePane();
     const autoFilter = createAutoFilterSnapshot(sheet.getAutoFilterDefinition());
     const visibility = workbook.getSheetVisibility(sheetName);
-    const columnWidths = Array.from({ length: sheet.columnCount }, (_, index) =>
-        sheet.getColumnWidth(index + 1)
-    );
+    const columnWidths = createSparseColumnWidthsSnapshot(sheet);
     const columnAlignments = Object.fromEntries(
         Array.from({ length: sheet.columnCount }, (_, index) => index + 1)
             .flatMap((columnNumber) => {
@@ -164,11 +180,6 @@ function loadSheetSnapshot(workbook: WorkbookReader, sheetName: string): SheetSn
                 ([leftColumnNumber], [rightColumnNumber]) =>
                     Number(leftColumnNumber) - Number(rightColumnNumber)
             )
-    );
-    const rowHeights = Object.fromEntries(
-        Array.from({ length: sheet.rowCount }, (_, index) => index + 1)
-            .map((rowNumber) => [String(rowNumber), sheet.getRowHeight(rowNumber)] as const)
-            .filter(([, rowHeight]) => rowHeight !== null)
     );
     const rowAlignments = Object.fromEntries(
         Array.from({ length: sheet.rowCount }, (_, index) => index + 1)
@@ -223,7 +234,6 @@ function loadSheetSnapshot(workbook: WorkbookReader, sheetName: string): SheetSn
         visibility,
         mergedRanges: [...sheet.getMergedRanges()].sort((left, right) => left.localeCompare(right)),
         columnWidths,
-        rowHeights,
         cellAlignments,
         rowAlignments,
         columnAlignments,

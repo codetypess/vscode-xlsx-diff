@@ -5,19 +5,17 @@ import * as assert from "assert";
 import {
     getCellContentAlignmentStyle,
     getToolbarHorizontalAlignment,
-    getToolbarVerticalAlignment,
 } from "../webview/editor-panel/editor-cell-alignment";
 
 suite("Editor cell alignment helpers", () => {
-    test("maps centered alignments to a full-height content style", () => {
+    test("maps horizontal alignment to a fixed-height content style", () => {
         assert.deepStrictEqual(
             getCellContentAlignmentStyle({
                 horizontal: "center",
-                vertical: "center",
             }),
             {
                 justifyContent: "center",
-                alignItems: "center",
+                alignItems: "flex-start",
                 textAlign: "center",
                 height: "100%",
                 maxHeight: "100%",
@@ -25,7 +23,7 @@ suite("Editor cell alignment helpers", () => {
         );
     });
 
-    test("maps bottom-right alignment correctly", () => {
+    test("ignores vertical alignment and keeps horizontal right alignment", () => {
         assert.deepStrictEqual(
             getCellContentAlignmentStyle({
                 horizontal: "right",
@@ -33,7 +31,7 @@ suite("Editor cell alignment helpers", () => {
             }),
             {
                 justifyContent: "flex-end",
-                alignItems: "flex-end",
+                alignItems: "flex-start",
                 textAlign: "right",
                 height: "100%",
                 maxHeight: "100%",
@@ -46,8 +44,6 @@ suite("Editor cell alignment helpers", () => {
             getToolbarHorizontalAlignment({ horizontal: "centerContinuous" }),
             "center"
         );
-        assert.strictEqual(getToolbarVerticalAlignment({ vertical: "bottom" }), "bottom");
         assert.strictEqual(getToolbarHorizontalAlignment(null), undefined);
-        assert.strictEqual(getToolbarVerticalAlignment(null), undefined);
     });
 });

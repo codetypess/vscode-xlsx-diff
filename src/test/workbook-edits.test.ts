@@ -142,16 +142,13 @@ suite("Workbook edit writer", () => {
                                 columnCount: 1,
                                 rowCount: 1,
                             },
-                            rowHeights: {
-                                "1": 18,
-                            },
                         },
                     ],
                 }
             );
 
             assert.strictEqual(batchCalls, 1);
-            assert.deepStrictEqual(mutationContexts, [true, true, true, true]);
+            assert.deepStrictEqual(mutationContexts, [true, true, true]);
             assert.strictEqual(saveCalls.length, 1);
         } finally {
             (

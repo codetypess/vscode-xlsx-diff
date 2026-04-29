@@ -208,7 +208,7 @@ suite("Editor virtual grid helpers", () => {
         const rowLayout = getEditorDisplayRowLayout(sheetRowLayout, 4);
         const columnLayout = createEditorPixelColumnLayout({ columnCount: 1 });
 
-        assert.strictEqual(getEditorFrozenRowsHeight(rowLayout, 2), 84);
+        assert.strictEqual(getEditorFrozenRowsHeight(rowLayout, 2), 81);
         assert.strictEqual(
             getEditorContentSize({
                 rowCount: 4,
@@ -216,8 +216,13 @@ suite("Editor virtual grid helpers", () => {
                 columnLayout,
                 rowHeaderWidth,
             }).height,
-            154
+            151
         );
+    });
+
+    test("maps the default 16-height row to 28 CSS pixels", () => {
+        assert.strictEqual(convertWorkbookRowHeightToPixels(16), 28);
+        assert.strictEqual(convertPixelsToWorkbookRowHeight(28), 16);
     });
 
     test("normalizes drag-resized pixel widths to stable workbook-backed sizes", () => {

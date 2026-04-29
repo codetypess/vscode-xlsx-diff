@@ -59,8 +59,6 @@ export type EditorWebviewMessage =
     | { type: "renameSheet"; sheetKey: string }
     | { type: "insertRow"; rowNumber: number }
     | { type: "deleteRow"; rowNumber: number }
-    | { type: "promptRowHeight"; rowNumber: number }
-    | { type: "setRowHeight"; rowNumber: number; height: number | null }
     | { type: "insertColumn"; columnNumber: number }
     | { type: "deleteColumn"; columnNumber: number }
     | { type: "promptColumnWidth"; columnNumber: number }
@@ -119,10 +117,6 @@ export interface EditorPanelStrings {
     insertRowAbove: string;
     insertRowBelow: string;
     deleteRow: string;
-    setRowHeight: string;
-    setRowHeightPrompt: string;
-    setRowHeightTitle: string;
-    invalidRowHeight: string;
     insertColumnLeft: string;
     insertColumnRight: string;
     deleteColumn: string;
@@ -180,9 +174,6 @@ export interface EditorPanelStrings {
     alignLeft: string;
     alignCenter: string;
     alignRight: string;
-    alignTop: string;
-    alignMiddle: string;
-    alignBottom: string;
 }
 
 export interface WorkingSheetEntry {
