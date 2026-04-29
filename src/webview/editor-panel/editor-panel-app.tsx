@@ -43,6 +43,27 @@ import {
 } from "../column-layout";
 import { type PixelRowLayout } from "../row-layout";
 import {
+    clearPendingSelectionAfterRender as clearControllerPendingSelectionAfterRender,
+    clearSelectedCell as clearControllerSelectedCell,
+    getActiveHighlightCell as getControllerActiveHighlightCell,
+    getExpandedSelectionRange as getControllerExpandedSelectionRange,
+    getSelectionExtendAnchorCell as getControllerSelectionExtendAnchorCell,
+    getSelectionRange as getControllerSelectionRange,
+    isActiveSelectionCell as isControllerActiveSelectionCell,
+    isSimpleSelectionState as isControllerSimpleSelectionState,
+    setSelectedCell as setControllerSelectedCell,
+    setSelectionAnchorCell as setControllerSelectionAnchorCell,
+    setSuppressAutoSelection as setControllerSuppressAutoSelection,
+    startCellSelectionDrag as startControllerCellSelectionDrag,
+    startColumnSelectionDrag as startControllerColumnSelectionDrag,
+    startRowSelectionDrag as startControllerRowSelectionDrag,
+    stopSelectionDrag as stopControllerSelectionDrag,
+    syncSelectionAnchorToSelectedCell as syncControllerSelectionAnchorToSelectedCell,
+    type PendingSelection,
+    type SelectionControllerState,
+    type SelectionDragState,
+} from "./editor-selection-controller";
+import {
     isSelectionFocusCell,
     shouldResetInvisibleSelectionAnchor,
     shouldSyncLocalSelectionDomFromModelSelection,
@@ -182,31 +203,10 @@ interface PendingEdit extends CellPosition {
     value: string;
 }
 
-interface PendingSelection extends CellPosition {
-    reveal: boolean;
-}
-
 interface ScrollState {
     top: number;
     left: number;
 }
-
-type SelectionDragState =
-    | {
-          kind: "cell";
-          anchorCell: CellPosition;
-          pointerId: number;
-      }
-    | {
-          kind: "row";
-          anchorRowNumber: number;
-          pointerId: number;
-      }
-    | {
-          kind: "column";
-          anchorColumnNumber: number;
-          pointerId: number;
-      };
 
 interface FillDragState {
     pointerId: number;
@@ -333,8 +333,37 @@ interface DebugRenderStats {
     renderedColumnCount: number;
 }
 
+type EditorSelectionState = SelectionControllerState<CellPosition>;
+
 let debugRenderStats: DebugRenderStats | null = null;
 const debugRenderStatsListeners = new Set<() => void>();
+
+function getSelectionControllerState(): EditorSelectionState {
+    return {
+        selectedCell,
+        selectionAnchorCell,
+        selectionRangeOverride,
+        pendingSelectionAfterRender,
+        suppressAutoSelection,
+        selectionDragState,
+    };
+}
+
+function applySelectionControllerState(state: EditorSelectionState): EditorSelectionState {
+    selectedCell = state.selectedCell;
+    selectionAnchorCell = state.selectionAnchorCell;
+    selectionRangeOverride = state.selectionRangeOverride;
+    pendingSelectionAfterRender = state.pendingSelectionAfterRender;
+    suppressAutoSelection = state.suppressAutoSelection;
+    selectionDragState = state.selectionDragState;
+    return state;
+}
+
+function updateSelectionControllerState(
+    updater: (state: EditorSelectionState) => EditorSelectionState
+): EditorSelectionState {
+    return applySelectionControllerState(updater(getSelectionControllerState()));
+}
 
 function getDebugRenderStatsSnapshot(): DebugRenderStats | null {
     return debugRenderStats;
@@ -626,13 +655,12 @@ function ensureSelectedCellVisibleForFilter(
         return false;
     }
 
-    selectedCell = {
-        rowNumber: nextVisibleRowNumber,
-        columnNumber: selectedCell.columnNumber,
-    };
-    selectionAnchorCell = selectedCell;
-    selectionRangeOverride = null;
-    suppressAutoSelection = false;
+    updateSelectionControllerState((state) =>
+        setControllerSelectedCell(state, {
+            rowNumber: nextVisibleRowNumber,
+            columnNumber: selectedCell!.columnNumber,
+        })
+    );
     syncSelectedCellToHost();
     return true;
 }
@@ -952,10 +980,7 @@ function getCellAddressLabel(rowNumber: number, columnNumber: number): string {
 }
 
 function getSelectionRange(): CellRange | null {
-    return (
-        selectionRangeOverride ??
-        createSelectionRange(selectionAnchorCell ?? selectedCell, selectedCell)
-    );
+    return getControllerSelectionRange(getSelectionControllerState());
 }
 
 function hasExpandedSelection(range: CellRange | null = getSelectionRange()): boolean {
@@ -963,8 +988,7 @@ function hasExpandedSelection(range: CellRange | null = getSelectionRange()): bo
 }
 
 function getExpandedSelectionRange(): CellRange | null {
-    const range = getSelectionRange();
-    return hasExpandedSelection(range) ? range : null;
+    return getControllerExpandedSelectionRange(getSelectionControllerState());
 }
 
 function getActiveAlignmentSelectionTarget(
@@ -1071,11 +1095,11 @@ function getSelectionStartCell(): CellPosition | null {
 }
 
 function getActiveHighlightCell(): CellPosition | null {
-    return selectionAnchorCell ?? selectedCell;
+    return getControllerActiveHighlightCell(getSelectionControllerState());
 }
 
 function getSelectionExtendAnchorCell(): CellPosition | null {
-    return selectionAnchorCell ?? selectedCell;
+    return getControllerSelectionExtendAnchorCell(getSelectionControllerState());
 }
 
 function getSelectionExtendAnchorRowNumber(): number | null {
@@ -1087,7 +1111,11 @@ function getSelectionExtendAnchorColumnNumber(): number | null {
 }
 
 function isActiveSelectionCell(rowNumber: number, columnNumber: number): boolean {
-    return selectedCell?.rowNumber === rowNumber && selectedCell.columnNumber === columnNumber;
+    return isControllerActiveSelectionCell(
+        getSelectionControllerState(),
+        rowNumber,
+        columnNumber
+    );
 }
 
 function getEffectiveCellValue(rowNumber: number, columnNumber: number): string {
@@ -1867,24 +1895,24 @@ function handleFillHandleAutoFill(sourceRange: CellRange): void {
 }
 
 function startSelectionDrag(pointerId: number, anchorCell: CellPosition): void {
-    selectionDragState = {
-        kind: "cell",
-        anchorCell,
-        pointerId,
-    };
+    updateSelectionControllerState((state) =>
+        startControllerCellSelectionDrag(state, pointerId, anchorCell)
+    );
     clearSuppressedSelectionClicks();
 }
 
 function stopSelectionDrag(pointerId?: number): void {
-    if (!selectionDragState) {
+    const currentState = getSelectionControllerState();
+    if (!currentState.selectionDragState) {
         return;
     }
 
-    if (pointerId !== undefined && selectionDragState.pointerId !== pointerId) {
+    const nextState = stopControllerSelectionDrag(currentState, pointerId);
+    if (nextState === currentState) {
         return;
     }
 
-    selectionDragState = null;
+    applySelectionControllerState(nextState);
     if (selectedCell) {
         syncSelectedCellToHost();
     }
@@ -2303,11 +2331,9 @@ function setColumnSelectionLocal(
 }
 
 function startRowSelectionDrag(pointerId: number, anchorRowNumber: number): void {
-    selectionDragState = {
-        kind: "row",
-        anchorRowNumber,
-        pointerId,
-    };
+    updateSelectionControllerState((state) =>
+        startControllerRowSelectionDrag(state, pointerId, anchorRowNumber)
+    );
     clearSuppressedSelectionClicks();
     setRowSelectionLocal(anchorRowNumber, {
         anchorRowNumber,
@@ -2332,11 +2358,9 @@ function updateRowSelectionDrag(targetRowNumber: number): void {
 }
 
 function startColumnSelectionDrag(pointerId: number, anchorColumnNumber: number): void {
-    selectionDragState = {
-        kind: "column",
-        anchorColumnNumber,
-        pointerId,
-    };
+    updateSelectionControllerState((state) =>
+        startControllerColumnSelectionDrag(state, pointerId, anchorColumnNumber)
+    );
     clearSuppressedSelectionClicks();
     setColumnSelectionLocal(anchorColumnNumber, {
         anchorColumnNumber,
@@ -2403,13 +2427,11 @@ function isSimpleSelection(
     anchorCell: CellPosition | null = selectionAnchorCell,
     selectionRange: CellRange | null = selectionRangeOverride
 ): boolean {
-    if (!cell) {
-        return anchorCell === null && selectionRange === null;
-    }
-
-    return !hasExpandedSelectionRange(
-        selectionRange ?? createSelectionRange(anchorCell ?? cell, cell)
-    );
+    return isControllerSimpleSelectionState({
+        selectedCell: cell,
+        selectionAnchorCell: anchorCell,
+        selectionRangeOverride: selectionRange,
+    });
 }
 
 function getRenderedCellElements(
@@ -2563,24 +2585,25 @@ function setSelectedCellLocal(
     } = {}
 ): void {
     const previousCell = selectedCell;
-    const nextAnchorCell = nextCell ? (anchorCell ?? nextCell) : null;
-    const nextSelectionRange =
-        nextCell && nextAnchorCell
-            ? (selectionRange ?? createSelectionRange(nextAnchorCell, nextCell))
-            : null;
+    const nextSelectionState = setControllerSelectedCell(
+        getSelectionControllerState(),
+        nextCell,
+        {
+            anchorCell,
+            selectionRangeOverride: selectionRange ?? null,
+        }
+    );
+    const nextSelectionRange = getControllerSelectionRange(nextSelectionState);
     const shouldClearSearchFeedback = clearSearchFeedback && Boolean(searchFeedback);
     const shouldForceRenderForFillHandle = Boolean(getFillHandleCell(nextSelectionRange));
-    const canUseLocalUpdate = canUseLocalSimpleSelectionUpdate(nextCell, {
-        anchorCell: nextAnchorCell,
+    const canUseLocalUpdate = canUseLocalSimpleSelectionUpdate(nextSelectionState.selectedCell, {
+        anchorCell: nextSelectionState.selectionAnchorCell,
         selectionRange: nextSelectionRange,
         forceRender: forceRender || shouldClearSearchFeedback || shouldForceRenderForFillHandle,
     });
 
     clearFillDragState();
-    selectedCell = nextCell;
-    selectionAnchorCell = nextAnchorCell;
-    selectionRangeOverride = selectionRange ?? null;
-    suppressAutoSelection = nextCell === null;
+    applySelectionControllerState(nextSelectionState);
     clearBrowserTextSelection();
     if (shouldClearSearchFeedback) {
         searchFeedback = null;
@@ -2621,14 +2644,14 @@ function prepareSelectionForRender({
             getNearestVisibleRowNumber(model, model.selection.rowNumber) ??
             model.selection.rowNumber;
         clearFillDragState();
-        selectedCell = {
-            rowNumber: nextRowNumber,
-            columnNumber: model.selection.columnNumber,
-        };
-        selectionAnchorCell = selectedCell;
-        selectionRangeOverride = null;
-        suppressAutoSelection = false;
-        pendingSelectionAfterRender = null;
+        applySelectionControllerState(
+            clearControllerPendingSelectionAfterRender(
+                setControllerSelectedCell(getSelectionControllerState(), {
+                    rowNumber: nextRowNumber,
+                    columnNumber: model.selection.columnNumber,
+                })
+            )
+        );
         if (
             shouldSyncLocalSelectionDomFromModelSelection(
                 previousCell,
@@ -2647,20 +2670,22 @@ function prepareSelectionForRender({
             getNearestVisibleRowNumber(model!, pendingSelectionAfterRender.rowNumber) ??
             pendingSelectionAfterRender.rowNumber;
         clearFillDragState();
-        selectedCell = {
-            rowNumber: nextRowNumber,
-            columnNumber: pendingSelectionAfterRender.columnNumber,
-        };
-        selectionAnchorCell = selectedCell;
-        selectionRangeOverride = null;
-        suppressAutoSelection = false;
         shouldReveal = pendingSelectionAfterRender.reveal;
-        pendingSelectionAfterRender = null;
+        applySelectionControllerState(
+            clearControllerPendingSelectionAfterRender(
+                setControllerSelectedCell(getSelectionControllerState(), {
+                    rowNumber: nextRowNumber,
+                    columnNumber: pendingSelectionAfterRender.columnNumber,
+                })
+            )
+        );
         syncSelectedCellToHost();
         return shouldReveal;
     }
 
-    pendingSelectionAfterRender = null;
+    applySelectionControllerState(
+        clearControllerPendingSelectionAfterRender(getSelectionControllerState())
+    );
 
     ensureSelectedCellVisibleForFilter(model);
 
@@ -2672,7 +2697,9 @@ function prepareSelectionForRender({
                 isAnchorVisible: isCellVisible(selectionAnchorCell),
             })
         ) {
-            selectionAnchorCell = selectedCell;
+            updateSelectionControllerState((state) =>
+                syncControllerSelectionAnchorToSelectedCell(state)
+            );
         }
         syncSelectedCellToHost();
         return shouldReveal;
@@ -2682,7 +2709,7 @@ function prepareSelectionForRender({
         return shouldReveal;
     }
 
-    selectedCell = model?.selection
+    const nextSelectedCell = model?.selection
         ? {
               rowNumber:
                   getNearestVisibleRowNumber(model, model.selection.rowNumber) ??
@@ -2693,11 +2720,17 @@ function prepareSelectionForRender({
           ? { rowNumber: getNearestVisibleRowNumber(model, 1) ?? 1, columnNumber: 1 }
           : null;
     clearFillDragState();
-    selectionRangeOverride = null;
+    updateSelectionControllerState((state) =>
+        nextSelectedCell
+            ? setControllerSelectedCell(state, nextSelectedCell)
+            : {
+                  ...state,
+                  selectedCell: null,
+                  selectionRangeOverride: null,
+              }
+    );
 
     if (selectedCell) {
-        selectionAnchorCell = selectedCell;
-        suppressAutoSelection = false;
         syncSelectedCellToHost();
     }
 
@@ -2885,10 +2918,7 @@ function finishEdit({
     }
 
     if (clearSelection) {
-        selectedCell = null;
-        selectionAnchorCell = null;
-        selectionRangeOverride = null;
-        suppressAutoSelection = true;
+        applySelectionControllerState(clearControllerSelectedCell(getSelectionControllerState()));
     }
 
     if (refresh) {
@@ -3035,10 +3065,12 @@ function startEditCell(rowNumber: number, columnNumber: number, currentValue: st
 
     clearBrowserTextSelection();
     clearFillDragState();
-    selectedCell = { rowNumber, columnNumber };
-    selectionAnchorCell = selectedCell;
-    selectionRangeOverride = null;
-    suppressAutoSelection = false;
+    applySelectionControllerState(
+        setControllerSelectedCell(getSelectionControllerState(), {
+            rowNumber,
+            columnNumber,
+        })
+    );
     editingCell = {
         sheetKey: model.activeSheet.key,
         rowNumber,
@@ -3096,17 +3128,24 @@ function getSelectionBounds(): {
 
 function ensureSelection(): CellPosition | null {
     if (selectedCell) {
+        let nextState = getSelectionControllerState();
         if (model && selectedCell.rowNumber <= model.activeSheet.rowCount) {
             const nextVisibleRowNumber = getNearestVisibleRowNumber(model, selectedCell.rowNumber);
             if (nextVisibleRowNumber !== null && nextVisibleRowNumber !== selectedCell.rowNumber) {
-                selectedCell = {
-                    rowNumber: nextVisibleRowNumber,
-                    columnNumber: selectedCell.columnNumber,
+                nextState = {
+                    ...nextState,
+                    selectedCell: {
+                        rowNumber: nextVisibleRowNumber,
+                        columnNumber: nextState.selectedCell!.columnNumber,
+                    },
                 };
             }
         }
-        selectionAnchorCell ??= selectedCell;
-        suppressAutoSelection = false;
+        if (!nextState.selectionAnchorCell && nextState.selectedCell) {
+            nextState = setControllerSelectionAnchorCell(nextState, nextState.selectedCell);
+        }
+        nextState = setControllerSuppressAutoSelection(nextState, false);
+        applySelectionControllerState(nextState);
         return selectedCell;
     }
 
@@ -3114,25 +3153,23 @@ function ensureSelection(): CellPosition | null {
         const rowNumber =
             getNearestVisibleRowNumber(model, model.selection.rowNumber) ??
             model.selection.rowNumber;
-        selectedCell = {
-            rowNumber,
-            columnNumber: model.selection.columnNumber,
-        };
-        selectionAnchorCell = selectedCell;
-        selectionRangeOverride = null;
-        suppressAutoSelection = false;
+        applySelectionControllerState(
+            setControllerSelectedCell(getSelectionControllerState(), {
+                rowNumber,
+                columnNumber: model.selection.columnNumber,
+            })
+        );
         return selectedCell;
     }
 
     if (model && model.activeSheet.rowCount > 0 && model.activeSheet.columnCount > 0) {
         const rowNumber = getNearestVisibleRowNumber(model, 1) ?? 1;
-        selectedCell = {
-            rowNumber,
-            columnNumber: 1,
-        };
-        selectionAnchorCell = selectedCell;
-        selectionRangeOverride = null;
-        suppressAutoSelection = false;
+        applySelectionControllerState(
+            setControllerSelectedCell(getSelectionControllerState(), {
+                rowNumber,
+                columnNumber: 1,
+            })
+        );
         return selectedCell;
     }
 
@@ -6017,7 +6054,9 @@ window.addEventListener("message", (event: MessageEvent<IncomingMessage>) => {
                 redoStack.length = 0;
             }
             editingCell = null;
-            selectionAnchorCell = selectedCell;
+            updateSelectionControllerState((state) =>
+                syncControllerSelectionAnchorToSelectedCell(state)
+            );
             lastPendingNotification = null;
             lastPendingEditsSyncKey = serializePendingEdits([]);
             notifyPendingEditState();
