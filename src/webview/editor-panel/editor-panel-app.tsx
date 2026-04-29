@@ -77,6 +77,7 @@ import {
     isCellWithinFillPreviewArea,
 } from "./editor-fill-drag";
 import {
+    CellFormulaBadge,
     CellValue,
     EditorToolbar,
     PendingMarker,
@@ -109,10 +110,7 @@ import type {
     EditorAlignmentTargetKind,
     SearchOptions,
 } from "./editor-panel-types";
-import {
-    resolveEditorReplaceResultInSheet,
-    resolveEditorSearchResultInSheet,
-} from "./editor-panel-logic";
+import { resolveEditorReplaceResultInSheet } from "./editor-panel-logic";
 import {
     canCreateEditorFilterRange,
     clearEditorFilterColumn,
@@ -295,6 +293,10 @@ const WHEEL_DELTA_PAGE_MODE = 2;
 const WHEEL_LINE_SCROLL_PIXELS = 40;
 const DEFAULT_EDITOR_VIEWPORT_HEIGHT = 480;
 const DEFAULT_EDITOR_VIEWPORT_WIDTH = 960;
+const GRID_CELL_VERTICAL_PADDING_PX = 6;
+const GRID_CELL_FONT_SIZE_PX = 13;
+const GRID_CELL_LINE_HEIGHT_MULTIPLIER = 1.25;
+const GRID_CELL_LINE_HEIGHT_PX = GRID_CELL_FONT_SIZE_PX * GRID_CELL_LINE_HEIGHT_MULTIPLIER;
 const FILL_HANDLE_DOUBLE_CLICK_MS = 400;
 const DEFAULT_SEARCH_OPTIONS: SearchOptions = {
     isRegexp: false,
@@ -1942,7 +1944,15 @@ function normalizeWheelDelta(delta: number, deltaMode: number, viewportSize: num
     return delta;
 }
 
-function forwardVirtualGridWheel(event: React.WheelEvent<HTMLElement>): void {
+interface VirtualGridWheelLikeEvent {
+    deltaX: number;
+    deltaY: number;
+    deltaMode: number;
+    shiftKey: boolean;
+    preventDefault(): void;
+}
+
+function forwardVirtualGridWheel(event: VirtualGridWheelLikeEvent): void {
     const viewport = getViewportElement();
     if (!viewport) {
         return;
@@ -2141,6 +2151,26 @@ function isCellVisible(cell: CellPosition | null): boolean {
         viewportState.columnNumbers.includes(cell.columnNumber);
 
     return rowVisible && columnVisible;
+}
+
+function isCellSelectableInCurrentModel(
+    cell: CellPosition | null,
+    currentModel: EditorRenderModel | null = model
+): boolean {
+    if (!cell || !currentModel) {
+        return false;
+    }
+
+    if (
+        cell.rowNumber < 1 ||
+        cell.rowNumber > currentModel.activeSheet.rowCount ||
+        cell.columnNumber < 1 ||
+        cell.columnNumber > currentModel.activeSheet.columnCount
+    ) {
+        return false;
+    }
+
+    return getNearestVisibleRowNumber(currentModel, cell.rowNumber) === cell.rowNumber;
 }
 
 function isRowVisibleInViewport(
@@ -2509,11 +2539,11 @@ function prepareSelectionForRender({
 
     ensureSelectedCellVisibleForFilter(model);
 
-    if (isCellVisible(selectedCell)) {
+    if (isCellSelectableInCurrentModel(selectedCell)) {
         if (
             !selectionRangeOverride &&
             !hasExpandedSelection() &&
-            !isCellVisible(selectionAnchorCell)
+            !isCellSelectableInCurrentModel(selectionAnchorCell)
         ) {
             updateSelectionControllerState((state) =>
                 syncControllerSelectionAnchorToSelectedCell(state)
@@ -2557,6 +2587,20 @@ function prepareSelectionForRender({
 
 function getCellModelValue(rowNumber: number, columnNumber: number): string {
     return getCellView(rowNumber, columnNumber)?.value ?? "";
+}
+
+function getGridCellTextLayoutMetrics(cellHeight: number): {
+    contentMaxHeightPx: number;
+    visibleLineCount: number;
+} {
+    const contentMaxHeightPx = Math.max(18, cellHeight - GRID_CELL_VERTICAL_PADDING_PX);
+    return {
+        contentMaxHeightPx,
+        visibleLineCount: Math.max(
+            1,
+            Math.floor(contentMaxHeightPx / GRID_CELL_LINE_HEIGHT_PX)
+        ),
+    };
 }
 
 function notifyPendingEditState(): void {
@@ -3331,49 +3375,15 @@ function submitSearch(direction: "next" | "prev"): void {
 
     const effectiveScope = getEffectiveSearchScope();
     const selectionRange = getActiveSearchSelectionRange(effectiveScope);
-    const result = resolveEditorSearchResultInSheet(
-        {
-            key: model.activeSheet.key,
-            rowCount: model.activeSheet.rowCount,
-            columnCount: model.activeSheet.columnCount,
-            cells: getVisibleSearchCellsForModel(model),
-        },
-        selectedCell,
-        {
-            query: normalizedQuery,
-            direction,
-            options: searchOptions,
-            scope: effectiveScope,
-            selectionRange: selectionRange ?? undefined,
-        },
-        {
-            pendingEdits: getActiveSheetPendingEdits(),
-        }
-    );
 
-    if (result.status !== "matched" || !result.match) {
-        searchFeedback = {
-            status: result.status,
-            message:
-                result.status === "invalid-pattern"
-                    ? STRINGS.invalidSearchPattern
-                    : STRINGS.noSearchMatches,
-        };
-        renderApp({ commitEditing: false, sync: true });
-        return;
-    }
-
-    searchFeedback = {
-        status: "matched",
-        message: getSearchMatchFeedbackMessage(
-            result.match,
-            effectiveScope,
-            selectionRange,
-            result.matchCount,
-            result.matchIndex
-        ),
-    };
-    revealSearchPanelMatch(result.match, effectiveScope, { syncHost: false });
+    vscode.postMessage({
+        type: "search",
+        query: normalizedQuery,
+        direction,
+        options: searchOptions,
+        scope: effectiveScope,
+        selectionRange: selectionRange ?? undefined,
+    });
 }
 
 function getSearchMatchFeedbackMessage(
@@ -3440,7 +3450,7 @@ function submitReplace(mode: "single" | "all"): void {
             status: "invalid-pattern",
             message: STRINGS.invalidSearchPattern,
         };
-        renderApp({ commitEditing: false, sync: true });
+        refreshCurrentAppView({ sync: true });
         return;
     }
 
@@ -3449,7 +3459,7 @@ function submitReplace(mode: "single" | "all"): void {
             status: "no-match",
             message: STRINGS.replaceNoEditableMatches,
         };
-        renderApp({ commitEditing: false, sync: true });
+        refreshCurrentAppView({ sync: true });
         return;
     }
 
@@ -3464,7 +3474,7 @@ function submitReplace(mode: "single" | "all"): void {
             return;
         }
 
-        renderApp({ commitEditing: false, sync: true });
+        refreshCurrentAppView({ sync: true });
         return;
     }
 
@@ -3500,7 +3510,7 @@ function handleSearchResult(message: EditorSearchResultMessage): void {
             status: message.status,
             message: message.message,
         };
-        renderApp({ commitEditing: false, sync: true });
+        refreshCurrentAppView({ sync: true });
         return;
     }
 
@@ -3584,6 +3594,23 @@ function renderLoading(message: string): void {
 
 function renderError(message: string): void {
     updateView({ kind: "error", message }, { sync: true });
+}
+
+function refreshCurrentAppView({ sync = false }: { sync?: boolean } = {}): void {
+    if (!model) {
+        return;
+    }
+
+    updateView(
+        {
+            kind: "app",
+            model,
+            revealSelection: false,
+            revision: viewRevision,
+            scrollState: getPaneScrollState(),
+        },
+        { sync }
+    );
 }
 
 function renderApp({
@@ -5221,6 +5248,7 @@ const EditorVirtualCell = React.memo(
             getEffectiveCellAlignment(rowNumber, columnNumber, currentModel)
         );
         const shouldSpillIntoNextCells = spillsIntoNextCells && !isEditing;
+        const { contentMaxHeightPx, visibleLineCount } = getGridCellTextLayoutMetrics(height);
 
         return (
             <div
@@ -5250,6 +5278,8 @@ const EditorVirtualCell = React.memo(
                         minWidth: `${width}px`,
                         maxWidth: `${width}px`,
                         "--grid-column-max-width": `${width}px`,
+                        "--grid-cell-content-max-height": `${contentMaxHeightPx}px`,
+                        "--grid-cell-line-clamp": String(visibleLineCount),
                         ...(shouldSpillIntoNextCells
                             ? {
                                   "--grid-cell-display-max-width": `${contentWidthPx}px`,
@@ -5314,9 +5344,10 @@ const EditorVirtualCell = React.memo(
                     {isEditing && activeEditingCell?.sheetKey === currentModel.activeSheet.key ? (
                         <CellEditor edit={activeEditingCell} />
                     ) : (
-                        <CellValue formula={formula} value={value} />
+                        <CellValue value={value} />
                     )}
                 </div>
+                <CellFormulaBadge formula={formula} />
                 {isFilterHeader ? (
                     <button
                         className={classNames([
@@ -5397,6 +5428,12 @@ function EditorVirtualGrid({
     const activeColumnNumber = activeHighlightCell?.columnNumber ?? null;
     const activeEditingCell = editingCell;
     const activeFilterState = getActiveSheetFilterState(currentModel);
+    const topOverlayRef = React.useRef<HTMLDivElement | null>(null);
+    const leftOverlayRef = React.useRef<HTMLDivElement | null>(null);
+    const cornerOverlayRef = React.useRef<HTMLDivElement | null>(null);
+    const handleOverlayWheel = React.useEffectEvent((event: WheelEvent) => {
+        forwardVirtualGridWheel(event);
+    });
     const isSearchFocusedSelection =
         searchFeedback?.status === "matched" ||
         searchFeedback?.status === "replaced" ||
@@ -5721,6 +5758,32 @@ function EditorVirtualGrid({
         };
     }, []);
 
+    React.useEffect(() => {
+        const overlays = [
+            topOverlayRef.current,
+            leftOverlayRef.current,
+            cornerOverlayRef.current,
+        ].filter((overlay): overlay is HTMLDivElement => Boolean(overlay));
+        if (overlays.length === 0) {
+            return;
+        }
+
+        const listener = (event: WheelEvent) => {
+            handleOverlayWheel(event);
+        };
+        const options: AddEventListenerOptions = { passive: false };
+
+        for (const overlay of overlays) {
+            overlay.addEventListener("wheel", listener, options);
+        }
+
+        return () => {
+            for (const overlay of overlays) {
+                overlay.removeEventListener("wheel", listener);
+            }
+        };
+    }, [handleOverlayWheel]);
+
     return (
         <div className="pane__table editor-grid-shell">
             <div
@@ -5749,12 +5812,12 @@ function EditorVirtualGrid({
                         />
                     </div>
                     <div
+                        ref={topOverlayRef}
                         className="editor-grid__overlay editor-grid__overlay--top"
                         style={{
                             width: `${metrics.contentWidth}px`,
                             height: `${metrics.stickyTopHeight}px`,
                         }}
-                        onWheel={forwardVirtualGridWheel}
                     >
                         <div
                             className="editor-grid__track editor-grid__track--x"
@@ -5776,12 +5839,12 @@ function EditorVirtualGrid({
                         </div>
                     </div>
                     <div
+                        ref={leftOverlayRef}
                         className="editor-grid__overlay editor-grid__overlay--left"
                         style={{
                             width: `${metrics.stickyLeftWidth}px`,
                             height: `${metrics.contentHeight}px`,
                         }}
-                        onWheel={forwardVirtualGridWheel}
                     >
                         <div
                             className="editor-grid__track editor-grid__track--y"
@@ -5803,12 +5866,12 @@ function EditorVirtualGrid({
                         </div>
                     </div>
                     <div
+                        ref={cornerOverlayRef}
                         className="editor-grid__overlay editor-grid__overlay--corner"
                         style={{
                             width: `${metrics.stickyLeftWidth}px`,
                             height: `${metrics.stickyTopHeight}px`,
                         }}
-                        onWheel={forwardVirtualGridWheel}
                     >
                         <div
                             className="editor-grid__track"
@@ -5998,7 +6061,7 @@ function EditorApp({ view }: { view: Extract<ViewState, { kind: "app" }> }): Rea
                 scopeSummary={
                     selectionRange
                         ? getSelectionRangeAddress(selectionRange)
-                        : STRINGS.searchScopeWholeSheet
+                        : STRINGS.searchScopeSheet
                 }
                 hasSelectionScope={Boolean(selectionRange)}
                 position={searchPanelPosition}

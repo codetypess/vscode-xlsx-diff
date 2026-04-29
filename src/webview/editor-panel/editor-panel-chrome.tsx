@@ -44,24 +44,29 @@ export function PendingMarker({ extraClass }: { extraClass?: string }): React.Re
 
 export function CellValue({
     value,
-    formula,
 }: {
     value: string;
+}): React.ReactElement | null {
+    if (!value) {
+        return null;
+    }
+
+    return <span className="grid__cell-value">{value}</span>;
+}
+
+export function CellFormulaBadge({
+    formula,
+}: {
     formula: string | null;
 }): React.ReactElement | null {
-    if (!value && !formula) {
+    if (!formula) {
         return null;
     }
 
     return (
-        <>
-            {value ? <span className="grid__cell-value">{value}</span> : null}
-            {formula ? (
-                <span className="cell__formula" title={formula}>
-                    fx
-                </span>
-            ) : null}
-        </>
+        <span className="cell__formula" title={formula}>
+            fx
+        </span>
     );
 }
 

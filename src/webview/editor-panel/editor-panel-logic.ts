@@ -228,30 +228,37 @@ function getEditorSearchMatchContextForSheet(
         searchContext.scope,
         Boolean(searchContext.selectionRange)
     );
-    const matches = getSearchableEditorCells(sheet, searchContext.pendingEdits)
-        .filter((cell) => {
-            if (
-                effectiveScope === "selection" &&
-                !isCellWithinSelectionRange(
-                    searchContext.selectionRange ?? null,
-                    cell.rowNumber,
-                    cell.columnNumber
-                )
-            ) {
-                return false;
-            }
+    const includeFormulaMatches = searchContext.includeFormulaMatches !== false;
+    const valueMatches: SearchableEditorCell[] = [];
+    const formulaMatches: SearchableEditorCell[] = [];
 
-            if (searchContext.editableOnly && cell.formula) {
-                return false;
-            }
+    for (const cell of getSearchableEditorCells(sheet, searchContext.pendingEdits)) {
+        if (
+            effectiveScope === "selection" &&
+            !isCellWithinSelectionRange(
+                searchContext.selectionRange ?? null,
+                cell.rowNumber,
+                cell.columnNumber
+            )
+        ) {
+            continue;
+        }
 
-            const value = cell.value;
-            const formula = cell.formula ?? "";
-            return (
-                pattern.test(value) ||
-                (searchContext.includeFormulaMatches !== false && pattern.test(formula))
-            );
-        });
+        if (searchContext.editableOnly && cell.formula) {
+            continue;
+        }
+
+        if (pattern.test(cell.value)) {
+            valueMatches.push(cell);
+            continue;
+        }
+
+        if (includeFormulaMatches && pattern.test(cell.formula ?? "")) {
+            formulaMatches.push(cell);
+        }
+    }
+
+    const matches = valueMatches.length > 0 ? valueMatches : formulaMatches;
 
     if (matches.length === 0) {
         return null;
@@ -266,7 +273,6 @@ function getEditorSearchMatchContextForSheet(
         matches,
     };
 }
-
 export function findEditorSearchMatchInSheet(
     sheet: EditorSearchSheetSource,
     selectedCell: EditorPanelState["selectedCell"],

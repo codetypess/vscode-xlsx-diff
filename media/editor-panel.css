@@ -1,3 +1,12 @@
+:root {
+    --editor-radius-panel: 8px;
+    --editor-radius-field: 6px;
+    --editor-radius-segmented: 7px;
+    --editor-radius-button: 4px;
+    --editor-radius-pill: 999px;
+    --editor-shadow-float: 0 10px 24px color-mix(in srgb, black 28%, transparent 72%);
+}
+
 * {
     box-sizing: border-box;
 }
@@ -29,7 +38,7 @@ body {
 .empty-shell__message {
     padding: 16px 20px;
     border: 1px solid var(--vscode-panel-border);
-    border-radius: 8px;
+    border-radius: var(--editor-radius-panel);
     background: color-mix(in srgb, var(--vscode-editor-background) 88%, white 12%);
 }
 
@@ -83,7 +92,7 @@ body {
     display: inline-flex;
     gap: 1px;
     padding: 1px;
-    border-radius: 7px;
+    border-radius: var(--editor-radius-segmented);
     background: color-mix(
         in srgb,
         var(--vscode-editorWidget-border, var(--vscode-panel-border)) 24%,
@@ -104,7 +113,7 @@ body {
     min-height: 32px;
     padding: 3px 6px;
     border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
-    border-radius: 6px;
+    border-radius: var(--editor-radius-field);
     background: var(--vscode-input-background, var(--vscode-editor-background));
     color: var(--vscode-input-foreground, var(--vscode-editor-foreground));
 }
@@ -192,7 +201,7 @@ body {
     height: 24px;
     padding: 0 0px;
     border: 1px solid transparent;
-    border-radius: 4px;
+    border-radius: var(--editor-radius-button);
     background: transparent;
     color: var(--vscode-input-foreground, var(--vscode-editor-foreground));
     font: inherit;
@@ -232,7 +241,7 @@ body {
         color-mix(in srgb, var(--vscode-editor-background) 90%, white 10%)
     );
     color: var(--vscode-button-secondaryForeground);
-    border-radius: 4px;
+    border-radius: var(--editor-radius-button);
     padding: 4px 10px;
     font-size: 12px;
     line-height: 18px;
@@ -309,7 +318,7 @@ body {
         var(--vscode-editorInfo-foreground, #3794ff) 45%,
         transparent 55%
     );
-    border-radius: 4px;
+    border-radius: var(--editor-radius-button);
     background: color-mix(
         in srgb,
         var(--vscode-editorInfo-foreground, #3794ff) 10%,
@@ -353,12 +362,12 @@ body {
     gap: 8px;
     padding: 9px 10px;
     border: 1px solid var(--vscode-panel-border);
-    border-radius: 12px;
+    border-radius: var(--editor-radius-panel);
     background: var(
         --vscode-editorWidget-background,
         color-mix(in srgb, var(--vscode-editor-background) 94%, white 6%)
     );
-    box-shadow: 0 14px 32px color-mix(in srgb, black 24%, transparent 76%);
+    box-shadow: var(--editor-shadow-float);
 }
 
 .search-strip__header {
@@ -376,8 +385,8 @@ body {
 }
 
 .search-strip__close-button {
-    position: relative;
-    top: -5px;
+    align-self: flex-start;
+    margin-top: 1px;
     background: transparent;
     border-color: transparent;
     color: var(--vscode-descriptionForeground);
@@ -394,13 +403,16 @@ body {
 .search-strip__tabs {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
+    gap: 1px;
     flex-wrap: nowrap;
     min-width: 0;
-    padding: 2px;
-    border: 1px solid var(--vscode-panel-border);
-    border-radius: 12px;
-    background: color-mix(in srgb, var(--vscode-editor-background) 90%, white 10%);
+    padding: 1px;
+    border-radius: var(--editor-radius-segmented);
+    background: color-mix(
+        in srgb,
+        var(--vscode-editorWidget-border, var(--vscode-panel-border)) 24%,
+        transparent 76%
+    );
 }
 
 .search-strip__tab {
@@ -409,10 +421,10 @@ body {
     justify-content: center;
     gap: 6px;
     min-width: 92px;
-    min-height: 32px;
-    padding: 0 14px;
+    min-height: 30px;
+    padding: 0 13px;
     border: 0;
-    border-radius: 10px;
+    border-radius: var(--editor-radius-field);
     background: transparent;
     color: var(--vscode-editor-foreground);
     font: inherit;
@@ -452,7 +464,7 @@ body {
     align-items: center;
     min-height: 24px;
     padding: 0 8px;
-    border-radius: 999px;
+    border-radius: var(--editor-radius-pill);
     background: color-mix(
         in srgb,
         var(--vscode-editorInfo-foreground, #3794ff) 14%,
@@ -496,7 +508,7 @@ body {
     min-width: 180px;
     padding: 0 6px 0 9px;
     border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
-    border-radius: 10px;
+    border-radius: var(--editor-radius-field);
     background: var(--vscode-input-background, var(--vscode-editor-background));
     color: var(--vscode-input-foreground, var(--vscode-editor-foreground));
 }
@@ -548,7 +560,7 @@ body {
     height: 22px;
     padding: 0;
     border: 1px solid var(--vscode-button-border, transparent);
-    border-radius: 3px;
+    border-radius: var(--editor-radius-button);
     background: transparent;
     color: var(--vscode-descriptionForeground);
     font: inherit;
@@ -621,7 +633,7 @@ body {
     min-height: 28px;
     min-width: 0;
     padding: 0 9px;
-    border-radius: 999px;
+    border-radius: var(--editor-radius-pill);
     color: var(--vscode-descriptionForeground);
     background: color-mix(in srgb, var(--vscode-editor-background) 92%, white 8%);
 }
@@ -1166,7 +1178,7 @@ body {
     gap: 6px;
     min-height: 18px;
     max-width: calc(var(--grid-column-max-width) - 14px);
-    max-height: calc(1.25em * 2);
+    max-height: var(--grid-cell-content-max-height, calc(1.25em * 2));
     overflow: hidden;
 }
 
@@ -1225,8 +1237,8 @@ body {
     white-space: pre-wrap;
     word-break: break-word;
     -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
-    line-clamp: 2;
+    -webkit-line-clamp: var(--grid-cell-line-clamp, 2);
+    line-clamp: var(--grid-cell-line-clamp, 2);
 }
 
 .grid__cell--modified {
@@ -1253,18 +1265,27 @@ body {
 }
 
 .cell__formula {
+    position: absolute;
+    top: 0;
+    right: 0;
     display: inline-flex;
-    flex: 0 0 auto;
-    padding: 0 5px;
+    align-items: center;
+    justify-content: center;
+    min-width: 14px;
+    height: 10px;
+    padding: 0 3px;
     border-radius: 999px;
-    font-size: 10px;
-    line-height: 14px;
+    font-size: 8px;
+    font-weight: 600;
+    line-height: 10px;
     background: color-mix(
         in srgb,
         var(--vscode-editorInfo-foreground, #3794ff) 18%,
         transparent 82%
     );
     color: var(--vscode-editorInfo-foreground, #3794ff);
+    pointer-events: none;
+    z-index: 1;
 }
 
 .row--diff-modified,
@@ -1650,12 +1671,12 @@ body {
     gap: 2px;
     padding: 6px;
     border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border));
-    border-radius: 8px;
+    border-radius: var(--editor-radius-panel);
     background: var(
         --vscode-menu-background,
         color-mix(in srgb, var(--vscode-editor-background) 94%, white 6%)
     );
-    box-shadow: 0 10px 24px color-mix(in srgb, black 28%, transparent 72%);
+    box-shadow: var(--editor-shadow-float);
 }
 
 .tabs__overflowItem {
@@ -1696,12 +1717,12 @@ body {
     gap: 2px;
     padding: 6px;
     border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border));
-    border-radius: 8px;
+    border-radius: var(--editor-radius-panel);
     background: var(
         --vscode-menu-background,
         color-mix(in srgb, var(--vscode-editor-background) 94%, white 6%)
     );
-    box-shadow: 0 10px 24px color-mix(in srgb, black 28%, transparent 72%);
+    box-shadow: var(--editor-shadow-float);
 }
 
 .context-menu__item {
@@ -1711,7 +1732,7 @@ body {
     width: 100%;
     padding: 7px 10px;
     border: 0;
-    border-radius: 6px;
+    border-radius: var(--editor-radius-field);
     background: transparent;
     color: var(--vscode-menu-foreground, var(--vscode-editor-foreground));
     font: inherit;
@@ -1750,12 +1771,12 @@ body {
     gap: 8px;
     padding: 8px;
     border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border));
-    border-radius: 8px;
+    border-radius: var(--editor-radius-panel);
     background: var(
         --vscode-menu-background,
         color-mix(in srgb, var(--vscode-editor-background) 94%, white 6%)
     );
-    box-shadow: 0 10px 24px color-mix(in srgb, black 28%, transparent 72%);
+    box-shadow: var(--editor-shadow-float);
 }
 
 .filter-menu__sorts {
@@ -1773,7 +1794,7 @@ body {
     min-height: 30px;
     padding: 6px 8px;
     border: 1px solid transparent;
-    border-radius: 6px;
+    border-radius: var(--editor-radius-field);
     background: transparent;
     color: var(--vscode-menu-foreground, var(--vscode-editor-foreground));
     font: inherit;
@@ -1806,7 +1827,7 @@ body {
     min-height: 30px;
     padding: 0 8px;
     border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
-    border-radius: 6px;
+    border-radius: var(--editor-radius-field);
     background: var(--vscode-input-background, var(--vscode-editor-background));
 }
 
@@ -1855,7 +1876,7 @@ body {
     gap: 8px;
     min-height: 28px;
     padding: 4px 6px;
-    border-radius: 6px;
+    border-radius: var(--editor-radius-field);
 }
 
 .filter-menu__option:hover {

@@ -158,6 +158,48 @@ suite("Editor panel logic", () => {
         });
     });
 
+    test("search keeps matching inside oversized selection ranges", () => {
+        const workbook = createWorkbook("editor.xlsx", [
+            createSheet("Sheet1", [createCell(6, 2, "2006")], {
+                rowCount: 10,
+                columnCount: 4,
+            }),
+        ]);
+        const sheetEntries = createWorkingSheetEntries(workbook);
+        const state: EditorPanelState = {
+            activeSheetKey: "sheet:0",
+            selectedCell: { rowNumber: 1, columnNumber: 2 },
+        };
+
+        const result = resolveEditorSearchResult(sheetEntries, state, {
+            query: "2006",
+            direction: "next",
+            options: {
+                isRegexp: false,
+                matchCase: false,
+                wholeWord: false,
+            },
+            scope: "selection",
+            selectionRange: {
+                startRow: 1,
+                endRow: 18,
+                startColumn: 2,
+                endColumn: 2,
+            },
+        });
+
+        assert.deepStrictEqual(result, {
+            status: "matched",
+            match: {
+                sheetKey: "sheet:0",
+                rowNumber: 6,
+                columnNumber: 2,
+            },
+            matchCount: 1,
+            matchIndex: 1,
+        });
+    });
+
     test("search matches pending edits before the saved snapshot", () => {
         const workbook = createWorkbook("editor.xlsx", [
             createSheet("Sheet1", [createCell(1, 1, "alpha"), createCell(2, 1, "beta")]),
@@ -255,6 +297,75 @@ suite("Editor panel logic", () => {
             },
             matchCount: 3,
             matchIndex: 3,
+        });
+    });
+
+    test("search prefers displayed value matches over formula-only matches", () => {
+        const workbook = createWorkbook("editor.xlsx", [
+            createSheet("Sheet1", [
+                createCell(2, 1, "gamma", '=TEXT(2006, "0")'),
+                createCell(3, 1, "2006"),
+            ]),
+        ]);
+        const sheetEntries = createWorkingSheetEntries(workbook);
+        const state: EditorPanelState = {
+            activeSheetKey: "sheet:0",
+            selectedCell: { rowNumber: 1, columnNumber: 1 },
+        };
+
+        const result = resolveEditorSearchResult(sheetEntries, state, {
+            query: "2006",
+            direction: "next",
+            options: {
+                isRegexp: false,
+                matchCase: false,
+                wholeWord: false,
+            },
+            scope: "sheet",
+        });
+
+        assert.deepStrictEqual(result, {
+            status: "matched",
+            match: {
+                sheetKey: "sheet:0",
+                rowNumber: 3,
+                columnNumber: 1,
+            },
+            matchCount: 1,
+            matchIndex: 1,
+        });
+    });
+
+    test("search falls back to formula matches when no displayed value matches exist", () => {
+        const workbook = createWorkbook("editor.xlsx", [
+            createSheet("Sheet1", [createCell(2, 1, "gamma", '=TEXT(2006, "0")')]),
+        ]);
+        const sheetEntries = createWorkingSheetEntries(workbook);
+        const state: EditorPanelState = {
+            activeSheetKey: "sheet:0",
+            selectedCell: { rowNumber: 1, columnNumber: 1 },
+        };
+
+        const result = resolveEditorSearchResult(sheetEntries, state, {
+            query: "2006",
+            direction: "next",
+            options: {
+                isRegexp: false,
+                matchCase: false,
+                wholeWord: false,
+            },
+            scope: "sheet",
+        });
+
+        assert.deepStrictEqual(result, {
+            status: "matched",
+            match: {
+                sheetKey: "sheet:0",
+                rowNumber: 2,
+                columnNumber: 1,
+            },
+            matchCount: 1,
+            matchIndex: 1,
         });
     });
 
