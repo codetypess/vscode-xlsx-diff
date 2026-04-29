@@ -84,6 +84,11 @@ import {
     type SearchPanelMode,
     type SearchPanelPosition,
 } from "./editor-panel-ui-shared";
+import {
+    getCellContentAlignmentStyle,
+    getToolbarHorizontalAlignment,
+    getToolbarVerticalAlignment,
+} from "./editor-cell-alignment";
 import { notifyEditorToolbarSync } from "./editor-toolbar-sync";
 import { type ToolbarCellEditTarget } from "./editor-toolbar-input";
 import type {
@@ -924,91 +929,6 @@ function getEffectiveCellAlignment(
         currentModel.activeSheet.rowAlignments?.[String(rowNumber)] ?? null,
         currentModel.activeSheet.cellAlignments?.[cellKey] ?? null
     );
-}
-
-function getCellHorizontalJustifyContent(
-    alignment: CellAlignmentSnapshot | null
-): React.CSSProperties["justifyContent"] {
-    switch (alignment?.horizontal) {
-        case "center":
-        case "centerContinuous":
-            return "center";
-        case "right":
-            return "flex-end";
-        default:
-            return "flex-start";
-    }
-}
-
-function getCellHorizontalTextAlign(
-    alignment: CellAlignmentSnapshot | null
-): React.CSSProperties["textAlign"] {
-    switch (alignment?.horizontal) {
-        case "center":
-        case "centerContinuous":
-            return "center";
-        case "right":
-            return "right";
-        default:
-            return "left";
-    }
-}
-
-function getCellVerticalAlignItems(
-    alignment: CellAlignmentSnapshot | null
-): React.CSSProperties["alignItems"] {
-    switch (alignment?.vertical) {
-        case "center":
-            return "center";
-        case "bottom":
-            return "flex-end";
-        default:
-            return "flex-start";
-    }
-}
-
-function getCellContentAlignmentStyle(
-    rowNumber: number,
-    columnNumber: number,
-    currentModel: EditorRenderModel | null = model
-): React.CSSProperties {
-    const alignment = getEffectiveCellAlignment(rowNumber, columnNumber, currentModel);
-    return {
-        justifyContent: getCellHorizontalJustifyContent(alignment),
-        alignItems: getCellVerticalAlignItems(alignment),
-        textAlign: getCellHorizontalTextAlign(alignment),
-    };
-}
-
-function getToolbarHorizontalAlignment(
-    alignment: CellAlignmentSnapshot | null
-): EditorAlignmentPatch["horizontal"] {
-    switch (alignment?.horizontal) {
-        case "left":
-            return "left";
-        case "center":
-        case "centerContinuous":
-            return "center";
-        case "right":
-            return "right";
-        default:
-            return undefined;
-    }
-}
-
-function getToolbarVerticalAlignment(
-    alignment: CellAlignmentSnapshot | null
-): EditorAlignmentPatch["vertical"] {
-    switch (alignment?.vertical) {
-        case "top":
-            return "top";
-        case "center":
-            return "center";
-        case "bottom":
-            return "bottom";
-        default:
-            return undefined;
-    }
 }
 
 function getActiveToolbarAlignment(
@@ -5174,9 +5094,7 @@ const EditorVirtualCell = React.memo(
             Boolean(activeFilterState?.includedValuesByColumn[String(columnNumber)]) ||
             activeFilterState?.sort?.columnNumber === columnNumber;
         const contentAlignmentStyle = getCellContentAlignmentStyle(
-            rowNumber,
-            columnNumber,
-            currentModel
+            getEffectiveCellAlignment(rowNumber, columnNumber, currentModel)
         );
 
         return (
