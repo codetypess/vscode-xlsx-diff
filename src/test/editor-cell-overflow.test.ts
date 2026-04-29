@@ -16,9 +16,9 @@ suite("Editor cell overflow helpers", () => {
         const metrics = getCellOverflowMetrics({
             value: "hello",
             alignment: null,
-            columnNumber: 1,
             baseColumnWidth: widths.get(1)!,
             visibleColumnNumbers: [1, 2, 3, 4],
+            visibleColumnIndex: 0,
             getColumnWidth: (columnNumber) => widths.get(columnNumber) ?? 0,
             getTrailingCellState: (columnNumber) =>
                 columnNumber === 4
@@ -38,9 +38,9 @@ suite("Editor cell overflow helpers", () => {
             alignment: {
                 wrapText: true,
             },
-            columnNumber: 1,
             baseColumnWidth: 120,
             visibleColumnNumbers: [1, 2],
+            visibleColumnIndex: 0,
             getColumnWidth: () => 120,
             getTrailingCellState: () => ({ value: "", formula: null }),
         });
@@ -49,9 +49,9 @@ suite("Editor cell overflow helpers", () => {
             alignment: {
                 horizontal: "right",
             },
-            columnNumber: 1,
             baseColumnWidth: 120,
             visibleColumnNumbers: [1, 2],
+            visibleColumnIndex: 0,
             getColumnWidth: () => 120,
             getTrailingCellState: () => ({ value: "", formula: null }),
         });
@@ -70,9 +70,9 @@ suite("Editor cell overflow helpers", () => {
         const metrics = getCellOverflowMetrics({
             value: "hello",
             alignment: null,
-            columnNumber: 1,
             baseColumnWidth: 120,
             visibleColumnNumbers: [1, 2, 3],
+            visibleColumnIndex: 0,
             getColumnWidth: () => 120,
             getTrailingCellState: (columnNumber) =>
                 columnNumber === 2

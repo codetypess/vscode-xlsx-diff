@@ -8,7 +8,12 @@ import {
     type SheetViewEdit,
 } from "../../core/fastxlsx/write-cell-value";
 import type { EditorAlignmentPatch } from "../../core/model/alignment";
-import type { EditorPanelState, EditorRenderModel, WorkbookSnapshot } from "../../core/model/types";
+import type {
+    EditorPanelState,
+    EditorRenderModel,
+    SheetSnapshot,
+    WorkbookSnapshot,
+} from "../../core/model/types";
 import { getHtmlLanguageTag } from "../../display-language";
 import { toErrorMessage } from "../../error-message";
 import { getRuntimeMessages } from "../../i18n";
@@ -83,6 +88,21 @@ function normalizeWorkbookColumnWidth(columnWidth: number): number {
 
 function normalizeWorkbookRowHeight(rowHeight: number): number {
     return Math.round(rowHeight * 100) / 100;
+}
+
+interface NumericSheetDimensionPromptOptions {
+    currentValue: number | null;
+    prompt: string;
+    title: string;
+    invalidMessage: string;
+    normalize(value: number): number;
+}
+
+interface NumericSheetDimensionMutationOptions {
+    currentValue: number | null;
+    nextValue: number | null;
+    normalize(value: number): number;
+    updateSheet(sheet: SheetSnapshot, nextValue: number | null): SheetSnapshot;
 }
 
 export class XlsxEditorPanel {
@@ -309,17 +329,17 @@ export class XlsxEditorPanel {
                 escapeWatcherGlobSegment(path.basename(this.workbookUri.fsPath))
             )
         );
-        const scheduleRefresh = (eventType: "change" | "create" | "delete") => {
-            this.scheduleAutoRefresh(eventType);
+        const scheduleRefresh = () => {
+            this.scheduleAutoRefresh();
         };
 
         this.fileWatchers.push(watcher);
-        this.fileWatchers.push(watcher.onDidChange(() => scheduleRefresh("change")));
-        this.fileWatchers.push(watcher.onDidCreate(() => scheduleRefresh("create")));
-        this.fileWatchers.push(watcher.onDidDelete(() => scheduleRefresh("delete")));
+        this.fileWatchers.push(watcher.onDidChange(scheduleRefresh));
+        this.fileWatchers.push(watcher.onDidCreate(scheduleRefresh));
+        this.fileWatchers.push(watcher.onDidDelete(scheduleRefresh));
     }
 
-    private scheduleAutoRefresh(trigger: "change" | "create" | "delete"): void {
+    private scheduleAutoRefresh(): void {
         if (this.isSavingDocument) {
             this.clearAutoRefreshTimer();
             return;
@@ -1036,6 +1056,16 @@ export class XlsxEditorPanel {
         return this.workingSheetEntries.find((entry) => entry.key === this.state.activeSheetKey);
     }
 
+    private getEditableActiveSheetEntry(): WorkingSheetEntry | null {
+        const workbook = this.getWorkingWorkbook();
+        const activeEntry = this.getActiveSheetEntry();
+        if (!workbook || workbook.isReadonly || !activeEntry) {
+            return null;
+        }
+
+        return activeEntry;
+    }
+
     private getNextWorkingSheetKey(): string {
         const key = `sheet:new:${this.nextNewSheetId}`;
         this.nextNewSheetId += 1;
@@ -1052,31 +1082,87 @@ export class XlsxEditorPanel {
     }
 
     private validateColumnWidth(value: string): string | undefined {
+        return this.validateOptionalPositiveNumber(value, getWebviewStrings().invalidColumnWidth);
+    }
+
+    private validateRowHeight(value: string): string | undefined {
+        return this.validateOptionalPositiveNumber(value, getWebviewStrings().invalidRowHeight);
+    }
+
+    private validateOptionalPositiveNumber(
+        value: string,
+        invalidMessage: string
+    ): string | undefined {
         const trimmedValue = value.trim();
         if (trimmedValue.length === 0) {
             return undefined;
         }
 
-        const nextWidth = Number(trimmedValue);
-        if (!Number.isFinite(nextWidth) || nextWidth <= 0) {
-            return getWebviewStrings().invalidColumnWidth;
+        const nextValue = Number(trimmedValue);
+        if (!Number.isFinite(nextValue) || nextValue <= 0) {
+            return invalidMessage;
         }
 
         return undefined;
     }
 
-    private validateRowHeight(value: string): string | undefined {
-        const trimmedValue = value.trim();
-        if (trimmedValue.length === 0) {
+    private isValidSheetDimensionTarget(targetNumber: number, totalCount: number): boolean {
+        return Number.isInteger(targetNumber) && targetNumber >= 1 && targetNumber <= totalCount;
+    }
+
+    private async promptPendingDimensionValue({
+        currentValue,
+        prompt,
+        title,
+        invalidMessage,
+        normalize,
+    }: NumericSheetDimensionPromptOptions): Promise<number | null | undefined> {
+        const nextValue = await vscode.window.showInputBox({
+            prompt,
+            title,
+            value: currentValue === null ? "" : String(currentValue),
+            validateInput: (value) => this.validateOptionalPositiveNumber(value, invalidMessage),
+        });
+        if (nextValue === undefined) {
             return undefined;
         }
 
-        const nextHeight = Number(trimmedValue);
-        if (!Number.isFinite(nextHeight) || nextHeight <= 0) {
-            return getWebviewStrings().invalidRowHeight;
+        const trimmedValue = nextValue.trim();
+        return trimmedValue.length === 0 ? null : normalize(Number(trimmedValue));
+    }
+
+    private async commitPendingActiveSheetDimensionValue({
+        currentValue,
+        nextValue,
+        normalize,
+        updateSheet,
+    }: NumericSheetDimensionMutationOptions): Promise<void> {
+        const normalizedValue = nextValue === null ? null : normalize(nextValue);
+        if (
+            normalizedValue !== null &&
+            (!Number.isFinite(normalizedValue) || normalizedValue <= 0)
+        ) {
+            return;
         }
 
-        return undefined;
+        if (currentValue === normalizedValue) {
+            return;
+        }
+
+        await this.commitStructuralMutation(
+            () => {
+                const entry = this.getActiveSheetEntry();
+                if (!entry) {
+                    return;
+                }
+
+                entry.sheet = updateSheet(entry.sheet, normalizedValue);
+                this.syncPendingSheetViewEdit(entry.key);
+            },
+            {
+                resetPendingHistory: false,
+            }
+        );
     }
 
     private updatePendingRename(sheetKey: string, previousName: string, nextName: string): void {
@@ -1141,176 +1227,104 @@ export class XlsxEditorPanel {
     }
 
     private async promptPendingColumnWidth(columnNumber: number): Promise<void> {
-        const workbook = this.getWorkingWorkbook();
-        const activeEntry = this.getActiveSheetEntry();
+        const activeEntry = this.getEditableActiveSheetEntry();
         if (
-            !workbook ||
-            workbook.isReadonly ||
             !activeEntry ||
-            !Number.isInteger(columnNumber) ||
-            columnNumber < 1 ||
-            columnNumber > activeEntry.sheet.columnCount
+            !this.isValidSheetDimensionTarget(columnNumber, activeEntry.sheet.columnCount)
         ) {
             return;
         }
 
         const strings = getWebviewStrings();
         const currentWidth = activeEntry.sheet.columnWidths?.[columnNumber - 1] ?? null;
-        const nextValue = await vscode.window.showInputBox({
+        const nextWidth = await this.promptPendingDimensionValue({
+            currentValue: currentWidth,
             prompt: strings.setColumnWidthPrompt,
             title: strings.setColumnWidthTitle,
-            value: currentWidth === null ? "" : String(currentWidth),
-            validateInput: (value) => this.validateColumnWidth(value),
+            invalidMessage: strings.invalidColumnWidth,
+            normalize: normalizeWorkbookColumnWidth,
         });
-        if (nextValue === undefined) {
+        if (nextWidth === undefined) {
             return;
         }
 
-        const trimmedValue = nextValue.trim();
-        await this.setPendingColumnWidth(
-            columnNumber,
-            trimmedValue.length === 0 ? null : normalizeWorkbookColumnWidth(Number(trimmedValue))
-        );
+        await this.setPendingColumnWidth(columnNumber, nextWidth);
     }
 
     private async promptPendingRowHeight(rowNumber: number): Promise<void> {
-        const workbook = this.getWorkingWorkbook();
-        const activeEntry = this.getActiveSheetEntry();
+        const activeEntry = this.getEditableActiveSheetEntry();
         if (
-            !workbook ||
-            workbook.isReadonly ||
             !activeEntry ||
-            !Number.isInteger(rowNumber) ||
-            rowNumber < 1 ||
-            rowNumber > activeEntry.sheet.rowCount
+            !this.isValidSheetDimensionTarget(rowNumber, activeEntry.sheet.rowCount)
         ) {
             return;
         }
 
         const strings = getWebviewStrings();
         const currentHeight = activeEntry.sheet.rowHeights?.[String(rowNumber)] ?? null;
-        const nextValue = await vscode.window.showInputBox({
+        const nextHeight = await this.promptPendingDimensionValue({
+            currentValue: currentHeight,
             prompt: strings.setRowHeightPrompt,
             title: strings.setRowHeightTitle,
-            value: currentHeight === null ? "" : String(currentHeight),
-            validateInput: (value) => this.validateRowHeight(value),
+            invalidMessage: strings.invalidRowHeight,
+            normalize: normalizeWorkbookRowHeight,
         });
-        if (nextValue === undefined) {
+        if (nextHeight === undefined) {
             return;
         }
 
-        const trimmedValue = nextValue.trim();
-        await this.setPendingRowHeight(
-            rowNumber,
-            trimmedValue.length === 0 ? null : normalizeWorkbookRowHeight(Number(trimmedValue))
-        );
+        await this.setPendingRowHeight(rowNumber, nextHeight);
     }
 
     private async setPendingColumnWidth(
         columnNumber: number,
         nextWidth: number | null
     ): Promise<void> {
-        const workbook = this.getWorkingWorkbook();
-        const activeEntry = this.getActiveSheetEntry();
+        const activeEntry = this.getEditableActiveSheetEntry();
         if (
-            !workbook ||
-            workbook.isReadonly ||
             !activeEntry ||
-            !Number.isInteger(columnNumber) ||
-            columnNumber < 1 ||
-            columnNumber > activeEntry.sheet.columnCount
+            !this.isValidSheetDimensionTarget(columnNumber, activeEntry.sheet.columnCount)
         ) {
             return;
         }
 
-        const normalizedWidth = nextWidth === null ? null : normalizeWorkbookColumnWidth(nextWidth);
-        if (
-            normalizedWidth !== null &&
-            (!Number.isFinite(normalizedWidth) || normalizedWidth <= 0)
-        ) {
-            return;
-        }
-
-        const currentWidth = activeEntry.sheet.columnWidths?.[columnNumber - 1] ?? null;
-        if (currentWidth === normalizedWidth) {
-            return;
-        }
-
-        await this.commitStructuralMutation(
-            () => {
-                const entry = this.getActiveSheetEntry();
-                if (!entry) {
-                    return;
-                }
-
-                entry.sheet = {
-                    ...entry.sheet,
-                    columnWidths: setSheetColumnWidthSnapshot(
-                        entry.sheet.columnWidths,
-                        columnNumber,
-                        normalizedWidth
-                    ),
-                };
-                this.syncPendingSheetViewEdit(entry.key);
-            },
-            {
-                resetPendingHistory: false,
-            }
-        );
+        await this.commitPendingActiveSheetDimensionValue({
+            currentValue: activeEntry.sheet.columnWidths?.[columnNumber - 1] ?? null,
+            nextValue: nextWidth,
+            normalize: normalizeWorkbookColumnWidth,
+            updateSheet: (sheet, normalizedWidth) => ({
+                ...sheet,
+                columnWidths: setSheetColumnWidthSnapshot(
+                    sheet.columnWidths,
+                    columnNumber,
+                    normalizedWidth
+                ),
+            }),
+        });
     }
 
-    private async setPendingRowHeight(
-        rowNumber: number,
-        nextHeight: number | null
-    ): Promise<void> {
-        const workbook = this.getWorkingWorkbook();
-        const activeEntry = this.getActiveSheetEntry();
+    private async setPendingRowHeight(rowNumber: number, nextHeight: number | null): Promise<void> {
+        const activeEntry = this.getEditableActiveSheetEntry();
         if (
-            !workbook ||
-            workbook.isReadonly ||
             !activeEntry ||
-            !Number.isInteger(rowNumber) ||
-            rowNumber < 1 ||
-            rowNumber > activeEntry.sheet.rowCount
+            !this.isValidSheetDimensionTarget(rowNumber, activeEntry.sheet.rowCount)
         ) {
             return;
         }
 
-        const normalizedHeight =
-            nextHeight === null ? null : normalizeWorkbookRowHeight(nextHeight);
-        if (
-            normalizedHeight !== null &&
-            (!Number.isFinite(normalizedHeight) || normalizedHeight <= 0)
-        ) {
-            return;
-        }
-
-        const currentHeight = activeEntry.sheet.rowHeights?.[String(rowNumber)] ?? null;
-        if (currentHeight === normalizedHeight) {
-            return;
-        }
-
-        await this.commitStructuralMutation(
-            () => {
-                const entry = this.getActiveSheetEntry();
-                if (!entry) {
-                    return;
-                }
-
-                entry.sheet = {
-                    ...entry.sheet,
-                    rowHeights: setSheetRowHeightSnapshot(
-                        entry.sheet.rowHeights,
-                        rowNumber,
-                        normalizedHeight
-                    ),
-                };
-                this.syncPendingSheetViewEdit(entry.key);
-            },
-            {
-                resetPendingHistory: false,
-            }
-        );
+        await this.commitPendingActiveSheetDimensionValue({
+            currentValue: activeEntry.sheet.rowHeights?.[String(rowNumber)] ?? null,
+            nextValue: nextHeight,
+            normalize: normalizeWorkbookRowHeight,
+            updateSheet: (sheet, normalizedHeight) => ({
+                ...sheet,
+                rowHeights: setSheetRowHeightSnapshot(
+                    sheet.rowHeights,
+                    rowNumber,
+                    normalizedHeight
+                ),
+            }),
+        });
     }
 
     private async setPendingAlignment(

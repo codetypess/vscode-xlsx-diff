@@ -12,12 +12,25 @@ export interface CellContentAlignmentStyle {
     maxHeight: "100%";
 }
 
-export function getCellHorizontalJustifyContent(
+function getNormalizedCellHorizontalDisplayAlignment(
     alignment: CellAlignmentSnapshot | null
-): CellContentAlignmentStyle["justifyContent"] {
+): CellTextAlign {
     switch (alignment?.horizontal) {
         case "center":
         case "centerContinuous":
+            return "center";
+        case "right":
+            return "right";
+        default:
+            return "left";
+    }
+}
+
+export function getCellHorizontalJustifyContent(
+    alignment: CellAlignmentSnapshot | null
+): CellContentAlignmentStyle["justifyContent"] {
+    switch (getNormalizedCellHorizontalDisplayAlignment(alignment)) {
+        case "center":
             return "center";
         case "right":
             return "flex-end";
@@ -29,15 +42,7 @@ export function getCellHorizontalJustifyContent(
 export function getCellHorizontalTextAlign(
     alignment: CellAlignmentSnapshot | null
 ): CellContentAlignmentStyle["textAlign"] {
-    switch (alignment?.horizontal) {
-        case "center":
-        case "centerContinuous":
-            return "center";
-        case "right":
-            return "right";
-        default:
-            return "left";
-    }
+    return getNormalizedCellHorizontalDisplayAlignment(alignment);
 }
 
 export function getCellContentAlignmentStyle(

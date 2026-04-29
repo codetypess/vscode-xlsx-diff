@@ -44,17 +44,17 @@ export function hasBlockingOverflowContent(
 export function getCellOverflowMetrics({
     value,
     alignment,
-    columnNumber,
     baseColumnWidth,
     visibleColumnNumbers,
+    visibleColumnIndex,
     getColumnWidth,
     getTrailingCellState,
 }: {
     value: string;
     alignment: CellAlignmentSnapshot | null | undefined;
-    columnNumber: number;
     baseColumnWidth: number;
     visibleColumnNumbers: readonly number[];
+    visibleColumnIndex: number;
     getColumnWidth(columnNumber: number): number;
     getTrailingCellState(columnNumber: number): EditorCellOverflowNeighborState | null;
 }): EditorCellOverflowMetrics {
@@ -66,8 +66,11 @@ export function getCellOverflowMetrics({
         };
     }
 
-    const startIndex = visibleColumnNumbers.indexOf(columnNumber);
-    if (startIndex < 0) {
+    if (
+        !Number.isInteger(visibleColumnIndex) ||
+        visibleColumnIndex < 0 ||
+        visibleColumnIndex >= visibleColumnNumbers.length
+    ) {
         return {
             contentWidthPx,
             spillsIntoNextCells: false,
@@ -76,7 +79,7 @@ export function getCellOverflowMetrics({
 
     let nextContentWidthPx = contentWidthPx;
     let spillsIntoNextCells = false;
-    for (let index = startIndex + 1; index < visibleColumnNumbers.length; index += 1) {
+    for (let index = visibleColumnIndex + 1; index < visibleColumnNumbers.length; index += 1) {
         const nextColumnNumber = visibleColumnNumbers[index];
         const previousColumnNumber = visibleColumnNumbers[index - 1];
         if (

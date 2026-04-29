@@ -41,9 +41,7 @@ import {
     measureMaximumDigitWidth,
     type PixelColumnLayout,
 } from "../column-layout";
-import {
-    type PixelRowLayout,
-} from "../row-layout";
+import { type PixelRowLayout } from "../row-layout";
 import {
     isSelectionFocusCell,
     shouldResetInvisibleSelectionAnchor,
@@ -325,12 +323,10 @@ let filterMenuState: FilterMenuState | null = null;
 const IS_DEBUG_MODE = Boolean(
     (globalThis as Record<string, unknown>).__XLSX_EDITOR_DEBUG__ === true
 );
-let latestVirtualGridCache:
-    | {
-          model: EditorRenderModel;
-          metrics: EditorVirtualGridMetrics;
-      }
-    | null = null;
+let latestVirtualGridCache: {
+    model: EditorRenderModel;
+    metrics: EditorVirtualGridMetrics;
+} | null = null;
 
 interface DebugRenderStats {
     renderedRowCount: number;
@@ -5342,7 +5338,9 @@ function EditorVirtualGrid({
     const createGridCellItem = (
         keyPrefix: "body" | "left" | "top" | "corner",
         rowNumber: number,
-        columnNumber: number
+        columnNumber: number,
+        visibleColumnNumbers: readonly number[],
+        visibleColumnIndex: number
     ): React.ReactElement => {
         const top = getEditorGridTopForActualRow(metrics, rowNumber) ?? 0;
         const left = getEditorGridLeft(metrics.rowHeaderWidth, metrics.columnLayout, columnNumber);
@@ -5362,12 +5360,9 @@ function EditorVirtualGrid({
         const overflowMetrics = getCellOverflowMetrics({
             value: displayedValue,
             alignment: getEffectiveCellAlignment(rowNumber, columnNumber, currentModel),
-            columnNumber,
             baseColumnWidth: width,
-            visibleColumnNumbers:
-                keyPrefix === "body" || keyPrefix === "top"
-                    ? metrics.columnNumbers
-                    : metrics.frozenColumnNumbers,
+            visibleColumnNumbers,
+            visibleColumnIndex,
             getColumnWidth: (nextColumnNumber) =>
                 getEditorColumnWidth(metrics.columnLayout, nextColumnNumber),
             getTrailingCellState: (nextColumnNumber) => {
@@ -5377,7 +5372,7 @@ function EditorVirtualGrid({
                 const nextCell = getCellSnapshot(rowNumber, nextColumnNumber, currentModel);
                 return {
                     value: nextPendingEdit?.value ?? nextCell?.displayValue ?? "",
-                    formula: nextPendingEdit ? null : nextCell?.formula ?? null,
+                    formula: nextPendingEdit ? null : (nextCell?.formula ?? null),
                     blocksOverflow: isEditorFilterHeaderCell(
                         activeFilterState,
                         rowNumber,
@@ -5490,12 +5485,28 @@ function EditorVirtualGrid({
             />
         );
 
-        for (const columnNumber of metrics.columnNumbers) {
-            bodyItems.push(createGridCellItem("body", rowNumber, columnNumber));
+        for (const [visibleColumnIndex, columnNumber] of metrics.columnNumbers.entries()) {
+            bodyItems.push(
+                createGridCellItem(
+                    "body",
+                    rowNumber,
+                    columnNumber,
+                    metrics.columnNumbers,
+                    visibleColumnIndex
+                )
+            );
         }
 
-        for (const columnNumber of metrics.frozenColumnNumbers) {
-            leftItems.push(createGridCellItem("left", rowNumber, columnNumber));
+        for (const [visibleColumnIndex, columnNumber] of metrics.frozenColumnNumbers.entries()) {
+            leftItems.push(
+                createGridCellItem(
+                    "left",
+                    rowNumber,
+                    columnNumber,
+                    metrics.frozenColumnNumbers,
+                    visibleColumnIndex
+                )
+            );
         }
     }
 
@@ -5514,12 +5525,28 @@ function EditorVirtualGrid({
             />
         );
 
-        for (const columnNumber of metrics.columnNumbers) {
-            topItems.push(createGridCellItem("top", rowNumber, columnNumber));
+        for (const [visibleColumnIndex, columnNumber] of metrics.columnNumbers.entries()) {
+            topItems.push(
+                createGridCellItem(
+                    "top",
+                    rowNumber,
+                    columnNumber,
+                    metrics.columnNumbers,
+                    visibleColumnIndex
+                )
+            );
         }
 
-        for (const columnNumber of metrics.frozenColumnNumbers) {
-            cornerItems.push(createGridCellItem("corner", rowNumber, columnNumber));
+        for (const [visibleColumnIndex, columnNumber] of metrics.frozenColumnNumbers.entries()) {
+            cornerItems.push(
+                createGridCellItem(
+                    "corner",
+                    rowNumber,
+                    columnNumber,
+                    metrics.frozenColumnNumbers,
+                    visibleColumnIndex
+                )
+            );
         }
     }
 
@@ -5581,8 +5608,7 @@ function EditorVirtualGrid({
 
         setDebugRenderStats({
             renderedRowCount: metrics.frozenRowNumbers.length + metrics.rowNumbers.length,
-            renderedColumnCount:
-                metrics.frozenColumnNumbers.length + metrics.columnNumbers.length,
+            renderedColumnCount: metrics.frozenColumnNumbers.length + metrics.columnNumbers.length,
         });
     }, [
         metrics.frozenColumnNumbers.length,
