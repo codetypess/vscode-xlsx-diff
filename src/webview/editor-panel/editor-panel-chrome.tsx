@@ -6,6 +6,7 @@ import {
 } from "react-icons/md";
 import type { EditorAlignmentPatch } from "../../core/model/alignment";
 import type { EditorRenderModel, EditorSheetTabView } from "../../core/model/types";
+import { formatI18nMessage } from "../../i18n/catalog";
 import { getMaxVisibleSheetTabsForWidth, partitionSheetTabs } from "../editor-sheet-tabs";
 import type { EditorPanelStrings, SearchOptions } from "./editor-panel-types";
 import type { SelectionRange as CellRange } from "./editor-selection-range";
@@ -456,6 +457,7 @@ export function EditorToolbar({
     canUndo,
     canRedo,
     viewLocked,
+    debugRenderStats,
     getPositionInputValue,
     getCellValueInputValue,
     getCellValueInputPlaceholder,
@@ -485,6 +487,10 @@ export function EditorToolbar({
     canUndo: boolean;
     canRedo: boolean;
     viewLocked: boolean;
+    debugRenderStats: {
+        renderedRowCount: number;
+        renderedColumnCount: number;
+    } | null;
     getPositionInputValue(): string;
     getCellValueInputValue(): string;
     getCellValueInputPlaceholder(): string;
@@ -516,6 +522,18 @@ export function EditorToolbar({
     const selectedCellEditable = currentModel.canEdit && canEditSelectedCellValue();
     const activeCellEditTarget = getActiveCellEditTarget();
     const activeCellEditTargetKey = getToolbarCellEditTargetKey(activeCellEditTarget);
+    const debugRenderSummary = debugRenderStats
+        ? formatI18nMessage(strings.debugRenderSummary, {
+              rowCount: debugRenderStats.renderedRowCount,
+              columnCount: debugRenderStats.renderedColumnCount,
+          })
+        : null;
+    const debugRenderTooltip = debugRenderStats
+        ? formatI18nMessage(strings.debugRenderTooltip, {
+              rowCount: debugRenderStats.renderedRowCount,
+              columnCount: debugRenderStats.renderedColumnCount,
+          })
+        : null;
     const [positionInputValue, setPositionInputValue] = React.useState(activeCellAddress);
     const [cellValueInputValue, setCellValueInputValue] = React.useState(selectedCellValue);
     const [isEditingPosition, setIsEditingPosition] = React.useState(false);
@@ -706,6 +724,11 @@ export function EditorToolbar({
                 </label>
             </div>
             <div className="toolbar__group">
+                {debugRenderStats ? (
+                    <div className="toolbar__debug-stats" title={debugRenderTooltip ?? undefined}>
+                        <span className="toolbar__debug-statsValue">{debugRenderSummary}</span>
+                    </div>
+                ) : null}
                 <ToolbarButton
                     actionLabel={filterActionLabel}
                     disabled={!isFilterButtonEnabled}

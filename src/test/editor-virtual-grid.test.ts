@@ -45,10 +45,10 @@ suite("Editor virtual grid helpers", () => {
             viewportHeight: 600,
         });
 
-        assert.strictEqual(window.startRowNumber, 63);
-        assert.strictEqual(window.rowNumbers[0], 63);
+        assert.strictEqual(window.startRowNumber, 98);
+        assert.strictEqual(window.rowNumbers[0], 98);
         assert.ok(window.endRowNumber > window.startRowNumber);
-        assert.strictEqual(window.topSpacerHeight, 60 * EDITOR_VIRTUAL_ROW_HEIGHT);
+        assert.strictEqual(window.topSpacerHeight, 95 * EDITOR_VIRTUAL_ROW_HEIGHT);
     });
 
     test("creates a scrollable column window after frozen columns", () => {
@@ -62,8 +62,8 @@ suite("Editor virtual grid helpers", () => {
             rowHeaderWidth: 56,
         });
 
-        assert.strictEqual(window.startColumnNumber, 14);
-        assert.strictEqual(window.columnNumbers[0], 14);
+        assert.strictEqual(window.startColumnNumber, 19);
+        assert.strictEqual(window.columnNumbers[0], 19);
         assert.ok(window.trailingSpacerWidth > 0);
     });
 

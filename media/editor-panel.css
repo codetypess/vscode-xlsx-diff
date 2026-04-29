@@ -299,6 +299,34 @@ body {
     cursor: default;
 }
 
+.toolbar__debug-stats {
+    display: inline-flex;
+    align-items: center;
+    min-height: 28px;
+    padding: 4px 8px;
+    border: 1px dashed color-mix(
+        in srgb,
+        var(--vscode-editorInfo-foreground, #3794ff) 45%,
+        transparent 55%
+    );
+    border-radius: 4px;
+    background: color-mix(
+        in srgb,
+        var(--vscode-editorInfo-foreground, #3794ff) 10%,
+        transparent 90%
+    );
+    color: var(--vscode-descriptionForeground);
+    font-size: 11px;
+    line-height: 1;
+    white-space: nowrap;
+}
+
+.toolbar__debug-statsValue {
+    color: var(--vscode-editor-foreground);
+    font-size: 12px;
+    font-weight: 700;
+}
+
 @keyframes toolbar-button-icon-spin {
     to {
         transform: rotate(360deg);
@@ -1105,7 +1133,7 @@ body {
 }
 
 .grid__cell--filter-header .grid__cell-content {
-    padding-right: 22px;
+    padding-right: 17px;
 }
 
 .grid__cell--locked {
@@ -1150,18 +1178,22 @@ body {
 
 .grid__cell-filterButton {
     position: absolute;
-    top: 4px;
-    right: 4px;
-    width: 18px;
-    height: 18px;
+    right: 2px;
+    bottom: 2px;
+    width: 13px;
+    height: 13px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 78%, transparent 22%);
-    border-radius: 3px;
+    border-radius: 2px;
     background: color-mix(in srgb, var(--vscode-editor-background) 92%, white 8%);
     color: var(--vscode-descriptionForeground);
     cursor: pointer;
+}
+
+.grid__cell-filterButton .codicon {
+    font-size: 9px;
 }
 
 .grid__cell-filterButton:hover,

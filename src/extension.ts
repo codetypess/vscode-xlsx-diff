@@ -11,9 +11,11 @@ import {
 import { affectsDisplayLanguage } from "./display-language";
 import { XlsxDiffUriHandler } from "./git/uri-handler";
 import { registerScmWorkbookDiffInterceptor } from "./scm/scm-diff-interceptor";
-import { XlsxCustomEditorProvider } from "./webview/editor-panel";
+import { XlsxCustomEditorProvider, XlsxEditorPanel } from "./webview/editor-panel";
 
 export function activate(context: vscode.ExtensionContext) {
+    XlsxEditorPanel.setDebugMode(context.extensionMode === vscode.ExtensionMode.Development);
+
     context.subscriptions.push(
         XlsxCustomEditorProvider.register(context),
         vscode.window.registerUriHandler(new XlsxDiffUriHandler(context.extensionUri)),

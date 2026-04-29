@@ -320,12 +320,55 @@ let searchSelectionRange: CellRange | null = null;
 let editorMaximumDigitWidth = DEFAULT_MAXIMUM_DIGIT_WIDTH_PX;
 const sheetFilterStates = new Map<string, EditorSheetFilterState | null>();
 let filterMenuState: FilterMenuState | null = null;
+const IS_DEBUG_MODE = Boolean(
+    (globalThis as Record<string, unknown>).__XLSX_EDITOR_DEBUG__ === true
+);
 let latestVirtualGridCache:
     | {
           model: EditorRenderModel;
           metrics: EditorVirtualGridMetrics;
       }
     | null = null;
+
+interface DebugRenderStats {
+    renderedRowCount: number;
+    renderedColumnCount: number;
+}
+
+let debugRenderStats: DebugRenderStats | null = null;
+const debugRenderStatsListeners = new Set<() => void>();
+
+function getDebugRenderStatsSnapshot(): DebugRenderStats | null {
+    return debugRenderStats;
+}
+
+function subscribeDebugRenderStats(listener: () => void): () => void {
+    debugRenderStatsListeners.add(listener);
+    return () => {
+        debugRenderStatsListeners.delete(listener);
+    };
+}
+
+function areDebugRenderStatsEqual(
+    left: DebugRenderStats | null,
+    right: DebugRenderStats | null
+): boolean {
+    return (
+        left?.renderedRowCount === right?.renderedRowCount &&
+        left?.renderedColumnCount === right?.renderedColumnCount
+    );
+}
+
+function setDebugRenderStats(nextStats: DebugRenderStats | null): void {
+    if (areDebugRenderStatsEqual(debugRenderStats, nextStats)) {
+        return;
+    }
+
+    debugRenderStats = nextStats;
+    for (const listener of debugRenderStatsListeners) {
+        listener();
+    }
+}
 
 function normalizeWorkbookColumnWidth(columnWidth: number): number {
     return Math.round(columnWidth * 256) / 256;
@@ -5435,6 +5478,33 @@ function EditorVirtualGrid({
         revealSelectedCell();
     }, [view.revision, view.revealSelection]);
 
+    React.useEffect(() => {
+        if (!IS_DEBUG_MODE) {
+            return;
+        }
+
+        setDebugRenderStats({
+            renderedRowCount: metrics.frozenRowNumbers.length + metrics.rowNumbers.length,
+            renderedColumnCount:
+                metrics.frozenColumnNumbers.length + metrics.columnNumbers.length,
+        });
+    }, [
+        metrics.frozenColumnNumbers.length,
+        metrics.frozenRowNumbers.length,
+        metrics.columnNumbers.length,
+        metrics.rowNumbers.length,
+    ]);
+
+    React.useEffect(() => {
+        if (!IS_DEBUG_MODE) {
+            return;
+        }
+
+        return () => {
+            setDebugRenderStats(null);
+        };
+    }, []);
+
     return (
         <div className="pane__table editor-grid-shell">
             <div
@@ -5600,6 +5670,11 @@ function getActiveToolbarCellEditTarget(
 function EditorApp({ view }: { view: Extract<ViewState, { kind: "app" }> }): React.ReactElement {
     const currentModel = view.model;
     const maximumDigitWidth = useMeasuredMaximumDigitWidth(getEditorAppElement());
+    const currentDebugRenderStats = React.useSyncExternalStore(
+        subscribeDebugRenderStats,
+        getDebugRenderStatsSnapshot,
+        getDebugRenderStatsSnapshot
+    );
     editorMaximumDigitWidth = maximumDigitWidth;
     const pendingSummary = getPendingSummary(currentModel.activeSheet.key);
     const activeFilterState = getActiveSheetFilterState(currentModel);
@@ -5639,6 +5714,7 @@ function EditorApp({ view }: { view: Extract<ViewState, { kind: "app" }> }): Rea
                 canUndo={canUndo}
                 canRedo={canRedo}
                 viewLocked={viewLocked}
+                debugRenderStats={IS_DEBUG_MODE ? currentDebugRenderStats : null}
                 getPositionInputValue={getPositionInputValue}
                 getCellValueInputValue={getCellValueInputValue}
                 getCellValueInputPlaceholder={getCellValueInputPlaceholder}

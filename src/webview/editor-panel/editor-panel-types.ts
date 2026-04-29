@@ -168,6 +168,8 @@ export interface EditorPanelStrings {
     replaceCount: string;
     replaceNoEditableMatches: string;
     replaceNoChanges: string;
+    debugRenderSummary: string;
+    debugRenderTooltip: string;
     searchRegex: string;
     searchMatchCase: string;
     searchWholeWord: string;

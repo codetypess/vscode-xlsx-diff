@@ -90,6 +90,7 @@ export class XlsxEditorPanel {
     private static nextPanelId = 1;
     private static readonly LOCAL_SAVE_AUTO_REFRESH_DELAY_MS = 3000;
     private static readonly LOCAL_SAVE_IGNORED_REFRESH_EVENTS = 4;
+    private static isDebugMode = false;
 
     private readonly panel: vscode.WebviewPanel;
     private readonly extensionUri: vscode.Uri;
@@ -201,6 +202,10 @@ export class XlsxEditorPanel {
                 .filter((panel) => panel.document === document)
                 .map((panel) => panel.startDocumentSave())
         );
+    }
+
+    public static setDebugMode(isDebugMode: boolean): void {
+        XlsxEditorPanel.isDebugMode = isDebugMode;
     }
 
     public static async confirmDocumentSave(document: XlsxEditorDocument): Promise<boolean> {
@@ -441,7 +446,7 @@ export class XlsxEditorPanel {
 	<div id="app" class="loading-shell">
 		<div class="loading-shell__message">${webviewStrings.loading}</div>
 	</div>
-	<script nonce="${nonce}">window.__XLSX_EDITOR_STRINGS__ = ${strings};</script>
+	<script nonce="${nonce}">window.__XLSX_EDITOR_STRINGS__ = ${strings}; window.__XLSX_EDITOR_DEBUG__ = ${JSON.stringify(XlsxEditorPanel.isDebugMode)};</script>
 	<script nonce="${nonce}" src="${scriptUri}"></script>
 </body>
 </html>`;

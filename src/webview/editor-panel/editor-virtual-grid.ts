@@ -27,6 +27,10 @@ export const EDITOR_VIRTUAL_HEADER_HEIGHT = 28;
 export const EDITOR_VIRTUAL_COLUMN_OVERSCAN = 8;
 export const EDITOR_EXTRA_PADDING_ROWS = 8;
 export const EDITOR_EXTRA_PADDING_COLUMNS = 3;
+const EDITOR_MIN_WINDOW_OVERSCAN = 4;
+const EDITOR_MIN_COLUMN_OVERSCAN = 2;
+const EDITOR_ROW_OVERSCAN_VIEWPORT_DIVISOR = 4;
+const EDITOR_COLUMN_OVERSCAN_VIEWPORT_DIVISOR = 3;
 
 function clamp(value: number, min: number, max: number): number {
     return Math.min(Math.max(value, min), max);
@@ -266,7 +270,7 @@ export function createEditorRowWindow({
     frozenRowCount,
     scrollTop,
     viewportHeight,
-    overscan = DEFAULT_EDITOR_WINDOW_OVERSCAN,
+    overscan,
 }: {
     rowLayout: PixelRowLayout;
     totalRows: number;
@@ -297,11 +301,23 @@ export function createEditorRowWindow({
         0,
         viewportHeight - EDITOR_VIRTUAL_HEADER_HEIGHT - frozenRowsHeight
     );
+    const overscanRowCount =
+        overscan ??
+        clamp(
+            Math.ceil(
+                getMinimumVisibleEditorRowCount(
+                    scrollableViewportHeight + EDITOR_VIRTUAL_HEADER_HEIGHT,
+                    rowLayout
+                ) / EDITOR_ROW_OVERSCAN_VIEWPORT_DIVISOR
+            ),
+            EDITOR_MIN_WINDOW_OVERSCAN,
+            DEFAULT_EDITOR_WINDOW_OVERSCAN
+        );
     const rowWindow = getPixelRowWindow(
         rowLayout,
         frozenRowsHeight + scrollTop,
         scrollableViewportHeight,
-        overscan
+        overscanRowCount
     );
     const startIndex = Math.max(frozenRowCount, rowWindow.startIndex);
     const endIndex = Math.max(startIndex, rowWindow.endIndex);
@@ -330,7 +346,7 @@ export function createEditorColumnWindow({
     scrollLeft,
     viewportWidth,
     rowHeaderWidth,
-    overscan = EDITOR_VIRTUAL_COLUMN_OVERSCAN,
+    overscan,
 }: {
     columnLayout: PixelColumnLayout;
     frozenColumnCount: number;
@@ -362,6 +378,19 @@ export function createEditorColumnWindow({
         EDITOR_VIRTUAL_COLUMN_WIDTH,
         viewportWidth - stickyWidth
     );
+    const overscanColumnCount =
+        overscan ??
+        clamp(
+            Math.ceil(
+                getMinimumVisibleEditorColumnCount({
+                    viewportWidth: scrollableViewportWidth,
+                    rowHeaderWidth: 0,
+                    columnLayout,
+                }) / EDITOR_COLUMN_OVERSCAN_VIEWPORT_DIVISOR
+            ),
+            EDITOR_MIN_COLUMN_OVERSCAN,
+            EDITOR_VIRTUAL_COLUMN_OVERSCAN
+        );
     const startVisibleIndex = Math.max(
         frozenColumnCount,
         findColumnIndexForOffset(columnLayout, frozenColumnsWidth + scrollLeft)
@@ -373,8 +402,11 @@ export function createEditorColumnWindow({
             frozenColumnsWidth + Math.max(scrollLeft, scrollLeft + scrollableViewportWidth - 1)
         )
     );
-    const startIndex = Math.max(frozenColumnCount, startVisibleIndex - overscan);
-    const endIndex = Math.min(columnLayout.totalColumnCount, endVisibleIndex + overscan + 1);
+    const startIndex = Math.max(frozenColumnCount, startVisibleIndex - overscanColumnCount);
+    const endIndex = Math.min(
+        columnLayout.totalColumnCount,
+        endVisibleIndex + overscanColumnCount + 1
+    );
     const columnNumbers = Array.from(
         { length: Math.max(0, endIndex - startIndex) },
         (_, index) => startIndex + index + 1
