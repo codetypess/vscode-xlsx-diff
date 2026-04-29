@@ -45,7 +45,12 @@ export function getCellContentAlignmentStyle(
 ): CellContentAlignmentStyle {
     return {
         justifyContent: getCellHorizontalJustifyContent(alignment),
-        alignItems: "flex-start",
+        alignItems:
+            alignment?.vertical === "center"
+                ? "center"
+                : alignment?.vertical === "bottom"
+                  ? "flex-end"
+                  : "flex-start",
         textAlign: getCellHorizontalTextAlign(alignment),
         height: "100%",
         maxHeight: "100%",
@@ -63,6 +68,21 @@ export function getToolbarHorizontalAlignment(
             return "center";
         case "right":
             return "right";
+        default:
+            return undefined;
+    }
+}
+
+export function getToolbarVerticalAlignment(
+    alignment: CellAlignmentSnapshot | null
+): "top" | "center" | "bottom" | undefined {
+    switch (alignment?.vertical) {
+        case "top":
+            return "top";
+        case "center":
+            return "center";
+        case "bottom":
+            return "bottom";
         default:
             return undefined;
     }

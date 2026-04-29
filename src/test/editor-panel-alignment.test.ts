@@ -225,16 +225,16 @@ suite("Editor panel alignment", () => {
                 endColumn: 4,
             },
             {
-                horizontal: "center",
+                vertical: "center",
             }
         );
 
         assert.deepStrictEqual(activeEntry.sheet.rowAlignments, {
             "2": {
-                horizontal: "center",
+                vertical: "center",
             },
             "3": {
-                horizontal: "center",
+                vertical: "center",
             },
         });
         assert.deepStrictEqual(committedOptions, { resetPendingHistory: false });

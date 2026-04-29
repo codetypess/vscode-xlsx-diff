@@ -1176,6 +1176,17 @@ body {
     overflow: hidden;
 }
 
+.editor-grid__item.grid__cell--overflow-spill {
+    z-index: 1;
+}
+
+.editor-grid__item.grid__cell--overflow-spill .grid__cell-content {
+    width: var(--grid-cell-display-max-width);
+    max-width: var(--grid-cell-display-max-width);
+    overflow: visible;
+    pointer-events: none;
+}
+
 .grid__cell-filterButton {
     position: absolute;
     right: 2px;

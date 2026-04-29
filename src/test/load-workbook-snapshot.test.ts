@@ -34,7 +34,7 @@ suite("Load workbook snapshot", () => {
         assert.ok(["Empty workbook", "空工作簿"].includes(snapshot.modifiedTimeLabel ?? ""));
     });
 
-    test("keeps explicit widths sparse and ignores row heights when loading workbook snapshots", async () => {
+    test("keeps explicit widths and row heights sparse when loading workbook snapshots", async () => {
         const tempDirectory = await mkdtemp(path.join(os.tmpdir(), "xlsx-diff-load-"));
 
         try {
@@ -53,7 +53,7 @@ suite("Load workbook snapshot", () => {
             assert.strictEqual(activeSheet?.columnCount, 10);
             assert.strictEqual(activeSheet?.rowCount, 10);
             assert.deepStrictEqual(activeSheet?.columnWidths, [null, 15.125]);
-            assert.strictEqual(activeSheet?.rowHeights, undefined);
+            assert.deepStrictEqual(activeSheet?.rowHeights, { "3": 18.13 });
         } finally {
             await rm(tempDirectory, { recursive: true, force: true });
         }

@@ -41,6 +41,7 @@ interface SheetReader {
     getStyleId(rowNumber: number, columnNumber: number): number | null;
     getColumnStyleId(columnNumber: number): number | null;
     getColumnWidth(columnNumber: number): number | null;
+    getRowHeight(rowNumber: number): number | null;
     getRowStyleId(rowNumber: number): number | null;
     getMergedRanges(): string[];
     getFreezePane(): SheetFreezePaneSnapshot | null;
@@ -160,6 +161,23 @@ function createSparseColumnWidthsSnapshot(sheet: SheetReader): Array<number | nu
     return columnWidths;
 }
 
+function createSparseRowHeightsSnapshot(
+    sheet: SheetReader
+): Record<string, number | null> | undefined {
+    const rowHeights: Record<string, number | null> = {};
+
+    for (let rowNumber = 1; rowNumber <= sheet.rowCount; rowNumber += 1) {
+        const rowHeight = sheet.getRowHeight(rowNumber);
+        if (rowHeight === null) {
+            continue;
+        }
+
+        rowHeights[String(rowNumber)] = rowHeight;
+    }
+
+    return Object.keys(rowHeights).length > 0 ? rowHeights : undefined;
+}
+
 function loadSheetSnapshot(workbook: WorkbookReader, sheetName: string): SheetSnapshot {
     const sheet = workbook.getSheet(sheetName);
     const cells: Record<string, CellSnapshot> = {};
@@ -167,6 +185,7 @@ function loadSheetSnapshot(workbook: WorkbookReader, sheetName: string): SheetSn
     const autoFilter = createAutoFilterSnapshot(sheet.getAutoFilterDefinition());
     const visibility = workbook.getSheetVisibility(sheetName);
     const columnWidths = createSparseColumnWidthsSnapshot(sheet);
+    const rowHeights = createSparseRowHeightsSnapshot(sheet);
     const columnAlignments = Object.fromEntries(
         Array.from({ length: sheet.columnCount }, (_, index) => index + 1)
             .flatMap((columnNumber) => {
@@ -234,6 +253,7 @@ function loadSheetSnapshot(workbook: WorkbookReader, sheetName: string): SheetSn
         visibility,
         mergedRanges: [...sheet.getMergedRanges()].sort((left, right) => left.localeCompare(right)),
         columnWidths,
+        rowHeights,
         cellAlignments,
         rowAlignments,
         columnAlignments,

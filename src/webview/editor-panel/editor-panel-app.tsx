@@ -83,7 +83,9 @@ import {
 import {
     getCellContentAlignmentStyle,
     getToolbarHorizontalAlignment,
+    getToolbarVerticalAlignment,
 } from "./editor-cell-alignment";
+import { getCellOverflowMetrics } from "./editor-cell-overflow";
 import { notifyEditorToolbarSync } from "./editor-toolbar-sync";
 import { type ToolbarCellEditTarget } from "./editor-toolbar-input";
 import type {
@@ -934,8 +936,10 @@ function getActiveToolbarAlignment(
         currentModel
     );
     const horizontal = getToolbarHorizontalAlignment(alignment);
+    const vertical = getToolbarVerticalAlignment(alignment);
     return {
         ...(horizontal ? { horizontal } : {}),
+        ...(vertical ? { vertical } : {}),
     };
 }
 
@@ -1450,7 +1454,8 @@ function requestDeleteSheet(sheetKey: string): void {
 }
 
 function requestRenameSheet(sheetKey: string): void {
-    closeContextMenu({ refresh: false });
+    // Prompt-driven actions need an immediate re-render because no grid mutation follows.
+    closeContextMenu();
     vscode.postMessage({ type: "renameSheet", sheetKey });
 }
 
@@ -1464,6 +1469,12 @@ function requestDeleteRow(rowNumber: number): void {
     vscode.postMessage({ type: "deleteRow", rowNumber });
 }
 
+function requestPromptRowHeight(rowNumber: number): void {
+    // Prompt-driven actions need an immediate re-render because no grid mutation follows.
+    closeContextMenu();
+    vscode.postMessage({ type: "promptRowHeight", rowNumber });
+}
+
 function requestInsertColumn(columnNumber: number): void {
     closeContextMenu({ refresh: false });
     vscode.postMessage({ type: "insertColumn", columnNumber });
@@ -1475,7 +1486,8 @@ function requestDeleteColumn(columnNumber: number): void {
 }
 
 function requestPromptColumnWidth(columnNumber: number): void {
-    closeContextMenu({ refresh: false });
+    // Prompt-driven actions need an immediate re-render because no grid mutation follows.
+    closeContextMenu();
     vscode.postMessage({ type: "promptColumnWidth", columnNumber });
 }
 
@@ -4326,6 +4338,24 @@ function getFilterAwareRowHeaderLabelCount(
     );
 }
 
+function mapActualRowHeightsToDisplayRowHeights(
+    actualToDisplayRowNumbers: Readonly<Record<string, number>>,
+    rowHeights: Readonly<Record<string, number | null>> | undefined
+): Record<string, number | null> | undefined {
+    const displayRowHeights = Object.fromEntries(
+        Object.entries(rowHeights ?? {}).flatMap(([actualRowNumber, rowHeight]) => {
+            const displayRowNumber = actualToDisplayRowNumbers[actualRowNumber];
+            if (!Number.isInteger(displayRowNumber)) {
+                return [];
+            }
+
+            return [[String(displayRowNumber), rowHeight] as const];
+        })
+    );
+
+    return Object.keys(displayRowHeights).length > 0 ? displayRowHeights : undefined;
+}
+
 function createBaseVisibleRowLayout(currentModel: EditorRenderModel): {
     visibleRowResult: {
         visibleRows: number[];
@@ -4334,10 +4364,20 @@ function createBaseVisibleRowLayout(currentModel: EditorRenderModel): {
     rowLayout: PixelRowLayout;
 } {
     const visibleRowResult = getVisibleActualRowsForModel(currentModel);
+    const actualToDisplayRowNumbers = Object.fromEntries(
+        visibleRowResult.visibleRows.map((actualRowNumber, index) => [
+            String(actualRowNumber),
+            index + 1,
+        ])
+    );
     return {
         visibleRowResult,
         rowLayout: createEditorPixelRowLayout({
             rowCount: visibleRowResult.visibleRows.length,
+            rowHeights: mapActualRowHeightsToDisplayRowHeights(
+                actualToDisplayRowNumbers,
+                currentModel.activeSheet.rowHeights
+            ),
         }),
     };
 }
@@ -4416,6 +4456,10 @@ function createEditorVirtualGridMetrics(
     );
     const displayRowLayout = createEditorPixelRowLayout({
         rowCount: rowState.actualRowNumbers.length,
+        rowHeights: mapActualRowHeightsToDisplayRowHeights(
+            rowState.actualToDisplayRowNumbers,
+            currentModel.activeSheet.rowHeights
+        ),
     });
     const displayColumnLayout = getEditorDisplayColumnLayout(
         sheetColumnLayout,
@@ -4514,6 +4558,7 @@ function useEditorVirtualGrid(
             currentModel.activeSheet.key,
             currentModel.activeSheet.rowCount,
             currentModel.activeSheet.columnCount,
+            currentModel.activeSheet.rowHeights,
             revision,
         ]
     );
@@ -4608,6 +4653,10 @@ function useEditorVirtualGrid(
         );
         const displayRowLayout = createEditorPixelRowLayout({
             rowCount: displayRowState.actualRowNumbers.length,
+            rowHeights: mapActualRowHeightsToDisplayRowHeights(
+                displayRowState.actualToDisplayRowNumbers,
+                currentModel.activeSheet.rowHeights
+            ),
         });
         const displayColumnLayout = getEditorDisplayColumnLayout(
             sheetColumnLayout,
@@ -4666,6 +4715,7 @@ function useEditorVirtualGrid(
         currentModel.activeSheet.rowCount,
         currentModel.activeSheet.columnCount,
         currentModel.activeSheet.columnWidths,
+        currentModel.activeSheet.rowHeights,
         currentModel.activeSheet.freezePane?.rowCount ?? 0,
         currentModel.activeSheet.freezePane?.columnCount ?? 0,
         activeResizeColumnNumber,
@@ -5039,6 +5089,8 @@ const EditorVirtualCell = React.memo(
         fillPreviewRange,
         activeFilterState,
         isFilterMenuOpen,
+        contentWidthPx,
+        spillsIntoNextCells,
     }: {
         currentModel: EditorRenderModel;
         rowNumber: number;
@@ -5057,6 +5109,8 @@ const EditorVirtualCell = React.memo(
         fillPreviewRange: CellRange | null;
         activeFilterState: EditorSheetFilterState | null;
         isFilterMenuOpen: boolean;
+        contentWidthPx: number;
+        spillsIntoNextCells: boolean;
     }): React.ReactElement {
         const cell = getCellView(rowNumber, columnNumber, currentModel) ?? {
             key: createCellKey(rowNumber, columnNumber),
@@ -5094,6 +5148,7 @@ const EditorVirtualCell = React.memo(
         const contentAlignmentStyle = getCellContentAlignmentStyle(
             getEffectiveCellAlignment(rowNumber, columnNumber, currentModel)
         );
+        const shouldSpillIntoNextCells = spillsIntoNextCells && !isEditing;
 
         return (
             <div
@@ -5110,6 +5165,7 @@ const EditorVirtualCell = React.memo(
                     pendingEdit && "grid__cell--pending",
                     isFillPreview && "grid__cell--fill-preview",
                     isEditing && "grid__cell--editing",
+                    shouldSpillIntoNextCells && "grid__cell--overflow-spill",
                     ...getSelectionOutlineClasses(rowNumber, columnNumber, selectionRange),
                 ])}
                 data-column-number={columnNumber}
@@ -5127,6 +5183,11 @@ const EditorVirtualCell = React.memo(
                         minWidth: `${width}px`,
                         maxWidth: `${width}px`,
                         "--grid-column-max-width": `${width}px`,
+                        ...(shouldSpillIntoNextCells
+                            ? {
+                                  "--grid-cell-display-max-width": `${contentWidthPx}px`,
+                              }
+                            : {}),
                     } as React.CSSProperties
                 }
                 title={getCellTooltip(cell.address, value, formula)}
@@ -5239,7 +5300,9 @@ const EditorVirtualCell = React.memo(
         areSelectionRangesEqual(previous.fillSourceRange, next.fillSourceRange) &&
         areSelectionRangesEqual(previous.fillPreviewRange, next.fillPreviewRange) &&
         previous.activeFilterState === next.activeFilterState &&
-        previous.isFilterMenuOpen === next.isFilterMenuOpen
+        previous.isFilterMenuOpen === next.isFilterMenuOpen &&
+        previous.contentWidthPx === next.contentWidthPx &&
+        previous.spillsIntoNextCells === next.spillsIntoNextCells
 );
 
 function EditorVirtualGrid({
@@ -5292,6 +5355,37 @@ function EditorVirtualGrid({
         const pendingEdit = pendingEdits.get(
             getPendingEditKey(currentModel.activeSheet.key, rowNumber, columnNumber)
         );
+        const displayedValue =
+            pendingEdit?.value ??
+            getCellSnapshot(rowNumber, columnNumber, currentModel)?.displayValue ??
+            "";
+        const overflowMetrics = getCellOverflowMetrics({
+            value: displayedValue,
+            alignment: getEffectiveCellAlignment(rowNumber, columnNumber, currentModel),
+            columnNumber,
+            baseColumnWidth: width,
+            visibleColumnNumbers:
+                keyPrefix === "body" || keyPrefix === "top"
+                    ? metrics.columnNumbers
+                    : metrics.frozenColumnNumbers,
+            getColumnWidth: (nextColumnNumber) =>
+                getEditorColumnWidth(metrics.columnLayout, nextColumnNumber),
+            getTrailingCellState: (nextColumnNumber) => {
+                const nextPendingEdit = pendingEdits.get(
+                    getPendingEditKey(currentModel.activeSheet.key, rowNumber, nextColumnNumber)
+                );
+                const nextCell = getCellSnapshot(rowNumber, nextColumnNumber, currentModel);
+                return {
+                    value: nextPendingEdit?.value ?? nextCell?.displayValue ?? "",
+                    formula: nextPendingEdit ? null : nextCell?.formula ?? null,
+                    blocksOverflow: isEditorFilterHeaderCell(
+                        activeFilterState,
+                        rowNumber,
+                        nextColumnNumber
+                    ),
+                };
+            },
+        });
         return (
             <EditorVirtualCell
                 key={key}
@@ -5315,6 +5409,8 @@ function EditorVirtualGrid({
                     filterMenuState?.sheetKey === currentModel.activeSheet.key &&
                     filterMenuState.columnNumber === columnNumber
                 }
+                contentWidthPx={overflowMetrics.contentWidthPx}
+                spillsIntoNextCells={overflowMetrics.spillsIntoNextCells}
             />
         );
     };
@@ -5796,6 +5892,7 @@ function EditorApp({ view }: { view: Extract<ViewState, { kind: "app" }> }): Rea
                 onRequestRenameSheet={requestRenameSheet}
                 onRequestInsertRow={requestInsertRow}
                 onRequestDeleteRow={requestDeleteRow}
+                onRequestPromptRowHeight={requestPromptRowHeight}
                 onRequestInsertColumn={requestInsertColumn}
                 onRequestDeleteColumn={requestDeleteColumn}
                 onRequestPromptColumnWidth={requestPromptColumnWidth}

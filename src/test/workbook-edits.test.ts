@@ -136,6 +136,9 @@ suite("Workbook edit writer", () => {
                     viewEdits: [
                         {
                             columnWidths: [12],
+                            rowHeights: {
+                                "2": 18.13,
+                            },
                             sheetKey: "sheet-1",
                             sheetName: "Sheet1",
                             freezePane: {
@@ -148,7 +151,7 @@ suite("Workbook edit writer", () => {
             );
 
             assert.strictEqual(batchCalls, 1);
-            assert.deepStrictEqual(mutationContexts, [true, true, true]);
+            assert.deepStrictEqual(mutationContexts, [true, true, true, true]);
             assert.strictEqual(saveCalls.length, 1);
         } finally {
             (

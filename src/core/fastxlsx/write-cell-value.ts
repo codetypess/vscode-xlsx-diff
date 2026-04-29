@@ -268,6 +268,10 @@ export async function writeWorkbookEditsToDestination(
                 sheet.setColumnWidth(columnIndex + 1, edit.columnWidths?.[columnIndex] ?? null);
             }
 
+            for (const [rowNumberText, rowHeight] of Object.entries(edit.rowHeights ?? {})) {
+                sheet.setRowHeight(Number(rowNumberText), rowHeight ?? null);
+            }
+
             for (const [columnNumberText, alignment] of Object.entries(
                 edit.columnAlignments ?? {}
             )) {

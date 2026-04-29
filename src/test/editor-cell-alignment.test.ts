@@ -5,6 +5,7 @@ import * as assert from "assert";
 import {
     getCellContentAlignmentStyle,
     getToolbarHorizontalAlignment,
+    getToolbarVerticalAlignment,
 } from "../webview/editor-panel/editor-cell-alignment";
 
 suite("Editor cell alignment helpers", () => {
@@ -23,7 +24,7 @@ suite("Editor cell alignment helpers", () => {
         );
     });
 
-    test("ignores vertical alignment and keeps horizontal right alignment", () => {
+    test("applies vertical alignment while keeping horizontal right alignment", () => {
         assert.deepStrictEqual(
             getCellContentAlignmentStyle({
                 horizontal: "right",
@@ -31,7 +32,7 @@ suite("Editor cell alignment helpers", () => {
             }),
             {
                 justifyContent: "flex-end",
-                alignItems: "flex-start",
+                alignItems: "flex-end",
                 textAlign: "right",
                 height: "100%",
                 maxHeight: "100%",
@@ -44,6 +45,8 @@ suite("Editor cell alignment helpers", () => {
             getToolbarHorizontalAlignment({ horizontal: "centerContinuous" }),
             "center"
         );
+        assert.strictEqual(getToolbarVerticalAlignment({ vertical: "center" }), "center");
         assert.strictEqual(getToolbarHorizontalAlignment(null), undefined);
+        assert.strictEqual(getToolbarVerticalAlignment(null), undefined);
     });
 });
