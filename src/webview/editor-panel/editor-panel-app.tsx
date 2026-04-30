@@ -2,8 +2,9 @@ import * as React from "react";
 import { AiOutlineSortAscending, AiOutlineSortDescending } from "react-icons/ai";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
-import type { CellSnapshot, EditorRenderModel } from "../../core/model/types";
+import type { CellSnapshot, EditorRenderModel, EditorRenderPayload } from "../../core/model/types";
 import {
+    areCellAlignmentsEqual,
     mergeCellAlignments,
     type CellAlignmentSnapshot,
     type EditorAlignmentPatch,
@@ -76,6 +77,7 @@ import {
     createFillPreviewRange,
     isCellWithinFillPreviewArea,
 } from "./editor-fill-drag";
+import { formatPerfLog } from "./editor-perf-log";
 import {
     CellFormulaBadge,
     CellValue,
@@ -112,7 +114,6 @@ import type {
 } from "./editor-panel-types";
 import { resolveEditorReplaceResultInSheet } from "./editor-panel-logic";
 import {
-    canCreateEditorFilterRange,
     clearEditorFilterColumn,
     createEditorSheetFilterSnapshot,
     createEditorSheetFilterState,
@@ -151,12 +152,13 @@ type IncomingMessage =
     | EditorSearchResultMessage
     | {
           type: "render";
-          payload: EditorRenderModel;
+          payload: EditorRenderPayload;
           silent?: boolean;
           clearPendingEdits?: boolean;
           preservePendingHistory?: boolean;
           reuseActiveSheetData?: boolean;
           useModelSelection?: boolean;
+          perfTraceId?: string;
           replacePendingEdits?: Array<{
               sheetKey: string;
               rowNumber: number;
@@ -251,6 +253,7 @@ type ViewState =
           model: EditorRenderModel;
           revealSelection: boolean;
           revision: number;
+          layoutRevision: number;
           scrollState: ScrollState | null;
       };
 
@@ -265,6 +268,7 @@ const vscode = acquireVsCodeApi();
 const pendingEdits = new Map<string, PendingEdit>();
 const undoStack: HistoryEntry[] = [];
 const redoStack: HistoryEntry[] = [];
+let pendingEditsVersion = 0;
 
 let model: EditorRenderModel | null = null;
 let selectedCell: CellPosition | null = null;
@@ -277,6 +281,7 @@ let pendingSelectionAfterRender: PendingSelection | null = null;
 let suppressAutoSelection = false;
 let lastPendingEditsSyncKey: string | null = null;
 let viewRevision = 0;
+let layoutRevision = 0;
 let setViewState: React.Dispatch<React.SetStateAction<ViewState>> | null = null;
 let contextMenu: ContextMenuState | null = null;
 let selectionDragState: SelectionDragState | null = null;
@@ -319,10 +324,36 @@ let filterMenuState: FilterMenuState | null = null;
 const IS_DEBUG_MODE = Boolean(
     (globalThis as Record<string, unknown>).__XLSX_EDITOR_DEBUG__ === true
 );
+let nextPerfTraceSequence = 1;
+let activeWebviewRenderPerfTrace: {
+    traceId: string;
+    startedAt: number;
+} | null = null;
+let activeVirtualCellMemoStats: {
+    compared: number;
+    changed: number;
+    alignmentChanged: number;
+} | null = null;
+let activeAlignmentRenderDirtyKeys: {
+    cellKeys?: Set<string>;
+    rowKeys?: Set<string>;
+    columnKeys?: Set<string>;
+} | null = null;
 let latestVirtualGridCache: {
     model: EditorRenderModel;
     metrics: EditorVirtualGridMetrics;
 } | null = null;
+let candidateFilterRangeCache:
+    | {
+          sheetKey: string;
+          rowCount: number;
+          columnCount: number;
+          cells: Readonly<Record<string, CellSnapshot>>;
+          selectedCellKey: string;
+          pendingEditsVersion: number;
+          range: CellRange | null;
+      }
+    | null = null;
 
 interface DebugRenderStats {
     renderedRowCount: number;
@@ -333,6 +364,220 @@ type EditorSelectionState = SelectionControllerState<CellPosition>;
 
 let debugRenderStats: DebugRenderStats | null = null;
 const debugRenderStatsListeners = new Set<() => void>();
+
+function createPerfTraceId(prefix: string): string {
+    const id = nextPerfTraceSequence;
+    nextPerfTraceSequence += 1;
+    return `${prefix}:${Date.now()}:${id}`;
+}
+
+function bumpPendingEditsVersion(): void {
+    pendingEditsVersion += 1;
+    candidateFilterRangeCache = null;
+}
+
+function countRecordEntries(record: Readonly<Record<string, unknown>> | undefined): number {
+    let count = 0;
+    for (const key in record ?? {}) {
+        if (record?.[key] !== undefined) {
+            count += 1;
+        }
+    }
+
+    return count;
+}
+
+function getWebviewActiveSheetPerfSummary(currentModel: EditorRenderModel | null): Record<string, unknown> {
+    return {
+        sheetKey: currentModel?.activeSheet.key ?? null,
+        rowCount: currentModel?.activeSheet.rowCount ?? null,
+        columnCount: currentModel?.activeSheet.columnCount ?? null,
+        cellCount: countRecordEntries(currentModel?.activeSheet.cells),
+        cellAlignmentCount: countRecordEntries(currentModel?.activeSheet.cellAlignments),
+        rowAlignmentCount: countRecordEntries(currentModel?.activeSheet.rowAlignments),
+        columnAlignmentCount: countRecordEntries(currentModel?.activeSheet.columnAlignments),
+    };
+}
+
+function logWebviewPerf(event: string, details: Record<string, unknown> = {}): void {
+    console.info(formatPerfLog("webview", event, details));
+}
+
+function createAlignmentRenderDirtyKeys(
+    activeSheet: EditorRenderPayload["activeSheet"]
+): typeof activeAlignmentRenderDirtyKeys {
+    if (
+        !activeSheet.cellAlignmentDirtyKeys?.length &&
+        !activeSheet.rowAlignmentDirtyKeys?.length &&
+        !activeSheet.columnAlignmentDirtyKeys?.length
+    ) {
+        return null;
+    }
+
+    return {
+        ...(activeSheet.cellAlignmentDirtyKeys?.length
+            ? { cellKeys: new Set(activeSheet.cellAlignmentDirtyKeys) }
+            : {}),
+        ...(activeSheet.rowAlignmentDirtyKeys?.length
+            ? { rowKeys: new Set(activeSheet.rowAlignmentDirtyKeys) }
+            : {}),
+        ...(activeSheet.columnAlignmentDirtyKeys?.length
+            ? { columnKeys: new Set(activeSheet.columnAlignmentDirtyKeys) }
+            : {}),
+    };
+}
+
+function areFreezePaneSnapshotsEqual(
+    left: EditorRenderModel["activeSheet"]["freezePane"],
+    right: EditorRenderPayload["activeSheet"]["freezePane"]
+): boolean {
+    const normalizedLeft = left ?? null;
+    const normalizedRight = right ?? null;
+    if (normalizedLeft === normalizedRight) {
+        return true;
+    }
+
+    if (!normalizedLeft || !normalizedRight) {
+        return false;
+    }
+
+    return (
+        normalizedLeft.columnCount === normalizedRight.columnCount &&
+        normalizedLeft.rowCount === normalizedRight.rowCount &&
+        normalizedLeft.topLeftCell === normalizedRight.topLeftCell &&
+        normalizedLeft.activePane === normalizedRight.activePane
+    );
+}
+
+function areAutoFilterSnapshotsEqual(
+    left: EditorRenderModel["activeSheet"]["autoFilter"],
+    right: EditorRenderPayload["activeSheet"]["autoFilter"]
+): boolean {
+    const normalizedLeft = left ?? null;
+    const normalizedRight = right ?? null;
+    if (normalizedLeft === normalizedRight) {
+        return true;
+    }
+
+    if (!normalizedLeft || !normalizedRight) {
+        return false;
+    }
+
+    return (
+        normalizedLeft.range.startRow === normalizedRight.range.startRow &&
+        normalizedLeft.range.endRow === normalizedRight.range.endRow &&
+        normalizedLeft.range.startColumn === normalizedRight.range.startColumn &&
+        normalizedLeft.range.endColumn === normalizedRight.range.endColumn &&
+        normalizedLeft.sort?.columnNumber === normalizedRight.sort?.columnNumber &&
+        normalizedLeft.sort?.direction === normalizedRight.sort?.direction
+    );
+}
+
+function hasPendingEditReplacementChange(replacePendingEdits: PendingEdit[] | undefined): boolean {
+    if (replacePendingEdits === undefined) {
+        return false;
+    }
+
+    return (
+        serializePendingEdits(replacePendingEdits) !==
+        serializePendingEdits(Array.from(pendingEdits.values()))
+    );
+}
+
+function isAlignmentOnlyRenderMessage(
+    previousModel: EditorRenderModel | null,
+    message: Extract<IncomingMessage, { type: "render" }>
+): boolean {
+    const activeSheet = message.payload.activeSheet;
+    const hasAlignmentDirtyKeys =
+        Boolean(activeSheet.cellAlignmentDirtyKeys?.length) ||
+        Boolean(activeSheet.rowAlignmentDirtyKeys?.length) ||
+        Boolean(activeSheet.columnAlignmentDirtyKeys?.length);
+    if (!previousModel || !hasAlignmentDirtyKeys || message.reuseActiveSheetData === false) {
+        return false;
+    }
+
+    if (
+        message.clearPendingEdits ||
+        hasPendingEditReplacementChange(message.replacePendingEdits) ||
+        message.resetPendingHistory
+    ) {
+        return false;
+    }
+
+    return (
+        previousModel.activeSheet.key === activeSheet.key &&
+        previousModel.activeSheet.rowCount === activeSheet.rowCount &&
+        previousModel.activeSheet.columnCount === activeSheet.columnCount &&
+        areFreezePaneSnapshotsEqual(previousModel.activeSheet.freezePane, activeSheet.freezePane) &&
+        areAutoFilterSnapshotsEqual(previousModel.activeSheet.autoFilter, activeSheet.autoFilter) &&
+        activeSheet.cells === undefined &&
+        activeSheet.columns === undefined &&
+        activeSheet.columnWidths === undefined &&
+        activeSheet.rowHeights === undefined
+    );
+}
+
+function beginActiveWebviewRenderPerfTrace(
+    traceId: string | null,
+    startedAt: number,
+    dirtyKeys: typeof activeAlignmentRenderDirtyKeys
+): void {
+    activeWebviewRenderPerfTrace = traceId ? { traceId, startedAt } : null;
+    activeAlignmentRenderDirtyKeys = dirtyKeys;
+    activeVirtualCellMemoStats = traceId
+        ? {
+              compared: 0,
+              changed: 0,
+              alignmentChanged: 0,
+          }
+        : null;
+}
+
+function endActiveWebviewRenderPerfTrace(): void {
+    activeWebviewRenderPerfTrace = null;
+    activeAlignmentRenderDirtyKeys = null;
+    activeVirtualCellMemoStats = null;
+}
+
+function logActiveWebviewRenderPerf(
+    event: string,
+    startedAt: number,
+    details: Record<string, unknown> = {}
+): void {
+    if (!activeWebviewRenderPerfTrace) {
+        return;
+    }
+
+    logWebviewPerf(event, {
+        perfTraceId: activeWebviewRenderPerfTrace.traceId,
+        durationMs: Number((performance.now() - startedAt).toFixed(2)),
+        totalDurationMs: Number(
+            (performance.now() - activeWebviewRenderPerfTrace.startedAt).toFixed(2)
+        ),
+        ...details,
+    });
+}
+
+function recordVirtualCellMemoResult({
+    changed,
+    alignmentChanged,
+}: {
+    changed: boolean;
+    alignmentChanged: boolean;
+}): void {
+    if (!activeVirtualCellMemoStats) {
+        return;
+    }
+
+    activeVirtualCellMemoStats.compared += 1;
+    if (changed) {
+        activeVirtualCellMemoStats.changed += 1;
+    }
+    if (alignmentChanged) {
+        activeVirtualCellMemoStats.alignmentChanged += 1;
+    }
+}
 
 function getSelectionControllerState(): EditorSelectionState {
     return {
@@ -478,7 +723,7 @@ function getEffectiveCellValueForModel(
     return (
         pendingEdits.get(getPendingEditKey(currentModel.activeSheet.key, rowNumber, columnNumber))
             ?.value ??
-        getCellView(rowNumber, columnNumber, currentModel)?.value ??
+        getCellSnapshot(rowNumber, columnNumber, currentModel)?.displayValue ??
         ""
     );
 }
@@ -943,6 +1188,30 @@ function getEffectiveCellAlignment(
     );
 }
 
+function areEffectiveCellAlignmentsEqual(
+    rowNumber: number,
+    columnNumber: number,
+    previousModel: EditorRenderModel,
+    nextModel: EditorRenderModel
+): boolean {
+    const dirtyKeys = activeAlignmentRenderDirtyKeys;
+    if (dirtyKeys) {
+        const cellKey = createCellKey(rowNumber, columnNumber);
+        const isPossiblyDirty =
+            dirtyKeys.cellKeys?.has(cellKey) === true ||
+            dirtyKeys.rowKeys?.has(String(rowNumber)) === true ||
+            dirtyKeys.columnKeys?.has(String(columnNumber)) === true;
+        if (!isPossiblyDirty) {
+            return true;
+        }
+    }
+
+    return areCellAlignmentsEqual(
+        getEffectiveCellAlignment(rowNumber, columnNumber, previousModel),
+        getEffectiveCellAlignment(rowNumber, columnNumber, nextModel)
+    );
+}
+
 function getActiveToolbarAlignment(
     currentModel: EditorRenderModel | null = model
 ): EditorAlignmentPatch {
@@ -1287,37 +1556,77 @@ function openColumnContextMenu(columnNumber: number, x: number, y: number): void
     renderApp({ commitEditing: false });
 }
 
-function getFilterToolbarActionLabel(currentModel: EditorRenderModel): string {
-    if (
-        canCreateEditorFilterRange(
-            createEditorFilterCellSource(currentModel),
-            getCandidateFilterRange(currentModel)
-        )
-    ) {
+function getFilterToolbarActionLabel({
+    hasCandidateFilterRange,
+    hasActiveFilterState,
+}: {
+    hasCandidateFilterRange: boolean;
+    hasActiveFilterState: boolean;
+}): string {
+    if (hasCandidateFilterRange) {
         return STRINGS.filterSelection;
     }
 
-    return getActiveSheetFilterState(currentModel)
-        ? STRINGS.clearFilterRange
-        : STRINGS.filterSelection;
+    return hasActiveFilterState ? STRINGS.clearFilterRange : STRINGS.filterSelection;
+}
+
+function getCachedCandidateFilterRange(
+    currentModel: EditorRenderModel,
+    cell: CellPosition | null
+): CellRange | null {
+    if (!cell) {
+        return null;
+    }
+
+    const selectedCellKey = `${cell.rowNumber}:${cell.columnNumber}`;
+    if (
+        candidateFilterRangeCache &&
+        candidateFilterRangeCache.sheetKey === currentModel.activeSheet.key &&
+        candidateFilterRangeCache.rowCount === currentModel.activeSheet.rowCount &&
+        candidateFilterRangeCache.columnCount === currentModel.activeSheet.columnCount &&
+        candidateFilterRangeCache.cells === currentModel.activeSheet.cells &&
+        candidateFilterRangeCache.selectedCellKey === selectedCellKey &&
+        candidateFilterRangeCache.pendingEditsVersion === pendingEditsVersion
+    ) {
+        return candidateFilterRangeCache.range;
+    }
+
+    const range = resolveEditorFilterRangeFromActiveCell(
+        createEditorFilterCellSource(currentModel),
+        cell
+    );
+    candidateFilterRangeCache = {
+        sheetKey: currentModel.activeSheet.key,
+        rowCount: currentModel.activeSheet.rowCount,
+        columnCount: currentModel.activeSheet.columnCount,
+        cells: currentModel.activeSheet.cells,
+        selectedCellKey,
+        pendingEditsVersion,
+        range,
+    };
+    return range;
 }
 
 function getCandidateFilterRange(currentModel: EditorRenderModel): CellRange | null {
-    const source = createEditorFilterCellSource(currentModel);
     const expandedSelection = getExpandedSelectionRange();
+    const sourceBounds = {
+        rowCount: currentModel.activeSheet.rowCount,
+        columnCount: currentModel.activeSheet.columnCount,
+    };
 
     return expandedSelection
-        ? resolveEditorFilterRangeFromSelection(source, expandedSelection)
-        : resolveEditorFilterRangeFromActiveCell(source, selectedCell);
+        ? resolveEditorFilterRangeFromSelection(sourceBounds, expandedSelection)
+        : getCachedCandidateFilterRange(currentModel, selectedCell);
 }
 
-function canToggleFilterForCurrentSelection(currentModel: EditorRenderModel): boolean {
-    return (
-        canCreateEditorFilterRange(
-            createEditorFilterCellSource(currentModel),
-            getCandidateFilterRange(currentModel)
-        ) || Boolean(getActiveSheetFilterState(currentModel))
-    );
+function canToggleFilterForCurrentSelection({
+    hasCandidateFilterRange,
+    hasActiveFilterState,
+}: {
+    hasCandidateFilterRange: boolean;
+    hasActiveFilterState: boolean;
+}): boolean {
+    return hasCandidateFilterRange || hasActiveFilterState;
 }
 
 function toggleActiveSheetFilter(): void {
@@ -2461,7 +2770,7 @@ function setSelectedCellLocal(
         forceRender?: boolean;
     } = {}
 ): void {
-    void forceRender;
+    const startedAt = performance.now();
     const nextSelectionState = setControllerSelectedCell(
         getSelectionControllerState(),
         nextCell,
@@ -2486,6 +2795,14 @@ function setSelectedCellLocal(
     renderApp({
         commitEditing: false,
         revealSelection: reveal,
+    });
+    logWebviewPerf("setSelectedCellLocal", {
+        durationMs: Number((performance.now() - startedAt).toFixed(2)),
+        nextCell: nextCell ? `${nextCell.rowNumber}:${nextCell.columnNumber}` : null,
+        syncHost,
+        reveal,
+        forceRender,
+        ...getWebviewActiveSheetPerfSummary(model),
     });
 }
 
@@ -2631,7 +2948,13 @@ function syncPendingEditsToHost(): void {
 function setPendingCellValue(change: PendingEditChange, value: string): void {
     const key = getPendingEditKey(change.sheetKey, change.rowNumber, change.columnNumber);
     if (value === change.modelValue) {
-        pendingEdits.delete(key);
+        if (pendingEdits.delete(key)) {
+            bumpPendingEditsVersion();
+        }
+        return;
+    }
+
+    if (pendingEdits.get(key)?.value === value) {
         return;
     }
 
@@ -2641,6 +2964,7 @@ function setPendingCellValue(change: PendingEditChange, value: string): void {
         columnNumber: change.columnNumber,
         value,
     });
+    bumpPendingEditsVersion();
 }
 
 function applyPendingSideEffects(): void {
@@ -3607,6 +3931,7 @@ function refreshCurrentAppView({ sync = false }: { sync?: boolean } = {}): void 
             model,
             revealSelection: false,
             revision: viewRevision,
+            layoutRevision,
             scrollState: getPaneScrollState(),
         },
         { sync }
@@ -3617,11 +3942,13 @@ function renderApp({
     commitEditing = true,
     revealSelection = false,
     useModelSelection = false,
+    layoutChanged = true,
     sync = false,
 }: {
     commitEditing?: boolean;
     revealSelection?: boolean;
     useModelSelection?: boolean;
+    layoutChanged?: boolean;
     sync?: boolean;
 } = {}): void {
     if (!model) {
@@ -3633,23 +3960,43 @@ function renderApp({
         finishEdit({ mode: "commit", refresh: false });
     }
 
+    const prepareStartedAt = performance.now();
     const scrollState = getPaneScrollState();
     const shouldRevealSelection = prepareSelectionForRender({
         revealSelection,
         useModelSelection,
     });
     normalizeSearchPanelState();
+    logActiveWebviewRenderPerf("renderApp:prepared", prepareStartedAt, {
+        sync,
+        revealSelection: shouldRevealSelection,
+        layoutChanged,
+    });
     viewRevision += 1;
+    if (layoutChanged) {
+        layoutRevision += 1;
+    }
+    const updateStartedAt = performance.now();
     updateView(
         {
             kind: "app",
             model,
             revealSelection: shouldRevealSelection,
             revision: viewRevision,
+            layoutRevision,
             scrollState,
         },
         { sync }
     );
+    logActiveWebviewRenderPerf("renderApp:updateView", updateStartedAt, {
+        sync,
+        viewRevision,
+        layoutRevision,
+        layoutChanged,
+        virtualCellMemoCompared: activeVirtualCellMemoStats?.compared ?? 0,
+        virtualCellMemoChanged: activeVirtualCellMemoStats?.changed ?? 0,
+        virtualCellMemoAlignmentChanged: activeVirtualCellMemoStats?.alignmentChanged ?? 0,
+    });
 }
 
 function CellEditor({ edit }: { edit: EditingCell }): React.ReactElement {
@@ -4670,7 +5017,7 @@ function createEditorVirtualGridMetrics(
 function useEditorVirtualGrid(
     currentModel: EditorRenderModel,
     initialScrollState: ScrollState | null,
-    revision: number,
+    layoutRevision: number,
     maximumDigitWidth: number
 ): {
     viewportRef: React.RefObject<HTMLDivElement | null>;
@@ -4695,7 +5042,7 @@ function useEditorVirtualGrid(
             currentModel.activeSheet.rowCount,
             currentModel.activeSheet.columnCount,
             currentModel.activeSheet.rowHeights,
-            revision,
+            layoutRevision,
         ]
     );
     const sheetColumnLayout = React.useMemo(
@@ -4856,11 +5203,11 @@ function useEditorVirtualGrid(
         currentModel.activeSheet.freezePane?.columnCount ?? 0,
         activeResizeColumnNumber,
         activeResizePreviewPixelWidth,
-        visibleRowResult.visibleRows.join(","),
+        visibleRowResult,
         initialScrollState?.top ?? 0,
         initialScrollState?.left ?? 0,
         maximumDigitWidth,
-        revision,
+        layoutRevision,
     ]);
 
     const handleScroll = (event: React.UIEvent<HTMLDivElement>) => {
@@ -5202,8 +5549,9 @@ const EditorVirtualCell = React.memo(
         fillPreviewRange,
         activeFilterState,
         isFilterMenuOpen,
-        contentWidthPx,
-        spillsIntoNextCells,
+        visibleColumnNumbers,
+        visibleColumnIndex,
+        columnLayout,
     }: {
         currentModel: EditorRenderModel;
         rowNumber: number;
@@ -5219,8 +5567,9 @@ const EditorVirtualCell = React.memo(
         fillPreviewRange: CellRange | null;
         activeFilterState: EditorSheetFilterState | null;
         isFilterMenuOpen: boolean;
-        contentWidthPx: number;
-        spillsIntoNextCells: boolean;
+        visibleColumnNumbers: readonly number[];
+        visibleColumnIndex: number;
+        columnLayout: PixelColumnLayout;
     }): React.ReactElement {
         const cell = getCellView(rowNumber, columnNumber, currentModel) ?? {
             key: createCellKey(rowNumber, columnNumber),
@@ -5244,10 +5593,33 @@ const EditorVirtualCell = React.memo(
         const isColumnFilterActive =
             Boolean(activeFilterState?.includedValuesByColumn[String(columnNumber)]) ||
             activeFilterState?.sort?.columnNumber === columnNumber;
-        const contentAlignmentStyle = getCellContentAlignmentStyle(
-            getEffectiveCellAlignment(rowNumber, columnNumber, currentModel)
-        );
-        const shouldSpillIntoNextCells = spillsIntoNextCells && !isEditing;
+        const cellAlignment = getEffectiveCellAlignment(rowNumber, columnNumber, currentModel);
+        const contentAlignmentStyle = getCellContentAlignmentStyle(cellAlignment);
+        const overflowMetrics = getCellOverflowMetrics({
+            value,
+            alignment: cellAlignment,
+            baseColumnWidth: width,
+            visibleColumnNumbers,
+            visibleColumnIndex,
+            getColumnWidth: (nextColumnNumber) =>
+                getEditorColumnWidth(columnLayout, nextColumnNumber),
+            getTrailingCellState: (nextColumnNumber) => {
+                const nextPendingEdit = pendingEdits.get(
+                    getPendingEditKey(currentModel.activeSheet.key, rowNumber, nextColumnNumber)
+                );
+                const nextCell = getCellSnapshot(rowNumber, nextColumnNumber, currentModel);
+                return {
+                    value: nextPendingEdit?.value ?? nextCell?.displayValue ?? "",
+                    formula: nextPendingEdit ? null : (nextCell?.formula ?? null),
+                    blocksOverflow: isEditorFilterHeaderCell(
+                        activeFilterState,
+                        rowNumber,
+                        nextColumnNumber
+                    ),
+                };
+            },
+        });
+        const shouldSpillIntoNextCells = overflowMetrics.spillsIntoNextCells && !isEditing;
         const { contentMaxHeightPx, visibleLineCount } = getGridCellTextLayoutMetrics(height);
 
         return (
@@ -5282,7 +5654,7 @@ const EditorVirtualCell = React.memo(
                         "--grid-cell-line-clamp": String(visibleLineCount),
                         ...(shouldSpillIntoNextCells
                             ? {
-                                  "--grid-cell-display-max-width": `${contentWidthPx}px`,
+                                  "--grid-cell-display-max-width": `${overflowMetrics.contentWidthPx}px`,
                               }
                             : {}),
                     } as React.CSSProperties
@@ -5373,31 +5745,40 @@ const EditorVirtualCell = React.memo(
             </div>
         );
     },
-    (previous, next) =>
-        previous.currentModel.activeSheet.key === next.currentModel.activeSheet.key &&
-        previous.currentModel.activeSheet.cells === next.currentModel.activeSheet.cells &&
-        previous.currentModel.activeSheet.cellAlignments ===
-            next.currentModel.activeSheet.cellAlignments &&
-        previous.currentModel.activeSheet.rowAlignments ===
-            next.currentModel.activeSheet.rowAlignments &&
-        previous.currentModel.activeSheet.columnAlignments ===
-            next.currentModel.activeSheet.columnAlignments &&
-        previous.currentModel.canEdit === next.currentModel.canEdit &&
-        previous.rowNumber === next.rowNumber &&
-        previous.columnNumber === next.columnNumber &&
-        previous.width === next.width &&
-        previous.height === next.height &&
-        previous.top === next.top &&
-        previous.left === next.left &&
-        previous.isSelectionFocus === next.isSelectionFocus &&
-        areEditingCellsEqual(previous.activeEditingCell, next.activeEditingCell) &&
-        arePendingEditsEqual(previous.pendingEdit, next.pendingEdit) &&
-        areSelectionRangesEqual(previous.fillSourceRange, next.fillSourceRange) &&
-        areSelectionRangesEqual(previous.fillPreviewRange, next.fillPreviewRange) &&
-        previous.activeFilterState === next.activeFilterState &&
-        previous.isFilterMenuOpen === next.isFilterMenuOpen &&
-        previous.contentWidthPx === next.contentWidthPx &&
-        previous.spillsIntoNextCells === next.spillsIntoNextCells
+    (previous, next) => {
+        const hasSameAlignment = areEffectiveCellAlignmentsEqual(
+            previous.rowNumber,
+            previous.columnNumber,
+            previous.currentModel,
+            next.currentModel
+        );
+        const isEqual =
+            previous.currentModel.activeSheet.key === next.currentModel.activeSheet.key &&
+            previous.currentModel.activeSheet.cells === next.currentModel.activeSheet.cells &&
+            hasSameAlignment &&
+            previous.currentModel.canEdit === next.currentModel.canEdit &&
+            previous.rowNumber === next.rowNumber &&
+            previous.columnNumber === next.columnNumber &&
+            previous.width === next.width &&
+            previous.height === next.height &&
+            previous.top === next.top &&
+            previous.left === next.left &&
+            previous.isSelectionFocus === next.isSelectionFocus &&
+            areEditingCellsEqual(previous.activeEditingCell, next.activeEditingCell) &&
+            arePendingEditsEqual(previous.pendingEdit, next.pendingEdit) &&
+            areSelectionRangesEqual(previous.fillSourceRange, next.fillSourceRange) &&
+            areSelectionRangesEqual(previous.fillPreviewRange, next.fillPreviewRange) &&
+            previous.activeFilterState === next.activeFilterState &&
+            previous.isFilterMenuOpen === next.isFilterMenuOpen &&
+            previous.visibleColumnNumbers === next.visibleColumnNumbers &&
+            previous.visibleColumnIndex === next.visibleColumnIndex &&
+            previous.columnLayout === next.columnLayout;
+        recordVirtualCellMemoResult({
+            changed: !isEqual,
+            alignmentChanged: !hasSameAlignment,
+        });
+        return isEqual;
+    }
 );
 
 function EditorVirtualGrid({
@@ -5414,7 +5795,7 @@ function EditorVirtualGrid({
     const { viewportRef, metrics, handleScroll } = useEditorVirtualGrid(
         currentModel,
         view.scrollState,
-        view.revision,
+        view.layoutRevision,
         maximumDigitWidth
     );
     const selectionRange = getSelectionRange();
@@ -5465,34 +5846,6 @@ function EditorVirtualGrid({
         const pendingEdit = pendingEdits.get(
             getPendingEditKey(currentModel.activeSheet.key, rowNumber, columnNumber)
         );
-        const displayedValue =
-            pendingEdit?.value ??
-            getCellSnapshot(rowNumber, columnNumber, currentModel)?.displayValue ??
-            "";
-        const overflowMetrics = getCellOverflowMetrics({
-            value: displayedValue,
-            alignment: getEffectiveCellAlignment(rowNumber, columnNumber, currentModel),
-            baseColumnWidth: width,
-            visibleColumnNumbers,
-            visibleColumnIndex,
-            getColumnWidth: (nextColumnNumber) =>
-                getEditorColumnWidth(metrics.columnLayout, nextColumnNumber),
-            getTrailingCellState: (nextColumnNumber) => {
-                const nextPendingEdit = pendingEdits.get(
-                    getPendingEditKey(currentModel.activeSheet.key, rowNumber, nextColumnNumber)
-                );
-                const nextCell = getCellSnapshot(rowNumber, nextColumnNumber, currentModel);
-                return {
-                    value: nextPendingEdit?.value ?? nextCell?.displayValue ?? "",
-                    formula: nextPendingEdit ? null : (nextCell?.formula ?? null),
-                    blocksOverflow: isEditorFilterHeaderCell(
-                        activeFilterState,
-                        rowNumber,
-                        nextColumnNumber
-                    ),
-                };
-            },
-        });
         return (
             <EditorVirtualCell
                 key={key}
@@ -5519,8 +5872,9 @@ function EditorVirtualGrid({
                     filterMenuState?.sheetKey === currentModel.activeSheet.key &&
                     filterMenuState.columnNumber === columnNumber
                 }
-                contentWidthPx={overflowMetrics.contentWidthPx}
-                spillsIntoNextCells={overflowMetrics.spillsIntoNextCells}
+                visibleColumnNumbers={visibleColumnNumbers}
+                visibleColumnIndex={visibleColumnIndex}
+                columnLayout={metrics.columnLayout}
             />
         );
     };
@@ -5956,11 +6310,23 @@ function applyToolbarAlignment(alignment: EditorAlignmentPatch): void {
         return;
     }
 
+    const perfTraceId = createPerfTraceId("align");
+    logWebviewPerf("applyToolbarAlignment:dispatch", {
+        perfTraceId,
+        selectedCell: selectedCell
+            ? `${selectedCell.rowNumber}:${selectedCell.columnNumber}`
+            : null,
+        target: target.target,
+        selection: target.selection,
+        alignment,
+        ...getWebviewActiveSheetPerfSummary(model),
+    });
     vscode.postMessage({
         type: "setAlignment",
         target: target.target,
         selection: target.selection,
         alignment,
+        perfTraceId,
     });
 }
 
@@ -5995,6 +6361,8 @@ function EditorApp({ view }: { view: Extract<ViewState, { kind: "app" }> }): Rea
     editorMaximumDigitWidth = maximumDigitWidth;
     const pendingSummary = getPendingSummary(currentModel.activeSheet.key);
     const activeFilterState = getActiveSheetFilterState(currentModel);
+    const hasCandidateFilterRange = Boolean(getCandidateFilterRange(currentModel));
+    const hasActiveFilterState = Boolean(activeFilterState);
     const activeToolbarAlignment = getActiveToolbarAlignment(currentModel);
     const currentSelectionRange = getExpandedSelectionRange();
     const effectiveScope = getEffectiveSearchScope();
@@ -6007,8 +6375,14 @@ function EditorApp({ view }: { view: Extract<ViewState, { kind: "app" }> }): Rea
     const canUndo = undoStack.length > 0 || currentModel.canUndoStructuralEdits;
     const canRedo = redoStack.length > 0 || currentModel.canRedoStructuralEdits;
     const viewLocked = hasLockedView(currentModel.activeSheet.freezePane);
-    const filterActionLabel = getFilterToolbarActionLabel(currentModel);
-    const canToggleFilter = canToggleFilterForCurrentSelection(currentModel);
+    const filterActionLabel = getFilterToolbarActionLabel({
+        hasCandidateFilterRange,
+        hasActiveFilterState,
+    });
+    const canToggleFilter = canToggleFilterForCurrentSelection({
+        hasCandidateFilterRange,
+        hasActiveFilterState,
+    });
 
     return (
         <div
@@ -6183,10 +6557,39 @@ window.addEventListener("message", (event: MessageEvent<IncomingMessage>) => {
     }
 
     if (message.type === "render") {
+        const renderStartedAt = performance.now();
+        const previousModel = model;
+        const isAlignmentOnlyRender = isAlignmentOnlyRenderMessage(previousModel, message);
+        logWebviewPerf("incomingRender:start", {
+            perfTraceId: message.perfTraceId ?? null,
+            reuseActiveSheetData: Boolean(message.reuseActiveSheetData),
+            useModelSelection: Boolean(message.useModelSelection),
+            alignmentOnlyRender: isAlignmentOnlyRender,
+            payloadSheetKey: message.payload.activeSheet.key,
+            payloadHasCells: message.payload.activeSheet.cells !== undefined,
+            payloadHasColumns: message.payload.activeSheet.columns !== undefined,
+            payloadHasColumnWidths: message.payload.activeSheet.columnWidths !== undefined,
+            payloadHasRowHeights: message.payload.activeSheet.rowHeights !== undefined,
+            payloadHasCellAlignments: message.payload.activeSheet.cellAlignments !== undefined,
+            payloadHasRowAlignments: message.payload.activeSheet.rowAlignments !== undefined,
+            payloadHasColumnAlignments:
+                message.payload.activeSheet.columnAlignments !== undefined,
+            payloadCellAlignmentDirtyKeyCount:
+                message.payload.activeSheet.cellAlignmentDirtyKeys?.length ?? 0,
+            payloadRowAlignmentDirtyKeyCount:
+                message.payload.activeSheet.rowAlignmentDirtyKeys?.length ?? 0,
+            payloadColumnAlignmentDirtyKeyCount:
+                message.payload.activeSheet.columnAlignmentDirtyKeys?.length ?? 0,
+        });
         clearFillDragState();
         columnResizeState = null;
         model = stabilizeIncomingRenderModel(model, message.payload, {
             canReuseActiveSheetData: Boolean(message.reuseActiveSheetData),
+        });
+        logWebviewPerf("incomingRender:stabilized", {
+            perfTraceId: message.perfTraceId ?? null,
+            durationMs: Number((performance.now() - renderStartedAt).toFixed(2)),
+            ...getWebviewActiveSheetPerfSummary(model),
         });
         isSaving = false;
         if (filterMenuState && filterMenuState.sheetKey !== model.activeSheet.key) {
@@ -6196,7 +6599,10 @@ window.addEventListener("message", (event: MessageEvent<IncomingMessage>) => {
         if (message.clearPendingEdits) {
             sheetFilterStates.clear();
             const pendingEditsBeforeClear = Array.from(pendingEdits.values());
-            pendingEdits.clear();
+            if (pendingEdits.size > 0) {
+                pendingEdits.clear();
+                bumpPendingEditsVersion();
+            }
             if (message.preservePendingHistory) {
                 const rebasedHistory = rebasePendingHistory(
                     undoStack,
@@ -6219,12 +6625,18 @@ window.addEventListener("message", (event: MessageEvent<IncomingMessage>) => {
             lastPendingEditsSyncKey = serializePendingEdits([]);
             notifyPendingEditState();
         } else if (message.replacePendingEdits) {
-            pendingEdits.clear();
-            for (const edit of message.replacePendingEdits) {
-                pendingEdits.set(
-                    getPendingEditKey(edit.sheetKey, edit.rowNumber, edit.columnNumber),
-                    edit
-                );
+            const nextPendingEditsSyncKey = serializePendingEdits(message.replacePendingEdits);
+            const hasPendingEditChange =
+                nextPendingEditsSyncKey !== serializePendingEdits(Array.from(pendingEdits.values()));
+            if (hasPendingEditChange) {
+                pendingEdits.clear();
+                for (const edit of message.replacePendingEdits) {
+                    pendingEdits.set(
+                        getPendingEditKey(edit.sheetKey, edit.rowNumber, edit.columnNumber),
+                        edit
+                    );
+                }
+                bumpPendingEditsVersion();
             }
 
             if (message.resetPendingHistory) {
@@ -6234,15 +6646,46 @@ window.addEventListener("message", (event: MessageEvent<IncomingMessage>) => {
             }
 
             lastPendingNotification = null;
-            lastPendingEditsSyncKey = serializePendingEdits(Array.from(pendingEdits.values()));
+            lastPendingEditsSyncKey = nextPendingEditsSyncKey;
             notifyPendingEditState();
         }
 
-        renderApp({
-            revealSelection: !message.silent,
-            useModelSelection: message.useModelSelection,
-            sync: true,
+        beginActiveWebviewRenderPerfTrace(
+            message.perfTraceId ?? null,
+            renderStartedAt,
+            createAlignmentRenderDirtyKeys(message.payload.activeSheet)
+        );
+        try {
+            renderApp({
+                revealSelection: !message.silent && !isAlignmentOnlyRender,
+                useModelSelection: message.useModelSelection,
+                layoutChanged: !isAlignmentOnlyRender,
+                sync: true,
+            });
+        } finally {
+            endActiveWebviewRenderPerfTrace();
+        }
+        const renderDurationMs = Number((performance.now() - renderStartedAt).toFixed(2));
+        logWebviewPerf("incomingRender:renderApp", {
+            perfTraceId: message.perfTraceId ?? null,
+            durationMs: renderDurationMs,
+            viewRevision,
+            layoutRevision,
+            alignmentOnlyRender: isAlignmentOnlyRender,
+            ...getWebviewActiveSheetPerfSummary(model),
         });
+        if (message.perfTraceId) {
+            const traceId = message.perfTraceId;
+            requestAnimationFrame(() => {
+                logWebviewPerf("incomingRender:paint", {
+                    perfTraceId: traceId,
+                    durationMs: Number((performance.now() - renderStartedAt).toFixed(2)),
+                    viewRevision,
+                    layoutRevision,
+                    debugRenderStats,
+                });
+            });
+        }
     }
 });
 

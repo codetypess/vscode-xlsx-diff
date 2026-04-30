@@ -75,6 +75,12 @@ export function cloneColumnAlignments(
     return cloneCellAlignmentMap(columnAlignments);
 }
 
+function copyAlignmentEntries(
+    alignments: Readonly<Record<string, CellAlignmentSnapshot>> | undefined
+): Record<string, CellAlignmentSnapshot> {
+    return { ...(alignments ?? {}) };
+}
+
 function normalizeColumnWidthsForComparison(
     columnWidths: readonly (number | null | undefined)[] | undefined
 ): Array<number | null> {
@@ -225,8 +231,7 @@ export function applyAlignmentPatchToSheetSnapshot(
     patch: EditorAlignmentPatch
 ): WorkbookSnapshot["sheets"][number] {
     if (target === "cell" || target === "range") {
-        const nextCellAlignments = cloneCellAlignments(sheet.cellAlignments);
-        let hasChanges = false;
+        let nextCellAlignments: Record<string, CellAlignmentSnapshot> | null = null;
 
         for (let rowNumber = selection.startRow; rowNumber <= selection.endRow; rowNumber += 1) {
             for (
@@ -235,12 +240,13 @@ export function applyAlignmentPatchToSheetSnapshot(
                 columnNumber += 1
             ) {
                 const cellKey = createCellKey(rowNumber, columnNumber);
-                const nextAlignment = applyCellAlignmentPatch(nextCellAlignments[cellKey], patch);
-                if (areCellAlignmentsEqual(nextCellAlignments[cellKey], nextAlignment)) {
+                const currentAlignment = sheet.cellAlignments?.[cellKey];
+                const nextAlignment = applyCellAlignmentPatch(currentAlignment, patch);
+                if (areCellAlignmentsEqual(currentAlignment, nextAlignment)) {
                     continue;
                 }
 
-                hasChanges = true;
+                nextCellAlignments ??= copyAlignmentEntries(sheet.cellAlignments);
                 if (nextAlignment) {
                     nextCellAlignments[cellKey] = nextAlignment;
                 } else {
@@ -249,7 +255,7 @@ export function applyAlignmentPatchToSheetSnapshot(
             }
         }
 
-        return hasChanges
+        return nextCellAlignments
             ? {
                   ...sheet,
                   cellAlignments: nextCellAlignments,
@@ -258,17 +264,17 @@ export function applyAlignmentPatchToSheetSnapshot(
     }
 
     if (target === "row") {
-        const nextRowAlignments = cloneRowAlignments(sheet.rowAlignments);
-        let hasChanges = false;
+        let nextRowAlignments: Record<string, CellAlignmentSnapshot> | null = null;
 
         for (let rowNumber = selection.startRow; rowNumber <= selection.endRow; rowNumber += 1) {
             const rowKey = String(rowNumber);
-            const nextAlignment = applyCellAlignmentPatch(nextRowAlignments[rowKey], patch);
-            if (areCellAlignmentsEqual(nextRowAlignments[rowKey], nextAlignment)) {
+            const currentAlignment = sheet.rowAlignments?.[rowKey];
+            const nextAlignment = applyCellAlignmentPatch(currentAlignment, patch);
+            if (areCellAlignmentsEqual(currentAlignment, nextAlignment)) {
                 continue;
             }
 
-            hasChanges = true;
+            nextRowAlignments ??= copyAlignmentEntries(sheet.rowAlignments);
             if (nextAlignment) {
                 nextRowAlignments[rowKey] = nextAlignment;
             } else {
@@ -276,7 +282,7 @@ export function applyAlignmentPatchToSheetSnapshot(
             }
         }
 
-        return hasChanges
+        return nextRowAlignments
             ? {
                   ...sheet,
                   rowAlignments: nextRowAlignments,
@@ -284,8 +290,7 @@ export function applyAlignmentPatchToSheetSnapshot(
             : sheet;
     }
 
-    const nextColumnAlignments = cloneColumnAlignments(sheet.columnAlignments);
-    let hasChanges = false;
+    let nextColumnAlignments: Record<string, CellAlignmentSnapshot> | null = null;
 
     for (
         let columnNumber = selection.startColumn;
@@ -293,12 +298,13 @@ export function applyAlignmentPatchToSheetSnapshot(
         columnNumber += 1
     ) {
         const columnKey = String(columnNumber);
-        const nextAlignment = applyCellAlignmentPatch(nextColumnAlignments[columnKey], patch);
-        if (areCellAlignmentsEqual(nextColumnAlignments[columnKey], nextAlignment)) {
+        const currentAlignment = sheet.columnAlignments?.[columnKey];
+        const nextAlignment = applyCellAlignmentPatch(currentAlignment, patch);
+        if (areCellAlignmentsEqual(currentAlignment, nextAlignment)) {
             continue;
         }
 
-        hasChanges = true;
+        nextColumnAlignments ??= copyAlignmentEntries(sheet.columnAlignments);
         if (nextAlignment) {
             nextColumnAlignments[columnKey] = nextAlignment;
         } else {
@@ -306,7 +312,7 @@ export function applyAlignmentPatchToSheetSnapshot(
         }
     }
 
-    return hasChanges
+    return nextColumnAlignments
         ? {
               ...sheet,
               columnAlignments: nextColumnAlignments,
@@ -318,6 +324,21 @@ export function cloneViewEdit(edit: SheetViewEdit): SheetViewEdit {
     return {
         ...edit,
         freezePane: edit.freezePane ? { ...edit.freezePane } : null,
+        ...(edit.dirtyCellAlignmentKeys
+            ? {
+                  dirtyCellAlignmentKeys: [...edit.dirtyCellAlignmentKeys],
+              }
+            : {}),
+        ...(edit.dirtyRowAlignmentKeys
+            ? {
+                  dirtyRowAlignmentKeys: [...edit.dirtyRowAlignmentKeys],
+              }
+            : {}),
+        ...(edit.dirtyColumnAlignmentKeys
+            ? {
+                  dirtyColumnAlignmentKeys: [...edit.dirtyColumnAlignmentKeys],
+              }
+            : {}),
         ...(edit.autoFilter !== undefined
             ? {
                   autoFilter: cloneAutoFilterSnapshot(edit.autoFilter),
@@ -346,6 +367,58 @@ export function cloneViewEdit(edit: SheetViewEdit): SheetViewEdit {
         ...(edit.columnAlignments
             ? {
                   columnAlignments: cloneColumnAlignments(edit.columnAlignments),
+              }
+            : {}),
+    };
+}
+
+function cloneViewEditForStructuralSnapshot(edit: SheetViewEdit): SheetViewEdit {
+    return {
+        ...edit,
+        freezePane: edit.freezePane ? { ...edit.freezePane } : null,
+        ...(edit.dirtyCellAlignmentKeys
+            ? {
+                  dirtyCellAlignmentKeys: [...edit.dirtyCellAlignmentKeys],
+              }
+            : {}),
+        ...(edit.dirtyRowAlignmentKeys
+            ? {
+                  dirtyRowAlignmentKeys: [...edit.dirtyRowAlignmentKeys],
+              }
+            : {}),
+        ...(edit.dirtyColumnAlignmentKeys
+            ? {
+                  dirtyColumnAlignmentKeys: [...edit.dirtyColumnAlignmentKeys],
+              }
+            : {}),
+        ...(edit.autoFilter !== undefined
+            ? {
+                  autoFilter: cloneAutoFilterSnapshot(edit.autoFilter),
+              }
+            : {}),
+        ...(edit.columnWidths
+            ? {
+                  columnWidths: edit.columnWidths,
+              }
+            : {}),
+        ...(edit.rowHeights
+            ? {
+                  rowHeights: edit.rowHeights,
+              }
+            : {}),
+        ...(edit.cellAlignments
+            ? {
+                  cellAlignments: edit.cellAlignments,
+              }
+            : {}),
+        ...(edit.rowAlignments
+            ? {
+                  rowAlignments: edit.rowAlignments,
+              }
+            : {}),
+        ...(edit.columnAlignments
+            ? {
+                  columnAlignments: edit.columnAlignments,
               }
             : {}),
     };
@@ -449,6 +522,31 @@ export function cloneSheetEntry(entry: WorkingSheetEntry): WorkingSheetEntry {
         key: entry.key,
         index: entry.index,
         sheet: cloneSheetSnapshot(entry.sheet),
+    };
+}
+
+function cloneSheetSnapshotForStructuralSnapshot(
+    sheet: WorkbookSnapshot["sheets"][number]
+): WorkbookSnapshot["sheets"][number] {
+    return {
+        ...sheet,
+        mergedRanges: [...sheet.mergedRanges],
+        columnWidths: sheet.columnWidths,
+        rowHeights: sheet.rowHeights,
+        cellAlignments: sheet.cellAlignments,
+        rowAlignments: sheet.rowAlignments,
+        columnAlignments: sheet.columnAlignments,
+        freezePane: sheet.freezePane ? { ...sheet.freezePane } : null,
+        autoFilter: cloneAutoFilterSnapshot(sheet.autoFilter),
+        cells: sheet.cells,
+    };
+}
+
+function cloneSheetEntryForStructuralSnapshot(entry: WorkingSheetEntry): WorkingSheetEntry {
+    return {
+        key: entry.key,
+        index: entry.index,
+        sheet: cloneSheetSnapshotForStructuralSnapshot(entry.sheet),
     };
 }
 
@@ -1180,7 +1278,9 @@ export function createPendingWorkbookEditState(
     return {
         cellEdits: pendingCellEdits.map(cloneCellEdit),
         sheetEdits: pendingSheetEdits.map(cloneSheetEdit),
-        viewEdits: pendingViewEdits.map(cloneViewEdit),
+        // View edits can carry large per-sheet alignment maps. Keep references here and
+        // clone when persisting/document boundaries actually need ownership.
+        viewEdits: pendingViewEdits,
     };
 }
 
@@ -1193,10 +1293,10 @@ export function captureStructuralSnapshot(
 ): StructuralSnapshot {
     return {
         state: cloneEditorState(state),
-        sheetEntries: sheetEntries.map(cloneSheetEntry),
+        sheetEntries: sheetEntries.map(cloneSheetEntryForStructuralSnapshot),
         pendingCellEdits: pendingCellEdits.map(cloneCellEdit),
         pendingSheetEdits: pendingSheetEdits.map(cloneSheetEdit),
-        pendingViewEdits: pendingViewEdits.map(cloneViewEdit),
+        pendingViewEdits: pendingViewEdits.map(cloneViewEditForStructuralSnapshot),
     };
 }
 
@@ -1206,7 +1306,7 @@ export function restoreStructuralSnapshot(snapshot: StructuralSnapshot): Restore
         sheetEntries: reindexWorkingSheetEntries(snapshot.sheetEntries.map(cloneSheetEntry)),
         pendingCellEdits: snapshot.pendingCellEdits.map(cloneCellEdit),
         pendingSheetEdits: snapshot.pendingSheetEdits.map(cloneSheetEdit),
-        pendingViewEdits: snapshot.pendingViewEdits.map(cloneViewEdit),
+        pendingViewEdits: snapshot.pendingViewEdits.map(cloneViewEditForStructuralSnapshot),
     };
 }
 

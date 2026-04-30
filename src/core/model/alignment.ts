@@ -38,6 +38,27 @@ const ALIGNMENT_KEYS = [
 
 type AlignmentKey = (typeof ALIGNMENT_KEYS)[number];
 
+function normalizeAlignmentValue(
+    key: AlignmentKey,
+    value: CellAlignmentSnapshot[AlignmentKey] | undefined
+): CellAlignmentSnapshot[AlignmentKey] | undefined {
+    switch (key) {
+        case "horizontal":
+            return value === "general" ? undefined : value;
+        case "wrapText":
+        case "shrinkToFit":
+        case "justifyLastLine":
+            return value === false ? undefined : value;
+        case "textRotation":
+        case "indent":
+        case "relativeIndent":
+        case "readingOrder":
+            return value === 0 ? undefined : value;
+        default:
+            return value;
+    }
+}
+
 export function cloneCellAlignment(
     alignment: CellAlignmentSnapshot | null | undefined
 ): CellAlignmentSnapshot | null {
@@ -51,7 +72,7 @@ export function cloneCellAlignment(
         CellAlignmentSnapshot[AlignmentKey] | undefined
     >;
     for (const key of ALIGNMENT_KEYS) {
-        const value = alignment[key];
+        const value = normalizeAlignmentValue(key, alignment[key]);
         if (value !== undefined) {
             nextAlignmentRecord[key] = value;
         }
@@ -90,15 +111,21 @@ export function areCellAlignmentMapsEquivalent(
     left: Readonly<Record<string, CellAlignmentSnapshot>> | undefined,
     right: Readonly<Record<string, CellAlignmentSnapshot>> | undefined
 ): boolean {
-    const normalizedLeft = cloneCellAlignmentMap(left);
-    const normalizedRight = cloneCellAlignmentMap(right);
-    const leftKeys = Object.keys(normalizedLeft);
-    const rightKeys = Object.keys(normalizedRight);
-    if (leftKeys.length !== rightKeys.length) {
-        return false;
+    if (left === right) {
+        return true;
     }
 
-    return leftKeys.every((key) => areCellAlignmentsEqual(normalizedLeft[key], normalizedRight[key]));
+    const leftEntries = left ?? {};
+    const rightEntries = right ?? {};
+    const keys = new Set([...Object.keys(leftEntries), ...Object.keys(rightEntries)]);
+
+    for (const key of keys) {
+        if (!areCellAlignmentsEqual(leftEntries[key], rightEntries[key])) {
+            return false;
+        }
+    }
+
+    return true;
 }
 
 export function mergeCellAlignments(

@@ -219,6 +219,21 @@ function cloneViewEdit(edit: SheetViewEdit): SheetViewEdit {
     return {
         ...edit,
         freezePane: edit.freezePane ? { ...edit.freezePane } : null,
+        ...(edit.dirtyCellAlignmentKeys
+            ? {
+                  dirtyCellAlignmentKeys: [...edit.dirtyCellAlignmentKeys],
+              }
+            : {}),
+        ...(edit.dirtyRowAlignmentKeys
+            ? {
+                  dirtyRowAlignmentKeys: [...edit.dirtyRowAlignmentKeys],
+              }
+            : {}),
+        ...(edit.dirtyColumnAlignmentKeys
+            ? {
+                  dirtyColumnAlignmentKeys: [...edit.dirtyColumnAlignmentKeys],
+              }
+            : {}),
         ...(edit.autoFilter !== undefined
             ? {
                   autoFilter: cloneAutoFilter(edit.autoFilter),
@@ -262,6 +277,10 @@ function areViewEditsEqual(
 
     return left.every((edit, index) => {
         const other = right[index];
+        if (edit === other) {
+            return true;
+        }
+
         return (
             edit.sheetKey === other.sheetKey &&
             edit.sheetName === other.sheetName &&
@@ -345,14 +364,11 @@ export class XlsxEditorDocument implements vscode.CustomDocument {
     public replacePendingState(state: Readonly<WorkbookEditState>): boolean {
         const normalizedEdits = [...state.cellEdits].sort(compareCellEdits);
         const normalizedSheetEdits = [...state.sheetEdits];
-        const normalizedViewEdits = (state.viewEdits ?? [])
-            .map(cloneViewEdit)
-            .sort(compareViewEdits);
-        const currentState = this.getPendingState();
+        const normalizedViewEdits = [...(state.viewEdits ?? [])].sort(compareViewEdits);
         if (
-            areCellEditsEqual(currentState.cellEdits, normalizedEdits) &&
-            areSheetEditsEqual(currentState.sheetEdits, normalizedSheetEdits) &&
-            areViewEditsEqual(currentState.viewEdits ?? [], normalizedViewEdits)
+            areCellEditsEqual(this.getPendingEdits(), normalizedEdits) &&
+            areSheetEditsEqual(this.pendingSheetEdits, normalizedSheetEdits) &&
+            areViewEditsEqual(this.pendingViewEdits, normalizedViewEdits)
         ) {
             return false;
         }

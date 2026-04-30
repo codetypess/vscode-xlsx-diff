@@ -70,6 +70,7 @@ export type EditorWebviewMessage =
           target: EditorAlignmentTargetKind;
           selection: SelectionRange;
           alignment: EditorAlignmentPatch;
+          perfTraceId?: string;
       }
     | ({ type: "search" } & EditorSearchRequest)
     | { type: "gotoCell"; reference: string }

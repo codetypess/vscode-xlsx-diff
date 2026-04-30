@@ -93,6 +93,9 @@ export interface SheetViewEdit {
     cellAlignments?: SheetCellAlignmentsSnapshot;
     rowAlignments?: SheetRowAlignmentsSnapshot;
     columnAlignments?: SheetColumnAlignmentsSnapshot;
+    dirtyCellAlignmentKeys?: string[];
+    dirtyRowAlignmentKeys?: string[];
+    dirtyColumnAlignmentKeys?: string[];
 }
 
 export interface WorkbookEditState {

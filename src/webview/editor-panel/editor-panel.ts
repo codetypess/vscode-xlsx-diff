@@ -7,10 +7,16 @@ import {
     type SheetEdit,
     type SheetViewEdit,
 } from "../../core/fastxlsx/write-cell-value";
-import type { EditorAlignmentPatch } from "../../core/model/alignment";
+import {
+    areCellAlignmentsEqual,
+    type CellAlignmentSnapshot,
+    type EditorAlignmentPatch,
+} from "../../core/model/alignment";
+import { createCellKey } from "../../core/model/cells";
 import type {
     EditorPanelState,
     EditorRenderModel,
+    EditorRenderPayload,
     SheetSnapshot,
     WorkbookSnapshot,
 } from "../../core/model/types";
@@ -27,6 +33,7 @@ import {
     resolveEditorCellReference,
     validateEditorSheetName,
 } from "./editor-panel-logic";
+import { formatPerfLog } from "./editor-perf-log";
 import {
     applyAlignmentPatchToSheetSnapshot,
     applyGridSheetEditToSheet,
@@ -39,11 +46,6 @@ import {
     areRowAlignmentsEquivalent,
     captureStructuralSnapshot,
     cloneAutoFilterSnapshot,
-    cloneCellAlignments,
-    cloneColumnWidths,
-    cloneColumnAlignments,
-    cloneRowHeights,
-    cloneRowAlignments,
     createCommittedWorkbookState,
     createFreezePaneSnapshot,
     createPendingWorkbookEditState,
@@ -88,6 +90,139 @@ function normalizeWorkbookColumnWidth(columnWidth: number): number {
 
 function normalizeWorkbookRowHeight(rowHeight: number): number {
     return Math.round(rowHeight * 100) / 100;
+}
+
+function countRecordEntries(record: Readonly<Record<string, unknown>> | undefined): number {
+    return Object.keys(record ?? {}).length;
+}
+
+function summarizeSheetForPerf(
+    sheet:
+        | {
+              name?: string;
+              rowCount?: number;
+              columnCount?: number;
+              cells?: Readonly<Record<string, unknown>>;
+              cellAlignments?: Readonly<Record<string, unknown>>;
+              rowAlignments?: Readonly<Record<string, unknown>>;
+              columnAlignments?: Readonly<Record<string, unknown>>;
+              rowHeights?: Readonly<Record<string, unknown>>;
+              columnWidths?: readonly unknown[];
+          }
+        | null
+        | undefined
+): Record<string, unknown> {
+    return {
+        sheetName: sheet?.name ?? null,
+        rowCount: sheet?.rowCount ?? null,
+        columnCount: sheet?.columnCount ?? null,
+        cellCount: countRecordEntries(sheet?.cells),
+        cellAlignmentCount: countRecordEntries(sheet?.cellAlignments),
+        rowAlignmentCount: countRecordEntries(sheet?.rowAlignments),
+        columnAlignmentCount: countRecordEntries(sheet?.columnAlignments),
+        rowHeightCount: countRecordEntries(sheet?.rowHeights),
+        columnWidthCount: sheet?.columnWidths?.length ?? 0,
+    };
+}
+
+function summarizePendingStateForPerf(state: {
+    cellEdits: readonly CellEdit[];
+    sheetEdits: readonly SheetEdit[];
+    viewEdits?: readonly SheetViewEdit[];
+}): Record<string, unknown> {
+    return {
+        cellEditCount: state.cellEdits.length,
+        sheetEditCount: state.sheetEdits.length,
+        viewEditCount: state.viewEdits?.length ?? 0,
+        totalDirtyCellAlignmentKeys: (state.viewEdits ?? []).reduce(
+            (total, edit) => total + (edit.dirtyCellAlignmentKeys?.length ?? 0),
+            0
+        ),
+        totalDirtyRowAlignmentKeys: (state.viewEdits ?? []).reduce(
+            (total, edit) => total + (edit.dirtyRowAlignmentKeys?.length ?? 0),
+            0
+        ),
+        totalDirtyColumnAlignmentKeys: (state.viewEdits ?? []).reduce(
+            (total, edit) => total + (edit.dirtyColumnAlignmentKeys?.length ?? 0),
+            0
+        ),
+    };
+}
+
+function logEditorPanelPerf(event: string, details: Record<string, unknown> = {}): void {
+    console.info(formatPerfLog("host", event, details));
+}
+
+interface ActiveSheetAlignmentRenderPatch {
+    sheetKey: string;
+    cellAlignmentKeys?: string[];
+    rowAlignmentKeys?: string[];
+    columnAlignmentKeys?: string[];
+}
+
+function pickAlignmentEntries<T>(
+    alignments: Readonly<Record<string, T>> | undefined,
+    keys: readonly string[]
+): Record<string, T> {
+    const nextEntries: Record<string, T> = {};
+    for (const key of keys) {
+        const value = alignments?.[key];
+        if (value !== undefined) {
+            nextEntries[key] = value;
+        }
+    }
+
+    return nextEntries;
+}
+
+function createActiveSheetAlignmentRenderPatch(
+    sheetKey: string,
+    target: EditorAlignmentTargetKind,
+    selection: SelectionRange
+): ActiveSheetAlignmentRenderPatch {
+    if (target === "cell" || target === "range") {
+        const cellAlignmentKeys: string[] = [];
+        for (let rowNumber = selection.startRow; rowNumber <= selection.endRow; rowNumber += 1) {
+            for (
+                let columnNumber = selection.startColumn;
+                columnNumber <= selection.endColumn;
+                columnNumber += 1
+            ) {
+                cellAlignmentKeys.push(createCellKey(rowNumber, columnNumber));
+            }
+        }
+
+        return {
+            sheetKey,
+            cellAlignmentKeys,
+        };
+    }
+
+    if (target === "row") {
+        const rowAlignmentKeys: string[] = [];
+        for (let rowNumber = selection.startRow; rowNumber <= selection.endRow; rowNumber += 1) {
+            rowAlignmentKeys.push(String(rowNumber));
+        }
+
+        return {
+            sheetKey,
+            rowAlignmentKeys,
+        };
+    }
+
+    const columnAlignmentKeys: string[] = [];
+    for (
+        let columnNumber = selection.startColumn;
+        columnNumber <= selection.endColumn;
+        columnNumber += 1
+    ) {
+        columnAlignmentKeys.push(String(columnNumber));
+    }
+
+    return {
+        sheetKey,
+        columnAlignmentKeys,
+    };
 }
 
 interface NumericSheetDimensionPromptOptions {
@@ -149,6 +284,8 @@ export class XlsxEditorPanel {
     private sheetUndoStack: StructuralHistoryEntry[] = [];
     private sheetRedoStack: StructuralHistoryEntry[] = [];
     private nextNewSheetId = 1;
+    private lastRenderedModel: EditorRenderModel | null = null;
+    private activePerfTraceId: string | null = null;
 
     private constructor(
         panel: vscode.WebviewPanel,
@@ -532,10 +669,17 @@ export class XlsxEditorPanel {
                     await this.setPendingColumnWidth(message.columnNumber, message.width);
                     return;
                 case "setAlignment":
+                    logEditorPanelPerf("handleMessage:setAlignment", {
+                        perfTraceId: message.perfTraceId ?? null,
+                        target: message.target,
+                        selection: message.selection,
+                        alignment: message.alignment,
+                    });
                     await this.setPendingAlignment(
                         message.target,
                         message.selection,
-                        message.alignment
+                        message.alignment,
+                        message.perfTraceId
                     );
                     return;
                 case "search": {
@@ -911,9 +1055,122 @@ export class XlsxEditorPanel {
         this.pendingViewEdits = restored.pendingViewEdits;
     }
 
+    private canReuseRenderedActiveSheetData(renderModel: EditorRenderModel): boolean {
+        return Boolean(
+            this.lastRenderedModel &&
+                this.lastRenderedModel.activeSheet.key === renderModel.activeSheet.key &&
+                this.lastRenderedModel.activeSheet.rowCount === renderModel.activeSheet.rowCount &&
+                this.lastRenderedModel.activeSheet.columnCount ===
+                    renderModel.activeSheet.columnCount
+        );
+    }
+
+    private createRenderPayload(
+        renderModel: EditorRenderModel,
+        reuseActiveSheetData: boolean,
+        alignmentRenderPatch?: ActiveSheetAlignmentRenderPatch
+    ): EditorRenderPayload {
+        if (!reuseActiveSheetData || !this.canReuseRenderedActiveSheetData(renderModel)) {
+            return renderModel;
+        }
+
+        const previousActiveSheet = this.lastRenderedModel!.activeSheet;
+        const nextActiveSheet = renderModel.activeSheet;
+        const payloadActiveSheet: EditorRenderPayload["activeSheet"] = {
+            key: nextActiveSheet.key,
+            rowCount: nextActiveSheet.rowCount,
+            columnCount: nextActiveSheet.columnCount,
+            freezePane: nextActiveSheet.freezePane,
+            autoFilter: nextActiveSheet.autoFilter,
+        };
+
+        if (
+            previousActiveSheet.columns.length !== nextActiveSheet.columns.length ||
+            previousActiveSheet.columns.some(
+                (label, index) => label !== nextActiveSheet.columns[index]
+            )
+        ) {
+            payloadActiveSheet.columns = nextActiveSheet.columns;
+        }
+
+        if (previousActiveSheet.columnWidths !== nextActiveSheet.columnWidths) {
+            payloadActiveSheet.columnWidths = nextActiveSheet.columnWidths;
+        }
+
+        if (previousActiveSheet.rowHeights !== nextActiveSheet.rowHeights) {
+            payloadActiveSheet.rowHeights = nextActiveSheet.rowHeights;
+        }
+
+        if (previousActiveSheet.cellAlignments !== nextActiveSheet.cellAlignments) {
+            if (
+                alignmentRenderPatch?.sheetKey === nextActiveSheet.key &&
+                alignmentRenderPatch.cellAlignmentKeys
+            ) {
+                payloadActiveSheet.cellAlignments = pickAlignmentEntries(
+                    nextActiveSheet.cellAlignments,
+                    alignmentRenderPatch.cellAlignmentKeys
+                ) as Record<string, CellAlignmentSnapshot>;
+                payloadActiveSheet.cellAlignmentDirtyKeys = [
+                    ...alignmentRenderPatch.cellAlignmentKeys,
+                ];
+            } else {
+                payloadActiveSheet.cellAlignments = nextActiveSheet.cellAlignments;
+            }
+        }
+
+        if (previousActiveSheet.rowAlignments !== nextActiveSheet.rowAlignments) {
+            if (
+                alignmentRenderPatch?.sheetKey === nextActiveSheet.key &&
+                alignmentRenderPatch.rowAlignmentKeys
+            ) {
+                payloadActiveSheet.rowAlignments = pickAlignmentEntries(
+                    nextActiveSheet.rowAlignments,
+                    alignmentRenderPatch.rowAlignmentKeys
+                ) as Record<string, CellAlignmentSnapshot>;
+                payloadActiveSheet.rowAlignmentDirtyKeys = [
+                    ...alignmentRenderPatch.rowAlignmentKeys,
+                ];
+            } else {
+                payloadActiveSheet.rowAlignments = nextActiveSheet.rowAlignments;
+            }
+        }
+
+        if (previousActiveSheet.columnAlignments !== nextActiveSheet.columnAlignments) {
+            if (
+                alignmentRenderPatch?.sheetKey === nextActiveSheet.key &&
+                alignmentRenderPatch.columnAlignmentKeys
+            ) {
+                payloadActiveSheet.columnAlignments = pickAlignmentEntries(
+                    nextActiveSheet.columnAlignments,
+                    alignmentRenderPatch.columnAlignmentKeys
+                ) as Record<string, CellAlignmentSnapshot>;
+                payloadActiveSheet.columnAlignmentDirtyKeys = [
+                    ...alignmentRenderPatch.columnAlignmentKeys,
+                ];
+            } else {
+                payloadActiveSheet.columnAlignments = nextActiveSheet.columnAlignments;
+            }
+        }
+
+        if (previousActiveSheet.cells !== nextActiveSheet.cells) {
+            payloadActiveSheet.cells = nextActiveSheet.cells;
+        }
+
+        return {
+            ...renderModel,
+            activeSheet: payloadActiveSheet,
+        };
+    }
+
     private async commitStructuralMutation(
         mutate: () => void,
-        { resetPendingHistory = true }: { resetPendingHistory?: boolean } = {}
+        {
+            resetPendingHistory = true,
+            activeSheetAlignmentRenderPatch,
+        }: {
+            resetPendingHistory?: boolean;
+            activeSheetAlignmentRenderPatch?: ActiveSheetAlignmentRenderPatch;
+        } = {}
     ): Promise<void> {
         const before = this.captureStructuralSnapshot();
         mutate();
@@ -926,6 +1183,7 @@ export class XlsxEditorPanel {
             useModelSelection: true,
             replacePendingEdits: this.pendingCellEdits,
             resetPendingHistory,
+            activeSheetAlignmentRenderPatch,
         });
     }
 
@@ -936,11 +1194,219 @@ export class XlsxEditorPanel {
             return undefined;
         }
 
+        if (this.pendingSheetEdits.length === 0) {
+            const match = /^sheet:(\d+)$/.exec(sheetKey);
+            const sheetIndex = match ? Number(match[1]) : Number.NaN;
+            return Number.isInteger(sheetIndex) ? this.workbook.sheets[sheetIndex] : undefined;
+        }
+
         return restorePendingWorkbookState(this.workbook, {
             cellEdits: [],
             sheetEdits: this.pendingSheetEdits,
             viewEdits: [],
         }).sheetEntries.find((entry) => entry.key === sheetKey)?.sheet;
+    }
+
+    private createSheetFreezePaneEdit(
+        sheet: WorkbookSnapshot["sheets"][number]
+    ): SheetViewEdit["freezePane"] {
+        return sheet.freezePane
+            ? {
+                  columnCount: sheet.freezePane.columnCount,
+                  rowCount: sheet.freezePane.rowCount,
+              }
+            : null;
+    }
+
+    private findPendingViewEdit(sheetKey: string): SheetViewEdit | undefined {
+        return this.pendingViewEdits.find((edit) => edit.sheetKey === sheetKey);
+    }
+
+    private ensurePendingViewEdit(entry: WorkingSheetEntry): SheetViewEdit {
+        const existingEdit = this.findPendingViewEdit(entry.key);
+        if (existingEdit) {
+            existingEdit.sheetName = entry.sheet.name;
+            existingEdit.freezePane = this.createSheetFreezePaneEdit(entry.sheet);
+            return existingEdit;
+        }
+
+        const nextEdit: SheetViewEdit = {
+            sheetKey: entry.key,
+            sheetName: entry.sheet.name,
+            freezePane: this.createSheetFreezePaneEdit(entry.sheet),
+        };
+        this.pendingViewEdits = [...this.pendingViewEdits, nextEdit];
+        return nextEdit;
+    }
+
+    private cleanupPendingViewEdit(
+        entry: WorkingSheetEntry,
+        baselineSheet: WorkbookSnapshot["sheets"][number] | undefined
+    ): void {
+        const edit = this.findPendingViewEdit(entry.key);
+        if (!edit) {
+            return;
+        }
+
+        const hasFreezePaneChange = !areFreezePaneCountsEqual(
+            baselineSheet?.freezePane ?? null,
+            entry.sheet.freezePane ?? null
+        );
+        if (
+            hasFreezePaneChange ||
+            edit.autoFilter !== undefined ||
+            edit.columnWidths !== undefined ||
+            edit.rowHeights !== undefined ||
+            edit.cellAlignments !== undefined ||
+            edit.rowAlignments !== undefined ||
+            edit.columnAlignments !== undefined
+        ) {
+            edit.sheetName = entry.sheet.name;
+            edit.freezePane = this.createSheetFreezePaneEdit(entry.sheet);
+            return;
+        }
+
+        this.pendingViewEdits = this.pendingViewEdits.filter(
+            (candidate) => candidate.sheetKey !== entry.key
+        );
+    }
+
+    private updatePendingAlignmentEditKeys(
+        edit: SheetViewEdit,
+        property: "cellAlignments" | "rowAlignments" | "columnAlignments",
+        dirtyKeyProperty:
+            | "dirtyCellAlignmentKeys"
+            | "dirtyRowAlignmentKeys"
+            | "dirtyColumnAlignmentKeys",
+        alignments:
+            | SheetSnapshot["cellAlignments"]
+            | SheetSnapshot["rowAlignments"]
+            | SheetSnapshot["columnAlignments"],
+        dirtyKeys: Set<string>
+    ): void {
+        if (dirtyKeys.size === 0) {
+            delete edit[property];
+            delete edit[dirtyKeyProperty];
+            return;
+        }
+
+        edit[property] = alignments;
+        edit[dirtyKeyProperty] = [...dirtyKeys].sort((left, right) => left.localeCompare(right));
+    }
+
+    private syncPendingAlignmentViewEdit(
+        entry: WorkingSheetEntry,
+        target: EditorAlignmentTargetKind,
+        selection: SelectionRange,
+        perfTraceId?: string
+    ): void {
+        const baselineSheet = this.getStructuralBaselineSheetSnapshot(entry.key);
+        const edit = this.ensurePendingViewEdit(entry);
+        const logDirtyState = () => {
+            logEditorPanelPerf("syncPendingAlignmentViewEdit", {
+                perfTraceId: perfTraceId ?? null,
+                target,
+                selection,
+                dirtyCellAlignmentKeyCount: edit.dirtyCellAlignmentKeys?.length ?? 0,
+                dirtyRowAlignmentKeyCount: edit.dirtyRowAlignmentKeys?.length ?? 0,
+                dirtyColumnAlignmentKeyCount: edit.dirtyColumnAlignmentKeys?.length ?? 0,
+                ...summarizeSheetForPerf(entry.sheet),
+            });
+        };
+
+        const dirtyCellAlignmentKeys = new Set(edit.dirtyCellAlignmentKeys ?? []);
+        const dirtyRowAlignmentKeys = new Set(edit.dirtyRowAlignmentKeys ?? []);
+        const dirtyColumnAlignmentKeys = new Set(edit.dirtyColumnAlignmentKeys ?? []);
+
+        const updateDirtyKey = (
+            dirtyKeys: Set<string>,
+            key: string,
+            baselineAlignment: Parameters<typeof areCellAlignmentsEqual>[0],
+            currentAlignment: Parameters<typeof areCellAlignmentsEqual>[1]
+        ) => {
+            if (areCellAlignmentsEqual(baselineAlignment, currentAlignment)) {
+                dirtyKeys.delete(key);
+                return;
+            }
+
+            dirtyKeys.add(key);
+        };
+
+        if (target === "cell" || target === "range") {
+            for (let rowNumber = selection.startRow; rowNumber <= selection.endRow; rowNumber += 1) {
+                for (
+                    let columnNumber = selection.startColumn;
+                    columnNumber <= selection.endColumn;
+                    columnNumber += 1
+                ) {
+                    const cellKey = createCellKey(rowNumber, columnNumber);
+                    updateDirtyKey(
+                        dirtyCellAlignmentKeys,
+                        cellKey,
+                        baselineSheet?.cellAlignments?.[cellKey],
+                        entry.sheet.cellAlignments?.[cellKey]
+                    );
+                }
+            }
+
+            this.updatePendingAlignmentEditKeys(
+                edit,
+                "cellAlignments",
+                "dirtyCellAlignmentKeys",
+                entry.sheet.cellAlignments,
+                dirtyCellAlignmentKeys
+            );
+            this.cleanupPendingViewEdit(entry, baselineSheet);
+            logDirtyState();
+            return;
+        }
+
+        if (target === "row") {
+            for (let rowNumber = selection.startRow; rowNumber <= selection.endRow; rowNumber += 1) {
+                const rowKey = String(rowNumber);
+                updateDirtyKey(
+                    dirtyRowAlignmentKeys,
+                    rowKey,
+                    baselineSheet?.rowAlignments?.[rowKey],
+                    entry.sheet.rowAlignments?.[rowKey]
+                );
+            }
+
+            this.updatePendingAlignmentEditKeys(
+                edit,
+                "rowAlignments",
+                "dirtyRowAlignmentKeys",
+                entry.sheet.rowAlignments,
+                dirtyRowAlignmentKeys
+            );
+            this.cleanupPendingViewEdit(entry, baselineSheet);
+            logDirtyState();
+            return;
+        }
+
+        for (
+            let columnNumber = selection.startColumn;
+            columnNumber <= selection.endColumn;
+            columnNumber += 1
+        ) {
+            const columnKey = String(columnNumber);
+            updateDirtyKey(
+                dirtyColumnAlignmentKeys,
+                columnKey,
+                baselineSheet?.columnAlignments?.[columnKey],
+                entry.sheet.columnAlignments?.[columnKey]
+            );
+        }
+
+        this.updatePendingAlignmentEditKeys(
+            edit,
+            "columnAlignments",
+            "dirtyColumnAlignmentKeys",
+            entry.sheet.columnAlignments,
+            dirtyColumnAlignmentKeys
+        );
+        this.cleanupPendingViewEdit(entry, baselineSheet);
+        logDirtyState();
     }
 
     private syncPendingSheetViewEdit(sheetKey: string): void {
@@ -1012,27 +1478,27 @@ export class XlsxEditorPanel {
                 : {}),
             ...(hasColumnWidthChange
                 ? {
-                      columnWidths: cloneColumnWidths(entry.sheet.columnWidths),
+                      columnWidths: entry.sheet.columnWidths,
                   }
                 : {}),
             ...(hasRowHeightChange
                 ? {
-                      rowHeights: cloneRowHeights(entry.sheet.rowHeights),
+                      rowHeights: entry.sheet.rowHeights,
                   }
                 : {}),
             ...(hasCellAlignmentChange
                 ? {
-                      cellAlignments: cloneCellAlignments(entry.sheet.cellAlignments),
+                      cellAlignments: entry.sheet.cellAlignments,
                   }
                 : {}),
             ...(hasRowAlignmentChange
                 ? {
-                      rowAlignments: cloneRowAlignments(entry.sheet.rowAlignments),
+                      rowAlignments: entry.sheet.rowAlignments,
                   }
                 : {}),
             ...(hasColumnAlignmentChange
                 ? {
-                      columnAlignments: cloneColumnAlignments(entry.sheet.columnAlignments),
+                      columnAlignments: entry.sheet.columnAlignments,
                   }
                 : {}),
         };
@@ -1330,8 +1796,10 @@ export class XlsxEditorPanel {
     private async setPendingAlignment(
         target: EditorAlignmentTargetKind,
         selection: SelectionRange,
-        alignment: EditorAlignmentPatch
+        alignment: EditorAlignmentPatch,
+        perfTraceId?: string
     ): Promise<void> {
+        const startedAt = performance.now();
         const workbook = this.getWorkingWorkbook();
         const activeEntry = this.getActiveSheetEntry();
         if (!workbook || workbook.isReadonly || !activeEntry) {
@@ -1382,35 +1850,64 @@ export class XlsxEditorPanel {
             return;
         }
 
+        logEditorPanelPerf("setPendingAlignment:start", {
+            perfTraceId: perfTraceId ?? null,
+            target,
+            selection: normalizedSelection,
+            alignment: nextAlignment,
+            ...summarizeSheetForPerf(activeEntry.sheet),
+            ...summarizePendingStateForPerf(this.createPendingState()),
+        });
         const previewSheet = applyAlignmentPatchToSheetSnapshot(
             activeEntry.sheet,
             target,
             normalizedSelection,
             nextAlignment
         );
+        logEditorPanelPerf("setPendingAlignment:preview", {
+            perfTraceId: perfTraceId ?? null,
+            durationMs: Number((performance.now() - startedAt).toFixed(2)),
+            sheetChanged: previewSheet !== activeEntry.sheet,
+            ...summarizeSheetForPerf(previewSheet),
+        });
         if (previewSheet === activeEntry.sheet) {
             return;
         }
 
-        await this.commitStructuralMutation(
-            () => {
-                const entry = this.getActiveSheetEntry();
-                if (!entry) {
-                    return;
-                }
+        this.activePerfTraceId = perfTraceId ?? null;
+        try {
+            await this.commitStructuralMutation(
+                () => {
+                    const entry = this.getActiveSheetEntry();
+                    if (!entry) {
+                        return;
+                    }
 
-                entry.sheet = applyAlignmentPatchToSheetSnapshot(
-                    entry.sheet,
-                    target,
-                    normalizedSelection,
-                    nextAlignment
-                );
-                this.syncPendingSheetViewEdit(entry.key);
-            },
-            {
-                resetPendingHistory: false,
-            }
-        );
+                    entry.sheet = previewSheet;
+                    this.syncPendingAlignmentViewEdit(
+                        entry,
+                        target,
+                        normalizedSelection,
+                        perfTraceId
+                    );
+                },
+                {
+                    resetPendingHistory: false,
+                    activeSheetAlignmentRenderPatch: createActiveSheetAlignmentRenderPatch(
+                        activeEntry.key,
+                        target,
+                        normalizedSelection
+                    ),
+                }
+            );
+        } finally {
+            logEditorPanelPerf("setPendingAlignment:done", {
+                perfTraceId: perfTraceId ?? null,
+                totalDurationMs: Number((performance.now() - startedAt).toFixed(2)),
+                ...summarizePendingStateForPerf(this.createPendingState()),
+            });
+            this.activePerfTraceId = null;
+        }
     }
 
     private async toggleViewLock(columnCount: number, rowCount: number): Promise<void> {
@@ -1523,7 +2020,16 @@ export class XlsxEditorPanel {
     }
 
     private async syncPendingState(): Promise<void> {
-        await this.controller.onPendingStateChanged(this.createPendingState());
+        const pendingState = this.createPendingState();
+        const startedAt = performance.now();
+        await this.controller.onPendingStateChanged(pendingState);
+        if (this.activePerfTraceId) {
+            logEditorPanelPerf("syncPendingState", {
+                perfTraceId: this.activePerfTraceId,
+                durationMs: Number((performance.now() - startedAt).toFixed(2)),
+                ...summarizePendingStateForPerf(pendingState),
+            });
+        }
 
         if (
             this.pendingCellEdits.length === 0 &&
@@ -1981,10 +2487,11 @@ export class XlsxEditorPanel {
             silent = false,
             clearPendingEdits = false,
             preservePendingHistory = false,
-            reuseActiveSheetData = false,
+            reuseActiveSheetData = true,
             useModelSelection = true,
             replacePendingEdits,
             resetPendingHistory = false,
+            activeSheetAlignmentRenderPatch,
         }: {
             silent?: boolean;
             clearPendingEdits?: boolean;
@@ -1993,12 +2500,14 @@ export class XlsxEditorPanel {
             useModelSelection?: boolean;
             replacePendingEdits?: CellEdit[];
             resetPendingHistory?: boolean;
+            activeSheetAlignmentRenderPatch?: ActiveSheetAlignmentRenderPatch;
         } = {}
     ): Promise<void> {
         if (!this.workbook) {
             return;
         }
 
+        const renderStartedAt = performance.now();
         const workbook = this.getWorkingWorkbook();
         if (!workbook) {
             return;
@@ -2019,20 +2528,56 @@ export class XlsxEditorPanel {
             return;
         }
 
+        const renderPayload = this.createRenderPayload(
+            payload,
+            reuseActiveSheetData,
+            activeSheetAlignmentRenderPatch
+        );
+        if (this.activePerfTraceId) {
+            logEditorPanelPerf("render:payload", {
+                perfTraceId: this.activePerfTraceId,
+                durationMs: Number((performance.now() - renderStartedAt).toFixed(2)),
+                reuseActiveSheetData,
+                payloadHasCells: renderPayload.activeSheet.cells !== undefined,
+                payloadHasColumns: renderPayload.activeSheet.columns !== undefined,
+                payloadHasColumnWidths: renderPayload.activeSheet.columnWidths !== undefined,
+                payloadHasRowHeights: renderPayload.activeSheet.rowHeights !== undefined,
+                payloadHasCellAlignments: renderPayload.activeSheet.cellAlignments !== undefined,
+                payloadHasRowAlignments: renderPayload.activeSheet.rowAlignments !== undefined,
+                payloadHasColumnAlignments:
+                    renderPayload.activeSheet.columnAlignments !== undefined,
+                payloadCellAlignmentDirtyKeyCount:
+                    renderPayload.activeSheet.cellAlignmentDirtyKeys?.length ?? 0,
+                payloadRowAlignmentDirtyKeyCount:
+                    renderPayload.activeSheet.rowAlignmentDirtyKeys?.length ?? 0,
+                payloadColumnAlignmentDirtyKeyCount:
+                    renderPayload.activeSheet.columnAlignmentDirtyKeys?.length ?? 0,
+                ...summarizeSheetForPerf(payload.activeSheet),
+            });
+        }
         this.hasPendingRender = false;
         await this.panel.webview.postMessage({
             type: "render",
-            payload,
+            payload: renderPayload,
             silent,
             clearPendingEdits,
             preservePendingHistory,
             reuseActiveSheetData,
             useModelSelection,
+            perfTraceId: this.activePerfTraceId ?? undefined,
             replacePendingEdits:
                 replacePendingEdits !== undefined
                     ? mapPendingCellEditsToWebview(replacePendingEdits, this.getSheetEntries())
                     : undefined,
             resetPendingHistory,
         });
+        if (this.activePerfTraceId) {
+            logEditorPanelPerf("render:postMessage", {
+                perfTraceId: this.activePerfTraceId,
+                durationMs: Number((performance.now() - renderStartedAt).toFixed(2)),
+                ...summarizeSheetForPerf(payload.activeSheet),
+            });
+        }
+        this.lastRenderedModel = payload;
     }
 }

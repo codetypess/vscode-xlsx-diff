@@ -4,6 +4,7 @@ import { type WorkbookEditState } from "../../core/fastxlsx/write-cell-value";
 import { rememberRecentWorkbookResourceUri } from "../../scm/recent-workbook-resource-context";
 import { withWorkbookSaveProgress } from "../../workbook/save-progress";
 import { readEditorBackupState, writeEditorBackupState } from "./editor-backup-state";
+import { formatPerfLog } from "./editor-perf-log";
 import { XlsxEditorDocument } from "./xlsx-editor-document";
 
 async function getXlsxEditorPanelModule(): Promise<typeof import("./editor-panel")> {
@@ -67,10 +68,27 @@ export class XlsxCustomEditorProvider
         const { XlsxEditorPanel } = await getXlsxEditorPanelModule();
         await XlsxEditorPanel.resolveCustomEditor(this.extensionUri, document, webviewPanel, {
             onPendingStateChanged: async (state: WorkbookEditState) => {
+                const startedAt = performance.now();
                 if (!document.replacePendingState(state)) {
+                    console.info(
+                        formatPerfLog("provider", "onPendingStateChanged:no-op", {
+                            durationMs: Number((performance.now() - startedAt).toFixed(2)),
+                            cellEditCount: state.cellEdits.length,
+                            sheetEditCount: state.sheetEdits.length,
+                            viewEditCount: state.viewEdits?.length ?? 0,
+                        })
+                    );
                     return;
                 }
 
+                console.info(
+                    formatPerfLog("provider", "onPendingStateChanged:updated", {
+                        durationMs: Number((performance.now() - startedAt).toFixed(2)),
+                        cellEditCount: state.cellEdits.length,
+                        sheetEditCount: state.sheetEdits.length,
+                        viewEditCount: state.viewEdits?.length ?? 0,
+                    })
+                );
                 this.onDidChangeCustomDocumentEmitter.fire({ document });
             },
             onRequestSave: async () => {

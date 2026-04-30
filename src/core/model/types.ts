@@ -149,6 +149,15 @@ export interface EditorActiveSheetView {
     autoFilter: SheetAutoFilterSnapshot | null;
 }
 
+export interface EditorActiveSheetRenderPayload
+    extends Omit<EditorActiveSheetView, "columns" | "cells"> {
+    columns?: string[];
+    cells?: Record<string, CellSnapshot>;
+    cellAlignmentDirtyKeys?: string[];
+    rowAlignmentDirtyKeys?: string[];
+    columnAlignmentDirtyKeys?: string[];
+}
+
 export interface EditorRenderModel {
     title: string;
     activeSheet: EditorActiveSheetView;
@@ -158,6 +167,10 @@ export interface EditorRenderModel {
     sheets: EditorSheetTabView[];
     canUndoStructuralEdits: boolean;
     canRedoStructuralEdits: boolean;
+}
+
+export interface EditorRenderPayload extends Omit<EditorRenderModel, "activeSheet"> {
+    activeSheet: EditorActiveSheetRenderPayload;
 }
 
 export interface SheetDiffModel {

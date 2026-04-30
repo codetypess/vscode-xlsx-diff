@@ -1,5 +1,4 @@
 import { createCellKey, getColumnLabel } from "../../core/model/cells";
-import { cloneCellAlignmentMap } from "../../core/model/alignment";
 import {
     type EditorPanelState,
     type EditorRenderModel,
@@ -10,6 +9,10 @@ import {
     type WorkbookSnapshot,
 } from "../../core/model/types";
 import { getRuntimeMessages } from "../../i18n";
+
+const EMPTY_COLUMN_WIDTHS: Array<number | null> = [];
+const EMPTY_ROW_HEIGHTS = {};
+const EMPTY_ALIGNMENTS = {};
 
 export interface EditorSheetEntry {
     key: string;
@@ -259,11 +262,11 @@ export function createEditorRenderModel(
             rowCount: activeSheet.rowCount,
             columnCount: activeSheet.columnCount,
             columns,
-            columnWidths: [...(activeSheet.columnWidths ?? [])],
-            rowHeights: { ...(activeSheet.rowHeights ?? {}) },
-            cellAlignments: cloneCellAlignmentMap(activeSheet.cellAlignments),
-            rowAlignments: cloneCellAlignmentMap(activeSheet.rowAlignments),
-            columnAlignments: cloneCellAlignmentMap(activeSheet.columnAlignments),
+            columnWidths: activeSheet.columnWidths ?? EMPTY_COLUMN_WIDTHS,
+            rowHeights: activeSheet.rowHeights ?? EMPTY_ROW_HEIGHTS,
+            cellAlignments: activeSheet.cellAlignments ?? EMPTY_ALIGNMENTS,
+            rowAlignments: activeSheet.rowAlignments ?? EMPTY_ALIGNMENTS,
+            columnAlignments: activeSheet.columnAlignments ?? EMPTY_ALIGNMENTS,
             cells: activeSheet.cells,
             freezePane: activeSheet.freezePane ?? null,
             autoFilter: activeSheet.autoFilter ?? null,

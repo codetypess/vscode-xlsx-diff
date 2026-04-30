@@ -201,7 +201,8 @@ suite("Editor panel alignment", () => {
             sheet: createSheet(),
         };
         let committedOptions: { resetPendingHistory?: boolean } | null = null;
-        let syncedSheetKey: string | null = null;
+        let syncedSelection: unknown = null;
+        let syncedTarget: unknown = null;
 
         panel.getWorkingWorkbook = () => ({ isReadonly: false });
         panel.getActiveSheetEntry = () => activeEntry;
@@ -212,8 +213,14 @@ suite("Editor panel alignment", () => {
             committedOptions = options;
             mutate();
         };
-        panel.syncPendingSheetViewEdit = (sheetKey: string) => {
-            syncedSheetKey = sheetKey;
+        panel.syncPendingAlignmentViewEdit = (
+            entry: unknown,
+            target: unknown,
+            selection: unknown
+        ) => {
+            assert.strictEqual(entry, activeEntry);
+            syncedTarget = target;
+            syncedSelection = selection;
         };
 
         await panel.setPendingAlignment(
@@ -238,6 +245,12 @@ suite("Editor panel alignment", () => {
             },
         });
         assert.deepStrictEqual(committedOptions, { resetPendingHistory: false });
-        assert.strictEqual(syncedSheetKey, "sheet:0");
+        assert.strictEqual(syncedTarget, "row");
+        assert.deepStrictEqual(syncedSelection, {
+            startRow: 2,
+            endRow: 3,
+            startColumn: 1,
+            endColumn: 4,
+        });
     });
 });
