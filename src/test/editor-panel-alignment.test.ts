@@ -9,9 +9,7 @@ import {
     applyGridSheetEditToSheet,
 } from "../webview/editor-panel/editor-panel-state";
 
-function createSheet(
-    overrides: Partial<SheetSnapshot> = {}
-): SheetSnapshot {
+function createSheet(overrides: Partial<SheetSnapshot> = {}): SheetSnapshot {
     return {
         name: "Sheet1",
         rowCount: 5,
@@ -200,7 +198,10 @@ suite("Editor panel alignment", () => {
             key: "sheet:0",
             sheet: createSheet(),
         };
-        let committedOptions: { resetPendingHistory?: boolean } | null = null;
+        let committedOptions: {
+            resetPendingHistory?: boolean;
+            activeSheetAlignmentRenderPatch?: unknown;
+        } | null = null;
         let syncedSelection: unknown = null;
         let syncedTarget: unknown = null;
 
@@ -244,7 +245,13 @@ suite("Editor panel alignment", () => {
                 vertical: "center",
             },
         });
-        assert.deepStrictEqual(committedOptions, { resetPendingHistory: false });
+        assert.deepStrictEqual(committedOptions, {
+            resetPendingHistory: false,
+            activeSheetAlignmentRenderPatch: {
+                sheetKey: "sheet:0",
+                rowAlignmentKeys: ["2", "3"],
+            },
+        });
         assert.strictEqual(syncedTarget, "row");
         assert.deepStrictEqual(syncedSelection, {
             startRow: 2,

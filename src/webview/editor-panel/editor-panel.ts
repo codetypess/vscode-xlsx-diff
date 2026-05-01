@@ -1,7 +1,6 @@
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { DEFAULT_PAGE_SIZE } from "../../constants";
-import { loadWorkbookSnapshot } from "../../core/fastxlsx/load-workbook-snapshot";
 import {
     type CellEdit,
     type SheetEdit,
@@ -9,23 +8,25 @@ import {
 } from "../../core/fastxlsx/write-cell-value";
 import {
     areCellAlignmentsEqual,
-    type CellAlignmentSnapshot,
     type EditorAlignmentPatch,
 } from "../../core/model/alignment";
 import { createCellKey } from "../../core/model/cells";
 import type {
     EditorPanelState,
     EditorRenderModel,
-    EditorRenderPayload,
     SheetSnapshot,
     WorkbookSnapshot,
 } from "../../core/model/types";
-import { getHtmlLanguageTag } from "../../display-language";
 import { toErrorMessage } from "../../error-message";
 import { getRuntimeMessages } from "../../i18n";
 import { rememberRecentWorkbookResourceUri } from "../../scm/recent-workbook-resource-context";
+import {
+    createSessionStatusMessage,
+    isEditorWebviewOutgoingMessage,
+    type EditorWebviewOutgoingMessage,
+} from "../../webview-solid/shared/session-protocol";
 import { getWorkbookResourceName } from "../../workbook/resource-uri";
-import { createWebviewNonce, escapeWatcherGlobSegment } from "../webview-utils";
+import { escapeWatcherGlobSegment } from "../webview-utils";
 import {
     getInsertEditorSheetIndex,
     getNewEditorSheetName,
@@ -46,25 +47,28 @@ import {
     areRowAlignmentsEquivalent,
     captureStructuralSnapshot,
     cloneAutoFilterSnapshot,
-    createCommittedWorkbookState,
     createFreezePaneSnapshot,
     createPendingWorkbookEditState,
     isGridSheetEdit,
     restorePendingWorkbookState,
     setSheetColumnWidthSnapshot,
     setSheetRowHeightSnapshot,
-    createWorkingSheetEntries,
     createWorkingWorkbook,
-    mapPendingCellEditsToWebview,
     reindexWorkingSheetEntries,
     restoreStructuralSnapshot,
     shiftPendingCellEditsForGridSheetEdit,
 } from "./editor-panel-state";
+import {
+    createActiveSheetAlignmentRenderPatch,
+    createEditorPanelHtml,
+    createEditorRenderPayload,
+    createEditorSessionMessage,
+    type ActiveSheetAlignmentRenderPatch,
+} from "./editor-panel-protocol-adapter";
 import type {
     EditorAlignmentTargetKind,
     EditorPanelStrings,
     EditorSearchResultMessage,
-    EditorWebviewMessage,
     StructuralHistoryEntry,
     WorkingSheetEntry,
     XlsxEditorPanelController,
@@ -78,6 +82,10 @@ import {
     setSelectedEditorCell,
 } from "./editor-render-model";
 import { hasLockedView } from "../view-lock";
+import {
+    commitEditorWorkbookSession,
+    loadEditorWorkbookSession,
+} from "./editor-workbook-session";
 import { XlsxEditorDocument } from "./xlsx-editor-document";
 
 function getWebviewStrings(): EditorPanelStrings {
@@ -153,78 +161,6 @@ function logEditorPanelPerf(event: string, details: Record<string, unknown> = {}
     console.info(formatPerfLog("host", event, details));
 }
 
-interface ActiveSheetAlignmentRenderPatch {
-    sheetKey: string;
-    cellAlignmentKeys?: string[];
-    rowAlignmentKeys?: string[];
-    columnAlignmentKeys?: string[];
-}
-
-function pickAlignmentEntries<T>(
-    alignments: Readonly<Record<string, T>> | undefined,
-    keys: readonly string[]
-): Record<string, T> {
-    const nextEntries: Record<string, T> = {};
-    for (const key of keys) {
-        const value = alignments?.[key];
-        if (value !== undefined) {
-            nextEntries[key] = value;
-        }
-    }
-
-    return nextEntries;
-}
-
-function createActiveSheetAlignmentRenderPatch(
-    sheetKey: string,
-    target: EditorAlignmentTargetKind,
-    selection: SelectionRange
-): ActiveSheetAlignmentRenderPatch {
-    if (target === "cell" || target === "range") {
-        const cellAlignmentKeys: string[] = [];
-        for (let rowNumber = selection.startRow; rowNumber <= selection.endRow; rowNumber += 1) {
-            for (
-                let columnNumber = selection.startColumn;
-                columnNumber <= selection.endColumn;
-                columnNumber += 1
-            ) {
-                cellAlignmentKeys.push(createCellKey(rowNumber, columnNumber));
-            }
-        }
-
-        return {
-            sheetKey,
-            cellAlignmentKeys,
-        };
-    }
-
-    if (target === "row") {
-        const rowAlignmentKeys: string[] = [];
-        for (let rowNumber = selection.startRow; rowNumber <= selection.endRow; rowNumber += 1) {
-            rowAlignmentKeys.push(String(rowNumber));
-        }
-
-        return {
-            sheetKey,
-            rowAlignmentKeys,
-        };
-    }
-
-    const columnAlignmentKeys: string[] = [];
-    for (
-        let columnNumber = selection.startColumn;
-        columnNumber <= selection.endColumn;
-        columnNumber += 1
-    ) {
-        columnAlignmentKeys.push(String(columnNumber));
-    }
-
-    return {
-        sheetKey,
-        columnAlignmentKeys,
-    };
-}
-
 interface NumericSheetDimensionPromptOptions {
     currentValue: number | null;
     prompt: string;
@@ -268,6 +204,7 @@ export class XlsxEditorPanel {
     };
     private isWebviewReady = false;
     private hasPendingRender = false;
+    private hasSentSessionInit = false;
     private isReloading = false;
     private hasQueuedReload = false;
     private autoRefreshTimer: ReturnType<typeof setTimeout> | undefined;
@@ -316,7 +253,11 @@ export class XlsxEditorPanel {
             this.disposables
         );
         this.panel.webview.onDidReceiveMessage(
-            (message: EditorWebviewMessage) => {
+            (message: unknown) => {
+                if (!isEditorWebviewOutgoingMessage(message)) {
+                    return;
+                }
+
                 void this.handleMessage(message);
             },
             null,
@@ -550,10 +491,9 @@ export class XlsxEditorPanel {
         console.error(error);
         await vscode.window.showErrorMessage(errorMessage);
         if (this.isWebviewReady) {
-            await this.panel.webview.postMessage({
-                type: "error",
-                message: errorMessage,
-            });
+            await this.panel.webview.postMessage(
+                createSessionStatusMessage("editor", "error", errorMessage)
+            );
         }
     }
 
@@ -566,6 +506,7 @@ export class XlsxEditorPanel {
         }
 
         this.isWebviewReady = false;
+        this.hasSentSessionInit = false;
         this.hasPendingRender = Boolean(this.workbook);
         this.panel.webview.html = this.getHtml();
         await this.enqueueReload();
@@ -580,45 +521,20 @@ export class XlsxEditorPanel {
     }
 
     private getHtml(): string {
-        const webview = this.panel.webview;
-        const nonce = createWebviewNonce();
-        const webviewStrings = getWebviewStrings();
-        const strings = JSON.stringify(webviewStrings).replace(/</g, "\\u003c");
-        const scriptUri = webview.asWebviewUri(
-            vscode.Uri.joinPath(this.extensionUri, "media", "editor-panel.js")
-        );
-        const styleUri = webview.asWebviewUri(
-            vscode.Uri.joinPath(this.extensionUri, "media", "editor-panel.css")
-        );
-        const codiconStyleUri = webview.asWebviewUri(
-            vscode.Uri.joinPath(this.extensionUri, "media", "codicons", "codicon.css")
-        );
-
-        return `<!DOCTYPE html>
-<html lang="${getHtmlLanguageTag()}">
-<head>
-	<meta charset="UTF-8" />
-	<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} https: data:; script-src 'nonce-${nonce}'; style-src ${webview.cspSource}; font-src ${webview.cspSource};" />
-	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-	<link rel="stylesheet" href="${codiconStyleUri}" />
-	<link rel="stylesheet" href="${styleUri}" />
-	<title>XLSX Editor</title>
-</head>
-<body>
-	<div id="app" class="loading-shell">
-		<div class="loading-shell__message">${webviewStrings.loading}</div>
-	</div>
-	<script nonce="${nonce}">window.__XLSX_EDITOR_STRINGS__ = ${strings}; window.__XLSX_EDITOR_DEBUG__ = ${JSON.stringify(XlsxEditorPanel.isDebugMode)};</script>
-	<script nonce="${nonce}" src="${scriptUri}"></script>
-</body>
-</html>`;
+        return createEditorPanelHtml({
+            webview: this.panel.webview,
+            extensionUri: this.extensionUri,
+            strings: getWebviewStrings(),
+            isDebugMode: XlsxEditorPanel.isDebugMode,
+        });
     }
 
-    private async handleMessage(message: EditorWebviewMessage): Promise<void> {
+    private async handleMessage(message: EditorWebviewOutgoingMessage): Promise<void> {
         try {
             switch (message.type) {
                 case "ready":
                     this.isWebviewReady = true;
+                    this.hasSentSessionInit = false;
                     if (this.hasPendingRender) {
                         await this.render();
                     }
@@ -872,40 +788,24 @@ export class XlsxEditorPanel {
             return;
         }
 
-        const activeSheetName = this.getActiveSheetEntry()?.sheet.name ?? null;
-        const selectedCell = this.state.selectedCell ? { ...this.state.selectedCell } : null;
-        const committedState = createCommittedWorkbookState(
-            this.workbook,
-            this.workingSheetEntries,
-            this.pendingCellEdits
-        );
+        const committedSession = commitEditorWorkbookSession({
+            workbook: this.workbook,
+            workingSheetEntries: this.workingSheetEntries,
+            pendingCellEdits: this.pendingCellEdits,
+            currentPanelState: this.state,
+        });
 
-        this.workbook = committedState.workbook;
-        this.workingSheetEntries = committedState.sheetEntries;
-        this.nextNewSheetId = 1;
-        this.pendingCellEdits = [];
-        this.pendingSheetEdits = [];
-        this.pendingViewEdits = [];
+        this.workbook = committedSession.workbook;
+        this.workingSheetEntries = committedSession.workingSheetEntries;
+        this.nextNewSheetId = committedSession.nextNewSheetId;
+        this.pendingCellEdits = committedSession.pendingCellEdits;
+        this.pendingSheetEdits = committedSession.pendingSheetEdits;
+        this.pendingViewEdits = committedSession.pendingViewEdits;
         this.sheetUndoStack.length = 0;
         this.sheetRedoStack.length = 0;
         this.hasWarnedPendingExternalChange = false;
         this.hasPendingExternalWorkbookChange = false;
-
-        const nextActiveEntry =
-            (activeSheetName
-                ? this.workingSheetEntries.find((entry) => entry.sheet.name === activeSheetName)
-                : null) ??
-            this.workingSheetEntries[0] ??
-            null;
-
-        this.state = normalizeEditorPanelState(
-            this.getWorkingWorkbook()!,
-            {
-                activeSheetKey: nextActiveEntry?.key ?? null,
-                selectedCell,
-            },
-            this.getSheetEntries()
-        );
+        this.state = committedSession.panelState;
 
         await this.render(undefined, {
             silent: true,
@@ -1055,113 +955,6 @@ export class XlsxEditorPanel {
         this.pendingViewEdits = restored.pendingViewEdits;
     }
 
-    private canReuseRenderedActiveSheetData(renderModel: EditorRenderModel): boolean {
-        return Boolean(
-            this.lastRenderedModel &&
-                this.lastRenderedModel.activeSheet.key === renderModel.activeSheet.key &&
-                this.lastRenderedModel.activeSheet.rowCount === renderModel.activeSheet.rowCount &&
-                this.lastRenderedModel.activeSheet.columnCount ===
-                    renderModel.activeSheet.columnCount
-        );
-    }
-
-    private createRenderPayload(
-        renderModel: EditorRenderModel,
-        reuseActiveSheetData: boolean,
-        alignmentRenderPatch?: ActiveSheetAlignmentRenderPatch
-    ): EditorRenderPayload {
-        if (!reuseActiveSheetData || !this.canReuseRenderedActiveSheetData(renderModel)) {
-            return renderModel;
-        }
-
-        const previousActiveSheet = this.lastRenderedModel!.activeSheet;
-        const nextActiveSheet = renderModel.activeSheet;
-        const payloadActiveSheet: EditorRenderPayload["activeSheet"] = {
-            key: nextActiveSheet.key,
-            rowCount: nextActiveSheet.rowCount,
-            columnCount: nextActiveSheet.columnCount,
-            freezePane: nextActiveSheet.freezePane,
-            autoFilter: nextActiveSheet.autoFilter,
-        };
-
-        if (
-            previousActiveSheet.columns.length !== nextActiveSheet.columns.length ||
-            previousActiveSheet.columns.some(
-                (label, index) => label !== nextActiveSheet.columns[index]
-            )
-        ) {
-            payloadActiveSheet.columns = nextActiveSheet.columns;
-        }
-
-        if (previousActiveSheet.columnWidths !== nextActiveSheet.columnWidths) {
-            payloadActiveSheet.columnWidths = nextActiveSheet.columnWidths;
-        }
-
-        if (previousActiveSheet.rowHeights !== nextActiveSheet.rowHeights) {
-            payloadActiveSheet.rowHeights = nextActiveSheet.rowHeights;
-        }
-
-        if (previousActiveSheet.cellAlignments !== nextActiveSheet.cellAlignments) {
-            if (
-                alignmentRenderPatch?.sheetKey === nextActiveSheet.key &&
-                alignmentRenderPatch.cellAlignmentKeys
-            ) {
-                payloadActiveSheet.cellAlignments = pickAlignmentEntries(
-                    nextActiveSheet.cellAlignments,
-                    alignmentRenderPatch.cellAlignmentKeys
-                ) as Record<string, CellAlignmentSnapshot>;
-                payloadActiveSheet.cellAlignmentDirtyKeys = [
-                    ...alignmentRenderPatch.cellAlignmentKeys,
-                ];
-            } else {
-                payloadActiveSheet.cellAlignments = nextActiveSheet.cellAlignments;
-            }
-        }
-
-        if (previousActiveSheet.rowAlignments !== nextActiveSheet.rowAlignments) {
-            if (
-                alignmentRenderPatch?.sheetKey === nextActiveSheet.key &&
-                alignmentRenderPatch.rowAlignmentKeys
-            ) {
-                payloadActiveSheet.rowAlignments = pickAlignmentEntries(
-                    nextActiveSheet.rowAlignments,
-                    alignmentRenderPatch.rowAlignmentKeys
-                ) as Record<string, CellAlignmentSnapshot>;
-                payloadActiveSheet.rowAlignmentDirtyKeys = [
-                    ...alignmentRenderPatch.rowAlignmentKeys,
-                ];
-            } else {
-                payloadActiveSheet.rowAlignments = nextActiveSheet.rowAlignments;
-            }
-        }
-
-        if (previousActiveSheet.columnAlignments !== nextActiveSheet.columnAlignments) {
-            if (
-                alignmentRenderPatch?.sheetKey === nextActiveSheet.key &&
-                alignmentRenderPatch.columnAlignmentKeys
-            ) {
-                payloadActiveSheet.columnAlignments = pickAlignmentEntries(
-                    nextActiveSheet.columnAlignments,
-                    alignmentRenderPatch.columnAlignmentKeys
-                ) as Record<string, CellAlignmentSnapshot>;
-                payloadActiveSheet.columnAlignmentDirtyKeys = [
-                    ...alignmentRenderPatch.columnAlignmentKeys,
-                ];
-            } else {
-                payloadActiveSheet.columnAlignments = nextActiveSheet.columnAlignments;
-            }
-        }
-
-        if (previousActiveSheet.cells !== nextActiveSheet.cells) {
-            payloadActiveSheet.cells = nextActiveSheet.cells;
-        }
-
-        return {
-            ...renderModel,
-            activeSheet: payloadActiveSheet,
-        };
-    }
-
     private async commitStructuralMutation(
         mutate: () => void,
         {
@@ -1183,7 +976,11 @@ export class XlsxEditorPanel {
             useModelSelection: true,
             replacePendingEdits: this.pendingCellEdits,
             resetPendingHistory,
-            activeSheetAlignmentRenderPatch,
+            ...(activeSheetAlignmentRenderPatch
+                ? {
+                      activeSheetAlignmentRenderPatch,
+                  }
+                : {}),
         });
     }
 
@@ -1333,7 +1130,11 @@ export class XlsxEditorPanel {
         };
 
         if (target === "cell" || target === "range") {
-            for (let rowNumber = selection.startRow; rowNumber <= selection.endRow; rowNumber += 1) {
+            for (
+                let rowNumber = selection.startRow;
+                rowNumber <= selection.endRow;
+                rowNumber += 1
+            ) {
                 for (
                     let columnNumber = selection.startColumn;
                     columnNumber <= selection.endColumn;
@@ -1362,7 +1163,11 @@ export class XlsxEditorPanel {
         }
 
         if (target === "row") {
-            for (let rowNumber = selection.startRow; rowNumber <= selection.endRow; rowNumber += 1) {
+            for (
+                let rowNumber = selection.startRow;
+                rowNumber <= selection.endRow;
+                rowNumber += 1
+            ) {
                 const rowKey = String(rowNumber);
                 updateDirtyKey(
                     dirtyRowAlignmentKeys,
@@ -2408,76 +2213,50 @@ export class XlsxEditorPanel {
             this.panel.title = webviewStrings.loading;
 
             if (this.isWebviewReady) {
-                await this.panel.webview.postMessage({
-                    type: "loading",
-                    message: webviewStrings.loading,
-                });
+                await this.panel.webview.postMessage(
+                    createSessionStatusMessage("editor", "loading", webviewStrings.loading)
+                );
             }
         }
 
-        this.workbook = await loadWorkbookSnapshot(this.document.getReadUri());
-        this.workbook.filePath = this.workbookUri.fsPath;
-        this.workbook.fileName = getWorkbookResourceName(this.workbookUri);
-        this.workingSheetEntries = createWorkingSheetEntries(this.workbook);
-        this.nextNewSheetId = 1;
-        if (clearPendingEdits) {
-            this.pendingCellEdits = [];
-            this.pendingSheetEdits = [];
-            this.pendingViewEdits = [];
-            this.sheetUndoStack.length = 0;
-            this.sheetRedoStack.length = 0;
-        }
-        const documentPendingState = this.document.getPendingState();
-        const shouldRestoreDocumentPendingState =
-            !clearPendingEdits &&
-            this.pendingCellEdits.length === 0 &&
-            this.pendingSheetEdits.length === 0 &&
-            this.pendingViewEdits.length === 0 &&
-            documentPendingState.cellEdits.length +
-                documentPendingState.sheetEdits.length +
-                (documentPendingState.viewEdits?.length ?? 0) >
-                0;
-        if (shouldRestoreDocumentPendingState) {
-            const restored = restorePendingWorkbookState(this.workbook, documentPendingState);
-            this.workingSheetEntries = restored.sheetEntries;
-            this.pendingCellEdits = restored.pendingCellEdits;
-            this.pendingSheetEdits = restored.pendingSheetEdits;
-            this.pendingViewEdits = restored.pendingViewEdits;
-            this.nextNewSheetId = restored.nextNewSheetId;
-        }
-        this.state = this.workingSheetEntries.length
-            ? normalizeEditorPanelState(
-                  this.getWorkingWorkbook()!,
-                  this.state.activeSheetKey
-                      ? this.state
-                      : createInitialEditorPanelState(
-                            this.getWorkingWorkbook()!,
-                            this.getSheetEntries()
-                        ),
-                  this.getSheetEntries()
-              )
-            : createInitialEditorPanelState(this.getWorkingWorkbook()!, this.getSheetEntries());
-
-        const renderModel = createEditorRenderModel(this.getWorkingWorkbook()!, this.state, {
-            hasPendingEdits: clearPendingEdits ? false : this.document.hasPendingEdits(),
-            sheetEntries: this.getSheetEntries(),
+        const reloadedSession = await loadEditorWorkbookSession({
+            readUri: this.document.getReadUri(),
+            workbookUri: this.workbookUri,
+            clearPendingEdits,
+            currentPanelState: this.state,
+            pendingCellEdits: this.pendingCellEdits,
+            pendingSheetEdits: this.pendingSheetEdits,
+            pendingViewEdits: this.pendingViewEdits,
+            documentPendingState: this.document.getPendingState(),
+            documentHasPendingEdits: clearPendingEdits ? false : this.document.hasPendingEdits(),
             canUndoStructuralEdits: this.sheetUndoStack.length > 0,
             canRedoStructuralEdits: this.sheetRedoStack.length > 0,
         });
+        this.workbook = reloadedSession.workbook;
+        this.workingSheetEntries = reloadedSession.workingSheetEntries;
+        this.pendingCellEdits = reloadedSession.pendingCellEdits;
+        this.pendingSheetEdits = reloadedSession.pendingSheetEdits;
+        this.pendingViewEdits = reloadedSession.pendingViewEdits;
+        this.nextNewSheetId = reloadedSession.nextNewSheetId;
+        this.state = reloadedSession.panelState;
+        if (clearPendingEdits) {
+            this.sheetUndoStack.length = 0;
+            this.sheetRedoStack.length = 0;
+        }
 
         if (clearPendingEdits) {
             this.hasWarnedPendingExternalChange = false;
             this.hasPendingExternalWorkbookChange = false;
         }
-        this.panel.title = renderModel.title;
-        await this.render(renderModel, {
+        this.panel.title = reloadedSession.renderModel.title;
+        await this.render(reloadedSession.renderModel, {
             silent,
             clearPendingEdits,
             useModelSelection: true,
             replacePendingEdits:
-                clearPendingEdits || this.pendingCellEdits.length === 0
+                clearPendingEdits || reloadedSession.pendingCellEdits.length === 0
                     ? undefined
-                    : this.pendingCellEdits,
+                    : reloadedSession.pendingCellEdits,
         });
     }
 
@@ -2528,11 +2307,12 @@ export class XlsxEditorPanel {
             return;
         }
 
-        const renderPayload = this.createRenderPayload(
-            payload,
+        const renderPayload = createEditorRenderPayload({
+            renderModel: payload,
+            previousRenderModel: this.lastRenderedModel,
             reuseActiveSheetData,
-            activeSheetAlignmentRenderPatch
-        );
+            alignmentRenderPatch: activeSheetAlignmentRenderPatch,
+        });
         if (this.activePerfTraceId) {
             logEditorPanelPerf("render:payload", {
                 perfTraceId: this.activePerfTraceId,
@@ -2556,21 +2336,21 @@ export class XlsxEditorPanel {
             });
         }
         this.hasPendingRender = false;
-        await this.panel.webview.postMessage({
-            type: "render",
-            payload: renderPayload,
+        const sessionMessage = createEditorSessionMessage({
+            hasSentSessionInit: this.hasSentSessionInit,
+            renderPayload,
             silent,
             clearPendingEdits,
             preservePendingHistory,
             reuseActiveSheetData,
             useModelSelection,
-            perfTraceId: this.activePerfTraceId ?? undefined,
-            replacePendingEdits:
-                replacePendingEdits !== undefined
-                    ? mapPendingCellEditsToWebview(replacePendingEdits, this.getSheetEntries())
-                    : undefined,
+            replacePendingEdits,
+            sheetEntries: this.getSheetEntries(),
             resetPendingHistory,
+            perfTraceId: this.activePerfTraceId ?? null,
         });
+        await this.panel.webview.postMessage(sessionMessage);
+        this.hasSentSessionInit = true;
         if (this.activePerfTraceId) {
             logEditorPanelPerf("render:postMessage", {
                 perfTraceId: this.activePerfTraceId,

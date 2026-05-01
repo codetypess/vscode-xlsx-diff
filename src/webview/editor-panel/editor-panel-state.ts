@@ -41,10 +41,7 @@ export function cloneColumnWidths(
     columnWidths: readonly (number | null | undefined)[] | undefined
 ): Array<number | null> {
     const nextColumnWidths = (columnWidths ?? []).map((columnWidth) => columnWidth ?? null);
-    while (
-        nextColumnWidths.length > 0 &&
-        nextColumnWidths[nextColumnWidths.length - 1] === null
-    ) {
+    while (nextColumnWidths.length > 0 && nextColumnWidths[nextColumnWidths.length - 1] === null) {
         nextColumnWidths.pop();
     }
 
@@ -1271,9 +1268,9 @@ export function restorePendingWorkbookState(
 }
 
 export function createPendingWorkbookEditState(
-    pendingCellEdits: CellEdit[],
-    pendingSheetEdits: SheetEdit[],
-    pendingViewEdits: SheetViewEdit[]
+    pendingCellEdits: CellEdit[] = [],
+    pendingSheetEdits: SheetEdit[] = [],
+    pendingViewEdits: SheetViewEdit[] = []
 ): WorkbookEditState {
     return {
         cellEdits: pendingCellEdits.map(cloneCellEdit),

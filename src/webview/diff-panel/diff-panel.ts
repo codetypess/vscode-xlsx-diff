@@ -9,27 +9,18 @@ import type { WorkbookDiffModel } from "../../core/model/types";
 import { getHtmlLanguageTag } from "../../display-language";
 import { toErrorMessage } from "../../error-message";
 import { getRuntimeMessages, type DiffPanelStrings } from "../../i18n";
+import {
+    createDiffSessionPatchMessage,
+    createDiffSessionInitMessage,
+    createSessionStatusMessage,
+    isDiffWebviewOutgoingMessage,
+    type DiffWebviewOutgoingMessage,
+} from "../../webview-solid/shared/session-protocol";
 import { getWorkbookResourceName } from "../../workbook/resource-uri";
 import { withWorkbookSaveProgress } from "../../workbook/save-progress";
 import { createWebviewNonce, escapeWatcherGlobSegment } from "../webview-utils";
 import { createDiffPanelRenderModel } from "./diff-panel-model";
 import type { DiffPanelRenderModel } from "./diff-panel-types";
-
-type WebviewMessage =
-    | { type: "ready" }
-    | { type: "setSheet"; sheetKey: string }
-    | {
-          type: "saveEdits";
-          edits: Array<{
-              sheetKey: string;
-              side: "left" | "right";
-              rowNumber: number;
-              columnNumber: number;
-              value: string;
-          }>;
-      }
-    | { type: "swap" }
-    | { type: "reload" };
 
 function getWebviewStrings(): DiffPanelStrings {
     return getRuntimeMessages().diffPanel;
@@ -50,6 +41,7 @@ export class XlsxDiffPanel {
     private activeSheetKey: string | null = null;
     private isWebviewReady = false;
     private hasPendingRender = false;
+    private hasSentSessionInit = false;
     private isReloading = false;
     private queuedReloadOptions:
         | {
@@ -83,7 +75,11 @@ export class XlsxDiffPanel {
             this.disposables
         );
         this.panel.webview.onDidReceiveMessage(
-            (message: WebviewMessage) => {
+            (message: unknown) => {
+                if (!isDiffWebviewOutgoingMessage(message)) {
+                    return;
+                }
+
                 void this.handleMessage(message);
             },
             null,
@@ -213,9 +209,11 @@ export class XlsxDiffPanel {
             const delay = Math.max(0, this.suppressAutoRefreshUntil - Date.now()) + 50;
             this.autoRefreshTimer = setTimeout(() => {
                 this.autoRefreshTimer = undefined;
-                void this.enqueueReload({ silent: true, clearPendingEdits: true }).catch((error) => {
-                    void this.handleError(error);
-                });
+                void this.enqueueReload({ silent: true, clearPendingEdits: true }).catch(
+                    (error) => {
+                        void this.handleError(error);
+                    }
+                );
             }, delay);
             return;
         }
@@ -311,11 +309,12 @@ export class XlsxDiffPanel {
 </html>`;
     }
 
-    private async handleMessage(message: WebviewMessage): Promise<void> {
+    private async handleMessage(message: DiffWebviewOutgoingMessage): Promise<void> {
         try {
             switch (message.type) {
                 case "ready":
                     this.isWebviewReady = true;
+                    this.hasSentSessionInit = false;
                     if (this.hasPendingRender) {
                         await this.render();
                     }
@@ -330,7 +329,7 @@ export class XlsxDiffPanel {
                     }
 
                     this.activeSheetKey = message.sheetKey;
-                    await this.render();
+                    await this.render(undefined, { patchActiveSheetOnly: true });
                     return;
                 case "saveEdits": {
                     if (!this.diffModel || message.edits.length === 0) {
@@ -340,7 +339,9 @@ export class XlsxDiffPanel {
                     const leftCellEdits: CellEdit[] = message.edits
                         .filter((edit) => edit.side === "left")
                         .flatMap((edit) => {
-                            const sheet = this.diffModel!.sheets.find((item) => item.key === edit.sheetKey);
+                            const sheet = this.diffModel!.sheets.find(
+                                (item) => item.key === edit.sheetKey
+                            );
                             return sheet?.leftSheet
                                 ? [
                                       {
@@ -356,7 +357,9 @@ export class XlsxDiffPanel {
                     const rightCellEdits: CellEdit[] = message.edits
                         .filter((edit) => edit.side === "right")
                         .flatMap((edit) => {
-                            const sheet = this.diffModel!.sheets.find((item) => item.key === edit.sheetKey);
+                            const sheet = this.diffModel!.sheets.find(
+                                (item) => item.key === edit.sheetKey
+                            );
                             return sheet?.rightSheet
                                 ? [
                                       {
@@ -367,7 +370,7 @@ export class XlsxDiffPanel {
                                       },
                                   ]
                                 : [];
-                    });
+                        });
 
                     this.suppressAutoRefreshUntil = Date.now() + 2000;
 
@@ -410,10 +413,9 @@ export class XlsxDiffPanel {
             this.panel.title = webviewStrings.loading;
 
             if (this.isWebviewReady) {
-                await this.panel.webview.postMessage({
-                    type: "loading",
-                    message: webviewStrings.loading,
-                });
+                await this.panel.webview.postMessage(
+                    createSessionStatusMessage("diff", "loading", webviewStrings.loading)
+                );
             }
         }
 
@@ -435,13 +437,17 @@ export class XlsxDiffPanel {
 
     private async render(
         renderModel?: DiffPanelRenderModel,
-        { clearPendingEdits = false }: { clearPendingEdits?: boolean } = {}
+        {
+            clearPendingEdits = false,
+            patchActiveSheetOnly = false,
+        }: { clearPendingEdits?: boolean; patchActiveSheetOnly?: boolean } = {}
     ): Promise<void> {
         if (!this.diffModel) {
             return;
         }
 
-        const payload = renderModel ?? createDiffPanelRenderModel(this.diffModel, this.activeSheetKey);
+        const payload =
+            renderModel ?? createDiffPanelRenderModel(this.diffModel, this.activeSheetKey);
         this.panel.title = payload.title;
 
         if (!this.isWebviewReady) {
@@ -450,11 +456,53 @@ export class XlsxDiffPanel {
         }
 
         this.hasPendingRender = false;
-        await this.panel.webview.postMessage({
-            type: "render",
-            payload,
+        if (this.hasSentSessionInit) {
+            await this.panel.webview.postMessage(
+                createDiffSessionPatchMessage([
+                    {
+                        kind: "document:comparison",
+                        ...(patchActiveSheetOnly
+                            ? {
+                                  sheets: payload.sheets,
+                              }
+                            : {
+                                  title: payload.title,
+                                  leftFile: payload.leftFile,
+                                  rightFile: payload.rightFile,
+                                  definedNamesChanged: payload.definedNamesChanged,
+                                  sheets: payload.sheets,
+                              }),
+                    },
+                    {
+                        kind: "document:activeSheet",
+                        activeSheet: payload.activeSheet,
+                    },
+                    {
+                        kind: "ui:navigation",
+                        activeSheetKey: payload.activeSheet?.key ?? null,
+                    },
+                    {
+                        kind: "ui:pendingEdits",
+                        clearPendingEdits,
+                    },
+                    ...(!patchActiveSheetOnly
+                        ? [
+                              {
+                                  kind: "ui:panel" as const,
+                                  statusMessage: null,
+                              },
+                          ]
+                        : []),
+                ])
+            );
+            return;
+        }
+
+        const sessionMessage = createDiffSessionInitMessage(payload, {
             clearPendingEdits,
         });
+        await this.panel.webview.postMessage(sessionMessage);
+        this.hasSentSessionInit = true;
     }
 
     private async handleError(error: unknown): Promise<void> {
@@ -463,10 +511,9 @@ export class XlsxDiffPanel {
         await vscode.window.showErrorMessage(errorMessage);
 
         if (this.isWebviewReady) {
-            await this.panel.webview.postMessage({
-                type: "error",
-                message: errorMessage,
-            });
+            await this.panel.webview.postMessage(
+                createSessionStatusMessage("diff", "error", errorMessage)
+            );
         }
     }
 }

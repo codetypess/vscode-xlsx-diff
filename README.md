@@ -81,7 +81,7 @@ Git support works with VS Code's built-in Git extension. SVN support works with 
 | Setting                     | Values                | Default | Description                                                                                                         |
 | --------------------------- | --------------------- | ------- | ------------------------------------------------------------------------------------------------------------------- |
 | `xlsx-diff.displayLanguage` | `auto`, `en`, `zh-CN` | `auto`  | Controls the language used in diff panel prompts and UI labels. `auto` follows the active VS Code display language. |
-| `xlsx-diff.compareFormula` | `boolean` | `false` | Controls whether formula changes count as cell diffs when the displayed value is unchanged. |
+| `xlsx-diff.compareFormula`  | `boolean`             | `false` | Controls whether formula changes count as cell diffs when the displayed value is unchanged.                         |
 
 ---
 
@@ -182,7 +182,8 @@ npm install
 npm run watch
 
 # Press F5 in VS Code to launch the Extension Development Host
-# Then right-click an .xlsx file in Explorer or SCM view
+# The default launch config opens res/item.xlsx automatically
+# Use the secondary "Run Extension" config if you only want a blank dev host
 
 # Type-check all targets
 npm run check-types

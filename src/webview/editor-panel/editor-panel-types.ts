@@ -111,6 +111,7 @@ export interface EditorPanelStrings {
     loading: string;
     reload: string;
     save: string;
+    readOnly: string;
     lockView: string;
     unlockView: string;
     moreSheets: string;

@@ -44,45 +44,13 @@ async function main() {
         plugins: [esbuildProblemMatcherPlugin],
     });
 
-    const editorWebviewCtx = await context({
-        entryPoints: ["src/webview/editor-panel/editor-panel-webview.ts"],
-        bundle: true,
-        format: "iife",
-        minify: production,
-        sourcemap: !production,
-        sourcesContent: false,
-        platform: "browser",
-        outfile: "media/editor-panel.js",
-        logLevel: "silent",
-        plugins: [esbuildProblemMatcherPlugin],
-    });
-
-    const diffPanelWebviewCtx = await context({
-        entryPoints: ["src/webview/diff-panel/diff-panel-webview.ts"],
-        bundle: true,
-        format: "iife",
-        minify: production,
-        sourcemap: !production,
-        sourcesContent: false,
-        platform: "browser",
-        outfile: "media/diff-panel.js",
-        logLevel: "silent",
-        plugins: [esbuildProblemMatcherPlugin],
-    });
-
     if (watch) {
         await extensionCtx.watch();
-        await editorWebviewCtx.watch();
-        await diffPanelWebviewCtx.watch();
         return;
     }
 
     await extensionCtx.rebuild();
     await extensionCtx.dispose();
-    await editorWebviewCtx.rebuild();
-    await editorWebviewCtx.dispose();
-    await diffPanelWebviewCtx.rebuild();
-    await diffPanelWebviewCtx.dispose();
 }
 
 main().catch((error) => {

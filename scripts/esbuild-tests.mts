@@ -30,6 +30,10 @@ async function collectTestEntryPoints(): Promise<string[]> {
         entryPoints.push(filePath);
     }
 
+    for await (const filePath of glob("src/test/**/*.test.tsx")) {
+        entryPoints.push(filePath);
+    }
+
     return entryPoints.sort((left, right) => left.localeCompare(right));
 }
 
@@ -48,7 +52,7 @@ async function main() {
         sourcemap: !production,
         sourcesContent: false,
         platform: "node",
-        external: ["vscode"],
+        external: ["vscode", "jsdom"],
         logLevel: "silent",
         plugins: [esbuildProblemMatcherPlugin],
     });
