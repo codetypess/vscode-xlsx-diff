@@ -257,13 +257,15 @@ export function deriveEditorSelectionOverlayLayers({
     metrics,
     selection,
     selectionRangeOverride,
+    forcePrimaryRect = false,
 }: {
     metrics: EditorGridMetrics;
     selection: EditorSelectionView | null;
     selectionRangeOverride: SelectionRange | null;
+    forcePrimaryRect?: boolean;
 }): EditorSelectionOverlayLayers {
     const selectionRange = resolveEditorSelectionRange(selection, selectionRangeOverride);
-    const showPrimaryRect = !hasExpandedSelectionRange(selectionRange);
+    const showPrimaryRect = forcePrimaryRect || !hasExpandedSelectionRange(selectionRange);
     const activeRowNumber = selection?.rowNumber ?? null;
     const activeColumnNumber = selection?.columnNumber ?? null;
 

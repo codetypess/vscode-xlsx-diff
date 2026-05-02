@@ -184,6 +184,22 @@ suite("Solid editor shell DOM", () => {
         return input;
     };
 
+    const keyDown = async (
+        target: Window | Element | string,
+        init: KeyboardEventInit & { key: string }
+    ) => {
+        const eventTarget = typeof target === "string" ? query(target) : target;
+        eventTarget.dispatchEvent(
+            new windowLike.KeyboardEvent("keydown", {
+                bubbles: true,
+                cancelable: true,
+                ...init,
+            })
+        );
+        await flush();
+        return eventTarget;
+    };
+
     setup(async () => {
         dom = new JSDOM('<!doctype html><html><body><div id="app"></div></body></html>', {
             url: "https://example.test/",
@@ -317,6 +333,339 @@ suite("Solid editor shell DOM", () => {
 
         await click('[data-role="search-close"]');
         assert.strictEqual(documentLike.querySelector('[data-role="search-strip"]'), null);
+    });
+
+    test("opens find and replace from keyboard shortcuts and focuses goto", async () => {
+        await dispatchSessionInit();
+
+        const selectedCellValueInput = query('[data-role="selected-cell-value"]');
+        await keyDown(selectedCellValueInput, {
+            key: "f",
+            metaKey: true,
+        });
+
+        const searchInput = query('[data-role="search-input"]') as HTMLInputElement;
+        assert.strictEqual(documentLike.activeElement, searchInput);
+
+        await keyDown(windowLike, {
+            key: "h",
+            metaKey: true,
+        });
+
+        assert.ok(documentLike.querySelector(".search-strip__row--replace"));
+        assert.strictEqual(documentLike.activeElement, searchInput);
+
+        await keyDown(windowLike, {
+            key: "g",
+            metaKey: true,
+        });
+
+        const gotoInput = query('[data-role="goto-input"]') as HTMLInputElement;
+        assert.strictEqual(documentLike.activeElement, gotoInput);
+        assert.strictEqual(gotoInput.selectionStart, 0);
+        assert.strictEqual(gotoInput.selectionEnd, gotoInput.value.length);
+    });
+
+    test("closes the search panel from escape when focus is outside editable inputs", async () => {
+        await dispatchSessionInit();
+
+        await keyDown(windowLike, {
+            key: "f",
+            metaKey: true,
+        });
+        assert.ok(query('[data-role="search-strip"]'));
+
+        await keyDown(windowLike, {
+            key: "Escape",
+        });
+
+        assert.strictEqual(documentLike.querySelector('[data-role="search-strip"]'), null);
+    });
+
+    test("applies replace actions locally and syncs pending edits to the host", async () => {
+        await dispatchSessionInit({
+            selection: {
+                key: createCellKey(1, 1),
+                rowNumber: 1,
+                columnNumber: 1,
+                address: "A1",
+                value: "alpha",
+                formula: null,
+                isPresent: true,
+            },
+            activeSheet: {
+                rowCount: 2,
+                columnCount: 1,
+                columns: ["A"],
+                cells: {
+                    [createCellKey(1, 1)]: {
+                        key: createCellKey(1, 1),
+                        rowNumber: 1,
+                        columnNumber: 1,
+                        address: "A1",
+                        displayValue: "alpha",
+                        formula: null,
+                        styleId: null,
+                    },
+                    [createCellKey(2, 1)]: {
+                        key: createCellKey(2, 1),
+                        rowNumber: 2,
+                        columnNumber: 1,
+                        address: "A2",
+                        displayValue: "alpha",
+                        formula: null,
+                        styleId: null,
+                    },
+                },
+            },
+        });
+
+        await click('[data-role="search-toggle"]');
+        await inputText('[data-role="search-input"]', "alpha");
+
+        const searchTabs = Array.from(documentLike.querySelectorAll(".search-strip__tab"));
+        await click(searchTabs[1]);
+        await inputText('[data-role="replace-input"]', "gamma");
+        await click('[data-role="replace-button"]');
+
+        assert.strictEqual(
+            query(".search-strip__feedback--success").textContent?.trim(),
+            "Replaced 1 matching cells."
+        );
+        assert.deepStrictEqual(normalizeMessage(postedMessages.at(-2)), {
+            type: "setPendingEdits",
+            edits: [
+                {
+                    sheetKey: "sheet:1",
+                    rowNumber: 1,
+                    columnNumber: 1,
+                    value: "gamma",
+                },
+            ],
+        });
+        assert.deepStrictEqual(normalizeMessage(postedMessages.at(-1)), {
+            type: "selectCell",
+            rowNumber: 2,
+            columnNumber: 1,
+        });
+        assert.strictEqual((query('[data-role="goto-input"]') as HTMLInputElement).value, "A2");
+        assert.strictEqual(
+            (query('[data-role="selected-cell-value"]') as HTMLInputElement).value,
+            "alpha"
+        );
+    });
+
+    test("switches the search scope summary to the live selected range", async () => {
+        await dispatchSessionInit({
+            selection: {
+                key: createCellKey(2, 3),
+                rowNumber: 2,
+                columnNumber: 3,
+                address: "C2",
+                value: "anchor",
+                formula: null,
+                isPresent: true,
+            },
+            activeSheet: {
+                rowCount: 20,
+                columnCount: 8,
+                cells: {
+                    [createCellKey(2, 3)]: {
+                        key: createCellKey(2, 3),
+                        rowNumber: 2,
+                        columnNumber: 3,
+                        address: "C2",
+                        displayValue: "anchor",
+                        formula: null,
+                        styleId: null,
+                    },
+                    [createCellKey(4, 5)]: {
+                        key: createCellKey(4, 5),
+                        rowNumber: 4,
+                        columnNumber: 5,
+                        address: "E4",
+                        displayValue: "target",
+                        formula: null,
+                        styleId: null,
+                    },
+                },
+            },
+        });
+
+        const viewport = query('[data-role="editor-grid-viewport"]');
+        Object.defineProperty(viewport, "clientHeight", {
+            configurable: true,
+            value: 240,
+        });
+        Object.defineProperty(viewport, "clientWidth", {
+            configurable: true,
+            value: 360,
+        });
+        viewport.dispatchEvent(
+            new windowLike.Event("scroll", {
+                bubbles: true,
+                cancelable: true,
+            })
+        );
+        await flush();
+
+        await click('[data-role="search-toggle"]');
+        await inputText('[data-role="search-input"]', "target");
+        assert.strictEqual(
+            query(".search-strip__scope-summary-value").textContent?.trim(),
+            "Whole sheet"
+        );
+
+        const anchorCell = query('[data-cell-address="C2"]');
+        const targetCell = query('[data-cell-address="E4"]');
+
+        await pointerDown(anchorCell, {
+            pointerId: 19,
+            clientX: 20,
+            clientY: 20,
+        });
+        await pointerMove(targetCell, {
+            pointerId: 19,
+            buttons: 1,
+            clientX: 120,
+            clientY: 84,
+        });
+
+        const scopeSummary = query(".search-strip__scope-summary-value");
+        assert.strictEqual(scopeSummary.textContent?.trim(), "C2:E4");
+        assert.strictEqual(scopeSummary.classList.contains("is-selection"), true);
+
+        await pointerUp(windowLike, {
+            pointerId: 19,
+            buttons: 0,
+            clientX: 120,
+            clientY: 84,
+        });
+        await click('[data-role="search-next"]');
+
+        assert.deepStrictEqual(normalizeMessage(postedMessages.at(-1)), {
+            type: "search",
+            query: "target",
+            direction: "next",
+            options: {
+                isRegexp: false,
+                matchCase: false,
+                wholeWord: false,
+            },
+            scope: "selection",
+            selectionRange: {
+                startRow: 2,
+                endRow: 4,
+                startColumn: 3,
+                endColumn: 5,
+            },
+        });
+    });
+
+    test("shows a stronger primary highlight for matched cells inside a selected range", async () => {
+        await dispatchSessionInit({
+            selection: {
+                key: createCellKey(2, 3),
+                rowNumber: 2,
+                columnNumber: 3,
+                address: "C2",
+                value: "anchor",
+                formula: null,
+                isPresent: true,
+            },
+            activeSheet: {
+                rowCount: 20,
+                columnCount: 8,
+                cells: {
+                    [createCellKey(2, 3)]: {
+                        key: createCellKey(2, 3),
+                        rowNumber: 2,
+                        columnNumber: 3,
+                        address: "C2",
+                        displayValue: "anchor",
+                        formula: null,
+                        styleId: null,
+                    },
+                    [createCellKey(4, 5)]: {
+                        key: createCellKey(4, 5),
+                        rowNumber: 4,
+                        columnNumber: 5,
+                        address: "E4",
+                        displayValue: "target",
+                        formula: null,
+                        styleId: null,
+                    },
+                },
+            },
+        });
+
+        const viewport = query('[data-role="editor-grid-viewport"]');
+        Object.defineProperty(viewport, "clientHeight", {
+            configurable: true,
+            value: 240,
+        });
+        Object.defineProperty(viewport, "clientWidth", {
+            configurable: true,
+            value: 360,
+        });
+        viewport.dispatchEvent(
+            new windowLike.Event("scroll", {
+                bubbles: true,
+                cancelable: true,
+            })
+        );
+        await flush();
+
+        const anchorCell = query('[data-cell-address="C2"]');
+        const targetCell = query('[data-cell-address="E4"]');
+        const bodyLayer = query(".editor-grid__layer--body");
+
+        await pointerDown(anchorCell, {
+            pointerId: 29,
+            clientX: 20,
+            clientY: 20,
+        });
+        await pointerMove(targetCell, {
+            pointerId: 29,
+            buttons: 1,
+            clientX: 120,
+            clientY: 84,
+        });
+        await pointerUp(windowLike, {
+            pointerId: 29,
+            buttons: 0,
+            clientX: 120,
+            clientY: 84,
+        });
+
+        assert.strictEqual(
+            bodyLayer.querySelectorAll(".editor-grid__selection-overlay--primary").length,
+            0
+        );
+
+        windowLike.dispatchEvent(
+            new windowLike.MessageEvent("message", {
+                data: {
+                    type: "searchResult",
+                    status: "matched",
+                    scope: "selection",
+                    match: {
+                        rowNumber: 4,
+                        columnNumber: 5,
+                    },
+                    matchCount: 1,
+                    matchIndex: 1,
+                },
+            })
+        );
+        await flush();
+
+        assert.ok(
+            bodyLayer.querySelector(
+                ".editor-grid__selection-overlay--primary.editor-grid__selection-overlay--search-focus"
+            )
+        );
+        assert.ok(bodyLayer.querySelector(".editor-grid__selection-overlay--range"));
     });
 
     test("submits goto requests from the toolbar input", async () => {
@@ -1764,6 +2113,144 @@ suite("Solid editor shell DOM", () => {
         assert.strictEqual(bodyLayer.querySelector('[data-cell-address="A2"]'), null);
     });
 
+    test("opens a cell context menu and dispatches common table commands", async () => {
+        await dispatchSessionInit();
+
+        const viewport = query('[data-role="editor-grid-viewport"]');
+        Object.defineProperty(viewport, "clientHeight", {
+            configurable: true,
+            value: 320,
+        });
+        Object.defineProperty(viewport, "clientWidth", {
+            configurable: true,
+            value: 520,
+        });
+        viewport.dispatchEvent(
+            new windowLike.Event("scroll", {
+                bubbles: true,
+                cancelable: true,
+            })
+        );
+        await flush();
+
+        await contextMenu('[data-cell-address="E4"]', {
+            clientX: 220,
+            clientY: 120,
+        });
+
+        const cellContextMenu = query('[data-role="cell-context-menu"]');
+        assert.ok(cellContextMenu);
+        assert.strictEqual(
+            cellContextMenu.querySelectorAll(".context-menu__separator").length,
+            3
+        );
+        assert.strictEqual(
+            query('[data-role="cell-context-find-shortcut"]').textContent?.trim(),
+            "Ctrl/Cmd+F"
+        );
+        assert.strictEqual(
+            query('[data-role="cell-context-replace-shortcut"]').textContent?.trim(),
+            "Ctrl/Cmd+H"
+        );
+        assert.deepStrictEqual(normalizeMessage(postedMessages.at(-1)), {
+            type: "selectCell",
+            rowNumber: 4,
+            columnNumber: 5,
+        });
+
+        await click('[data-role="cell-context-insert-row-below"]');
+        assert.deepStrictEqual(normalizeMessage(postedMessages.at(-1)), {
+            type: "insertRow",
+            rowNumber: 5,
+        });
+        assert.strictEqual(documentLike.querySelector('[data-role="cell-context-menu"]'), null);
+
+        await contextMenu('[data-cell-address="E4"]', {
+            clientX: 220,
+            clientY: 120,
+        });
+        await click('[data-role="cell-context-delete-column"]');
+        assert.deepStrictEqual(normalizeMessage(postedMessages.at(-1)), {
+            type: "deleteColumn",
+            columnNumber: 5,
+        });
+
+        await contextMenu('[data-cell-address="E4"]', {
+            clientX: 220,
+            clientY: 120,
+        });
+        await click('[data-role="cell-context-find"]');
+        assert.strictEqual(documentLike.querySelector('[data-role="cell-context-menu"]'), null);
+        assert.ok(query('[data-role="search-strip"]'));
+    });
+
+    test("keeps an expanded selection when opening find from the cell context menu", async () => {
+        await dispatchSessionInit({
+            selection: {
+                key: createCellKey(2, 3),
+                rowNumber: 2,
+                columnNumber: 3,
+                address: "C2",
+                value: "anchor",
+                formula: null,
+                isPresent: true,
+            },
+        });
+
+        const viewport = query('[data-role="editor-grid-viewport"]');
+        Object.defineProperty(viewport, "clientHeight", {
+            configurable: true,
+            value: 240,
+        });
+        Object.defineProperty(viewport, "clientWidth", {
+            configurable: true,
+            value: 360,
+        });
+        viewport.dispatchEvent(
+            new windowLike.Event("scroll", {
+                bubbles: true,
+                cancelable: true,
+            })
+        );
+        await flush();
+
+        const anchorCell = query('[data-cell-address="C2"]');
+        const targetCell = query('[data-cell-address="E4"]');
+
+        await pointerDown(anchorCell, {
+            pointerId: 29,
+            clientX: 20,
+            clientY: 20,
+        });
+        await pointerMove(targetCell, {
+            pointerId: 29,
+            buttons: 1,
+            clientX: 120,
+            clientY: 84,
+        });
+        await pointerUp(windowLike, {
+            pointerId: 29,
+            buttons: 0,
+            clientX: 120,
+            clientY: 84,
+        });
+
+        const messageCountBeforeContextMenu = postedMessages.length;
+        await contextMenu('[data-cell-address="D3"]', {
+            clientX: 84,
+            clientY: 56,
+        });
+
+        assert.ok(query('[data-role="cell-context-menu"]'));
+        assert.strictEqual(postedMessages.length, messageCountBeforeContextMenu);
+
+        await click('[data-role="cell-context-find"]');
+        assert.strictEqual(
+            query(".search-strip__scope-summary-value").textContent?.trim(),
+            "C2:E4"
+        );
+    });
+
     test("opens row header context menu and dispatches row commands", async () => {
         await dispatchSessionInit();
 
@@ -1888,6 +2375,39 @@ suite("Solid editor shell DOM", () => {
             type: "deleteColumn",
             columnNumber: 5,
         });
+    });
+
+    test("closes the grid context menu with escape", async () => {
+        await dispatchSessionInit();
+
+        const viewport = query('[data-role="editor-grid-viewport"]');
+        Object.defineProperty(viewport, "clientHeight", {
+            configurable: true,
+            value: 320,
+        });
+        Object.defineProperty(viewport, "clientWidth", {
+            configurable: true,
+            value: 520,
+        });
+        viewport.dispatchEvent(
+            new windowLike.Event("scroll", {
+                bubbles: true,
+                cancelable: true,
+            })
+        );
+        await flush();
+
+        await contextMenu('[data-role="grid-row-header"][data-row-number="4"]', {
+            clientX: 24,
+            clientY: 120,
+        });
+        assert.ok(query('[data-role="row-context-menu"]'));
+
+        await keyDown(windowLike, {
+            key: "Escape",
+        });
+
+        assert.strictEqual(documentLike.querySelector('[data-role="row-context-menu"]'), null);
     });
 
     test("disables editing commands in read-only sessions", async () => {

@@ -86,6 +86,46 @@ suite("Solid editor shell helpers", () => {
         );
     });
 
+    test("creates selection-scoped search messages when an expanded range is provided", () => {
+        assert.deepStrictEqual(
+            createEditorSearchMessage(
+                "needle",
+                "next",
+                {
+                    isRegexp: false,
+                    matchCase: false,
+                    wholeWord: true,
+                },
+                {
+                    scope: "selection",
+                    selectionRange: {
+                        startRow: 2,
+                        endRow: 4,
+                        startColumn: 3,
+                        endColumn: 5,
+                    },
+                }
+            ),
+            {
+                type: "search",
+                query: "needle",
+                direction: "next",
+                options: {
+                    isRegexp: false,
+                    matchCase: false,
+                    wholeWord: true,
+                },
+                scope: "selection",
+                selectionRange: {
+                    startRow: 2,
+                    endRow: 4,
+                    startColumn: 3,
+                    endColumn: 5,
+                },
+            }
+        );
+    });
+
     test("creates sheet-switch messages", () => {
         assert.deepStrictEqual(createEditorSetSheetMessage("sheet:2"), {
             type: "setSheet",

@@ -1,6 +1,7 @@
 import type {
     EditorPendingEdit,
     EditorSearchDirection,
+    EditorSearchScope,
     SearchOptions,
 } from "../../webview/editor-panel/editor-panel-types";
 import type {
@@ -74,19 +75,27 @@ export function getEditorShellCapabilities(
 export function createEditorSearchMessage(
     query: string,
     direction: EditorSearchDirection,
-    options: SearchOptions
+    options: SearchOptions,
+    searchContext: {
+        scope?: EditorSearchScope;
+        selectionRange?: SelectionRange | null;
+    } = {}
 ): EditorWebviewOutgoingMessage | null {
     const normalizedQuery = query.trim();
     if (normalizedQuery.length === 0) {
         return null;
     }
 
+    const scope =
+        searchContext.scope === "selection" && searchContext.selectionRange ? "selection" : "sheet";
+
     return {
         type: "search",
         query: normalizedQuery,
         direction,
         options,
-        scope: "sheet",
+        scope,
+        ...(scope === "selection" ? { selectionRange: searchContext.selectionRange! } : {}),
     };
 }
 

@@ -20,7 +20,10 @@ import {
     type PendingHistoryChange,
     type PendingHistoryEntry,
 } from "../../webview/editor-panel/editor-pending-history";
-import type { SelectionRange } from "../../webview/editor-panel/editor-selection-range";
+import {
+    isCellWithinSelectionRange,
+    type SelectionRange,
+} from "../../webview/editor-panel/editor-selection-range";
 import {
     clearEditorFilterColumn,
     createEditorSheetFilterSnapshot,
@@ -39,11 +42,13 @@ import {
     type EditorFilterValueOption,
     type EditorSheetFilterState,
 } from "../../webview/editor-panel/editor-panel-filter";
+import { resolveEditorReplaceResultInSheet } from "../../webview/editor-panel/editor-panel-logic";
 import type {
     EditorPendingEdit,
     EditorPanelStrings,
     EditorSearchDirection,
     EditorSearchResultMessage,
+    EditorSearchScope,
     SearchOptions,
 } from "../../webview/editor-panel/editor-panel-types";
 import {
@@ -144,8 +149,10 @@ function getVsCodeApi(): VsCodeApi {
 
 type EditorSearchMode = "find" | "replace";
 type SearchFeedbackTone = "success" | "warn" | "error";
+type SearchFeedbackStatus = EditorSearchResultMessage["status"] | "replaced" | "no-change";
 
 interface SearchFeedbackState {
+    status: SearchFeedbackStatus;
     tone: SearchFeedbackTone;
     message: string;
 }
@@ -157,6 +164,13 @@ interface SheetContextMenuState {
 }
 
 type GridContextMenuState =
+    | {
+          kind: "cell";
+          rowNumber: number;
+          columnNumber: number;
+          x: number;
+          y: number;
+      }
     | {
           kind: "row";
           rowNumber: number;
@@ -367,6 +381,36 @@ function hasExpandedSelectionRange(range: SelectionRange | null): range is Selec
     );
 }
 
+function focusSearchInput(): void {
+    const input = document.querySelector<HTMLInputElement>('[data-role="search-input"]');
+    if (!input) {
+        return;
+    }
+
+    input.focus();
+    input.select();
+}
+
+function focusReplaceInput(): void {
+    const input = document.querySelector<HTMLInputElement>('[data-role="replace-input"]');
+    if (!input) {
+        return;
+    }
+
+    input.focus();
+    input.select();
+}
+
+function focusGotoInput(): void {
+    const input = document.querySelector<HTMLInputElement>('[data-role="goto-input"]');
+    if (!input) {
+        return;
+    }
+
+    input.focus();
+    input.select();
+}
+
 function getEditorPendingEditKey(
     sheetKey: string,
     rowNumber: number,
@@ -491,6 +535,7 @@ function SelectionOverlayLayerView(props: {
     overlay: EditorSelectionOverlayLayer;
     offsetLeft: number;
     offsetTop: number;
+    isSearchFocused?: boolean;
 }) {
     const renderRect = (
         rect: EditorSelectionOverlayRect,
@@ -545,7 +590,11 @@ function SelectionOverlayLayerView(props: {
                 {(rect) =>
                     renderRect(
                         rect(),
-                        "editor-grid__selection-overlay editor-grid__selection-overlay--primary"
+                        `editor-grid__selection-overlay editor-grid__selection-overlay--primary${
+                            props.isSearchFocused
+                                ? " editor-grid__selection-overlay--search-focus"
+                                : ""
+                        }`
                     )
                 }
             </Show>
@@ -781,6 +830,12 @@ function EditorGridCellView(props: {
     onCancelEdit: () => void;
     isFilterMenuOpen: boolean;
     onOpenFilterMenu: (rowNumber: number, columnNumber: number, element: HTMLButtonElement) => void;
+    onOpenContextMenu: (
+        rowNumber: number,
+        columnNumber: number,
+        clientX: number,
+        clientY: number
+    ) => void;
 }) {
     const isEditing = () =>
         isEditorCellEditingActive({
@@ -852,6 +907,19 @@ function EditorGridCellView(props: {
             onDblClick={(event) => {
                 event.preventDefault();
                 props.onStartEdit(props.item.rowNumber, props.item.columnNumber);
+            }}
+            onContextMenu={(event) => {
+                if (isTextInputTarget(event.target)) {
+                    return;
+                }
+
+                event.preventDefault();
+                props.onOpenContextMenu(
+                    props.item.rowNumber,
+                    props.item.columnNumber,
+                    event.clientX,
+                    event.clientY
+                );
             }}
         >
             <Show
@@ -1151,6 +1219,9 @@ function getEditorStrings(): Pick<
     | "findPrev"
     | "findNext"
     | "replaceAll"
+    | "replaceCount"
+    | "replaceNoEditableMatches"
+    | "replaceNoChanges"
     | "sortAscending"
     | "sortDescending"
     | "filterSearchPlaceholder"
@@ -1217,6 +1288,10 @@ function getEditorStrings(): Pick<
         findPrev: strings?.findPrev ?? "Prev Match",
         findNext: strings?.findNext ?? "Next Match",
         replaceAll: strings?.replaceAll ?? "Replace All",
+        replaceCount: strings?.replaceCount ?? "Replaced {count} matching cells.",
+        replaceNoEditableMatches:
+            strings?.replaceNoEditableMatches ?? "No editable matching cells were found.",
+        replaceNoChanges: strings?.replaceNoChanges ?? "No values changed.",
         sortAscending: strings?.sortAscending ?? "Sort A to Z",
         sortDescending: strings?.sortDescending ?? "Sort Z to A",
         filterSearchPlaceholder: strings?.filterSearchPlaceholder ?? "Search values",
@@ -1297,11 +1372,13 @@ export function EditorBootstrapApp() {
         switch (message.status) {
             case "invalid-pattern":
                 return {
+                    status: "invalid-pattern",
                     tone: "error",
                     message: message.message ?? strings.invalidSearchPattern,
                 };
             case "no-match":
                 return {
+                    status: "no-match",
                     tone: "warn",
                     message: message.message ?? strings.noSearchMatches,
                 };
@@ -1322,10 +1399,11 @@ export function EditorBootstrapApp() {
                         : strings.searchMatchFound,
                     {
                         address,
-                        range: strings.searchScopeSelection,
+                        range: searchScopeSummary(),
                     }
                 );
                 return {
+                    status: "matched",
                     tone: "success",
                     message: [locationMessage, summary].filter(Boolean).join(" "),
                 };
@@ -1561,6 +1639,10 @@ export function EditorBootstrapApp() {
             syncClampedSearchPanelPosition();
         };
         const handleKeyDown = (event: KeyboardEvent) => {
+            const normalizedKey = event.key.toLowerCase();
+            const hasPrimaryModifier = event.metaKey || event.ctrlKey;
+            const editableTextInputTarget = isEditableTextInputTarget(event.target);
+
             if (event.key === "Escape") {
                 if (filterMenu()) {
                     event.preventDefault();
@@ -1568,14 +1650,47 @@ export function EditorBootstrapApp() {
                     return;
                 }
 
+                if (sheetContextMenu() || gridContextMenu()) {
+                    event.preventDefault();
+                    setSheetContextMenu(null);
+                    setGridContextMenu(null);
+                    return;
+                }
+
+                if (searchOpen() && !editableTextInputTarget) {
+                    event.preventDefault();
+                    closeSearchPanel();
+                    return;
+                }
+
+                if (editingCell()) {
+                    return;
+                }
+
                 setSheetContextMenu(null);
+                setGridContextMenu(null);
                 return;
             }
 
-            const normalizedKey = event.key.toLowerCase();
-            const hasPrimaryModifier = event.metaKey || event.ctrlKey;
-            const editableTextInputTarget = isEditableTextInputTarget(event.target);
             if (!event.altKey && hasPrimaryModifier && !editableTextInputTarget) {
+                if (normalizedKey === "f") {
+                    event.preventDefault();
+                    openSearchPanel("find");
+                    return;
+                }
+
+                if (normalizedKey === "h") {
+                    event.preventDefault();
+                    openSearchPanel("replace");
+                    return;
+                }
+
+                if (normalizedKey === "g" && !editingCell()) {
+                    event.preventDefault();
+                    focusGotoInput();
+                    return;
+                }
+
                 if (normalizedKey === "z" && !event.shiftKey) {
                     if (canUndoEdits()) {
                         event.preventDefault();
@@ -1673,6 +1788,10 @@ export function EditorBootstrapApp() {
     const selectionRange = createMemo(() =>
         resolveEditorSelectionRange(selection(), selectionRangeOverride())
     );
+    const expandedSelectionRange = createMemo<SelectionRange | null>(() => {
+        const currentSelectionRange = selectionRange();
+        return hasExpandedSelectionRange(currentSelectionRange) ? currentSelectionRange : null;
+    });
     const fillSourceRange = createMemo<SelectionRange | null>(
         () => fillDragState()?.sourceRange ?? selectionRange()
     );
@@ -1688,6 +1807,7 @@ export function EditorBootstrapApp() {
     let previousGridMetrics: EditorGridMetrics | null = null;
     let previousCellLayers: EditorGridCellLayers | null = null;
     let preserveLocalSelectionRangeOnNextSelectionSync = false;
+    let previousActiveSheetKeyForUiReset: string | null | undefined;
 
     const getCellSignature = (cell: EditorSelectedCell | null): string | null =>
         cell ? `${cell.rowNumber}:${cell.columnNumber}` : null;
@@ -1730,7 +1850,12 @@ export function EditorBootstrapApp() {
     });
 
     createEffect(() => {
-        workbook().activeSheet?.key;
+        const activeSheetKey = workbook().activeSheet?.key ?? null;
+        if (activeSheetKey === previousActiveSheetKeyForUiReset) {
+            return;
+        }
+
+        previousActiveSheetKeyForUiReset = activeSheetKey;
         setSearchFeedback(null);
         setFilterMenu(null);
         setSheetContextMenu(null);
@@ -1815,8 +1940,8 @@ export function EditorBootstrapApp() {
             return "";
         }
 
-        const currentSelectionRange = selectionRange();
-        if (hasExpandedSelectionRange(currentSelectionRange)) {
+        const currentSelectionRange = expandedSelectionRange();
+        if (currentSelectionRange) {
             return `${getCellAddress(currentSelectionRange.startRow, currentSelectionRange.startColumn)}:${getCellAddress(currentSelectionRange.endRow, currentSelectionRange.endColumn)}`;
         }
 
@@ -1886,6 +2011,41 @@ export function EditorBootstrapApp() {
                 rowNumber,
                 columnNumber
             ) ?? getModelCellValue(rowNumber, columnNumber)
+        );
+    };
+
+    const getActiveSheetPendingEdits = () => {
+        const sheet = activeSheetView();
+        if (!sheet) {
+            return [];
+        }
+
+        return session().ui.editingDrafts.pendingEdits
+            .filter((edit) => edit.sheetKey === sheet.key)
+            .map((edit) => ({
+                rowNumber: edit.rowNumber,
+                columnNumber: edit.columnNumber,
+                value: edit.value,
+            }));
+    };
+
+    const getVisibleSearchCells = () => {
+        const sheet = activeSheetView();
+        if (!sheet) {
+            return {};
+        }
+
+        const filterState = activeSheetFilterState();
+        if (!filterState) {
+            return sheet.cells;
+        }
+
+        const visibleRows = new Set(
+            visibleRowResult().visibleRows.filter((rowNumber) => rowNumber <= sheet.rowCount)
+        );
+
+        return Object.fromEntries(
+            Object.entries(sheet.cells).filter(([, cell]) => visibleRows.has(cell.rowNumber))
         );
     };
 
@@ -2009,6 +2169,14 @@ export function EditorBootstrapApp() {
         previousCellLayers = reuseEquivalentEditorGridCellLayers(previousCellLayers, nextLayers);
         return previousCellLayers;
     });
+    const isSearchFocusedSelection = createMemo(() => {
+        const feedback = searchFeedback();
+        return (
+            feedback?.status === "matched" ||
+            feedback?.status === "replaced" ||
+            feedback?.status === "no-change"
+        );
+    });
     const selectionOverlayLayers = createMemo(() => {
         const metrics = gridMetrics();
         if (!metrics) {
@@ -2019,6 +2187,7 @@ export function EditorBootstrapApp() {
             metrics,
             selection: selection(),
             selectionRangeOverride: selectionRangeOverride(),
+            forcePrimaryRect: isSearchFocusedSelection(),
         });
     });
     const hasEditableCellInFillSourceRange = createMemo(() => {
@@ -2100,9 +2269,11 @@ export function EditorBootstrapApp() {
             return null;
         }
 
+        const maxHeight = menu.kind === "cell" ? 344 : 168;
+
         return {
-            left: `${Math.max(8, Math.min(menu.x, window.innerWidth - 188))}px`,
-            top: `${Math.max(8, Math.min(menu.y, window.innerHeight - 168))}px`,
+            left: `${Math.max(8, Math.min(menu.x, window.innerWidth - 212))}px`,
+            top: `${Math.max(8, Math.min(menu.y, window.innerHeight - maxHeight))}px`,
         };
     });
     const activeSheetTabKey = createMemo(
@@ -2150,7 +2321,24 @@ export function EditorBootstrapApp() {
         return getEditorFilterColumnValues(source, filterState, menu.columnNumber);
     });
     const sheetContextTargetKey = createMemo(() => sheetContextMenu()?.sheetKey ?? null);
+    const effectiveSearchScope = createMemo<EditorSearchScope>(() =>
+        expandedSelectionRange() ? "selection" : "sheet"
+    );
+    const activeSearchSelectionRange = createMemo<SelectionRange | null>(() =>
+        effectiveSearchScope() === "selection" ? expandedSelectionRange() : null
+    );
+    const searchScopeSummary = createMemo(() => {
+        const range = activeSearchSelectionRange();
+        if (!range) {
+            return strings.searchScopeWholeSheet;
+        }
+
+        return `${getCellAddress(range.startRow, range.startColumn)}:${getCellAddress(range.endRow, range.endColumn)}`;
+    });
     const canRunSearch = createMemo(() => searchQuery().trim().length > 0);
+    const canRunReplace = createMemo(
+        () => Boolean(activeSheetView()) && workbook().canEdit && canRunSearch()
+    );
     const searchFeedbackClass = createMemo(() => {
         const feedback = searchFeedback();
         if (!feedback) {
@@ -2459,7 +2647,8 @@ export function EditorBootstrapApp() {
 
     const revealSearchMatch = (
         match: { rowNumber: number; columnNumber: number },
-        scope: EditorSearchResultMessage["scope"]
+        scope: EditorSearchResultMessage["scope"],
+        options: { syncHost?: boolean } = {}
     ) => {
         const focusCell = {
             rowNumber: match.rowNumber,
@@ -2474,7 +2663,9 @@ export function EditorBootstrapApp() {
               }
             : createEditorSingleCellSelectionState(focusCell);
 
-        applySelectionStateLocally(nextState, { reveal: true });
+        ((options.syncHost ?? false) ? applySelectionState : applySelectionStateLocally)(nextState, {
+            reveal: true,
+        });
     };
 
     const applyOptimisticSelection = (rowNumber: number, columnNumber: number) => {
@@ -2812,9 +3003,126 @@ export function EditorBootstrapApp() {
     };
 
     const submitSearch = (direction: EditorSearchDirection) => {
-        const message = createEditorSearchMessage(searchQuery(), direction, searchOptions());
+        const message = createEditorSearchMessage(searchQuery(), direction, searchOptions(), {
+            scope: effectiveSearchScope(),
+            selectionRange: activeSearchSelectionRange(),
+        });
         if (message) {
             postMessage(message);
+        }
+    };
+
+    const openSearchPanel = (mode: EditorSearchMode = "find") => {
+        if (!searchOpen()) {
+            setSearchOpen(true);
+            setSearchFeedback(null);
+        }
+
+        if (searchMode() !== mode) {
+            setSearchMode(mode);
+        }
+
+        queueMicrotask(() => {
+            if (mode === "replace" && searchQuery().trim().length > 0) {
+                focusReplaceInput();
+                return;
+            }
+
+            focusSearchInput();
+        });
+    };
+
+    const closeSearchPanel = () => {
+        if (!searchOpen()) {
+            return;
+        }
+
+        searchPanelDragState = null;
+        setSearchOpen(false);
+        setSearchFeedback(null);
+    };
+
+    const submitReplace = (mode: "single" | "all") => {
+        const normalizedQuery = searchQuery().trim();
+        const sheet = activeSheetView();
+        if (!normalizedQuery) {
+            focusSearchInput();
+            return;
+        }
+
+        if (!sheet || !workbook().canEdit) {
+            return;
+        }
+
+        const result = resolveEditorReplaceResultInSheet(
+            {
+                key: sheet.key,
+                rowCount: sheet.rowCount,
+                columnCount: sheet.columnCount,
+                cells: getVisibleSearchCells(),
+            },
+            selection(),
+            {
+                query: normalizedQuery,
+                replacement: replaceQuery(),
+                options: searchOptions(),
+                scope: effectiveSearchScope(),
+                selectionRange: activeSearchSelectionRange() ?? undefined,
+                pendingEdits: getActiveSheetPendingEdits(),
+                mode,
+            }
+        );
+
+        if (result.status === "invalid-pattern") {
+            setSearchFeedback({
+                status: "invalid-pattern",
+                tone: "error",
+                message: strings.invalidSearchPattern,
+            });
+            return;
+        }
+
+        if (result.status === "no-match") {
+            setSearchFeedback({
+                status: "no-match",
+                tone: "warn",
+                message: strings.replaceNoEditableMatches,
+            });
+            return;
+        }
+
+        if (result.status === "no-change") {
+            setSearchFeedback({
+                status: "no-change",
+                tone: "warn",
+                message: strings.replaceNoChanges,
+            });
+            if (result.match) {
+                revealSearchMatch(result.match, effectiveSearchScope(), { syncHost: true });
+            }
+            return;
+        }
+
+        const changes = (result.changes ?? []).map((change) => ({
+            sheetKey: sheet.key,
+            rowNumber: change.rowNumber,
+            columnNumber: change.columnNumber,
+            modelValue: getModelCellValue(change.rowNumber, change.columnNumber),
+            beforeValue: change.beforeValue,
+            afterValue: change.afterValue,
+        }));
+        applyPendingEditChanges(changes);
+        setSearchFeedback({
+            status: "replaced",
+            tone: "success",
+            message: formatTemplate(strings.replaceCount, {
+                count: String(result.replacedCellCount ?? changes.length),
+            }),
+        });
+        if (result.match) {
+            revealSearchMatch(result.nextMatch ?? result.match, effectiveSearchScope(), {
+                syncHost: true,
+            });
         }
     };
 
@@ -2954,7 +3262,7 @@ export function EditorBootstrapApp() {
             left: Math.max(8, Math.min(rawLeft, appWidth - 288)),
             top: Math.max(8, Math.min(rawTop, appHeight - 360)),
         });
-        setSearchOpen(false);
+        closeSearchPanel();
         setSheetContextMenu(null);
     };
 
@@ -3009,6 +3317,35 @@ export function EditorBootstrapApp() {
         ensureSelectedCellVisibleForFilter(nextFilterState);
     };
 
+    const openCellContextMenu = (
+        rowNumber: number,
+        columnNumber: number,
+        x: number,
+        y: number
+    ) => {
+        const sheet = activeSheetView();
+        if (!sheet) {
+            return;
+        }
+
+        if (!isCellWithinSelectionRange(selectionRange(), rowNumber, columnNumber)) {
+            selectCell(rowNumber, columnNumber, {
+                syncHost: true,
+            });
+        }
+
+        setGridContextMenu({
+            kind: "cell",
+            rowNumber,
+            columnNumber,
+            x,
+            y,
+        });
+        setSheetContextMenu(null);
+        setFilterMenu(null);
+        closeSearchPanel();
+    };
+
     const openRowContextMenu = (rowNumber: number, x: number, y: number) => {
         const sheet = activeSheetView();
         if (!sheet || !workbook().canEdit) {
@@ -3035,7 +3372,7 @@ export function EditorBootstrapApp() {
         });
         setSheetContextMenu(null);
         setFilterMenu(null);
-        setSearchOpen(false);
+        closeSearchPanel();
     };
 
     const openColumnContextMenu = (columnNumber: number, x: number, y: number) => {
@@ -3064,7 +3401,7 @@ export function EditorBootstrapApp() {
         });
         setSheetContextMenu(null);
         setFilterMenu(null);
-        setSearchOpen(false);
+        closeSearchPanel();
     };
 
     const requestInsertRow = (rowNumber: number) => {
@@ -3107,7 +3444,7 @@ export function EditorBootstrapApp() {
         });
         setFilterMenu(null);
         setGridContextMenu(null);
-        setSearchOpen(false);
+        closeSearchPanel();
     };
 
     const applyToolbarAlignment = (alignment: EditorAlignmentPatch) => {
@@ -3197,7 +3534,7 @@ export function EditorBootstrapApp() {
                         disabled={!canToggleFilter()}
                         onClick={() => {
                             submitFilterToggle();
-                            setSearchOpen(false);
+                            closeSearchPanel();
                         }}
                     >
                         <span class="toolbar__button-icon codicon codicon-filter" />
@@ -3209,7 +3546,12 @@ export function EditorBootstrapApp() {
                         type="button"
                         title={strings.search}
                         onClick={() => {
-                            setSearchOpen((current) => !current);
+                            if (searchOpen()) {
+                                closeSearchPanel();
+                                return;
+                            }
+
+                            openSearchPanel(searchMode());
                         }}
                     >
                         <span class="toolbar__button-icon codicon codicon-search" />
@@ -3428,7 +3770,10 @@ export function EditorBootstrapApp() {
                                     class="search-strip__tab"
                                     classList={{ "is-active": searchMode() === "find" }}
                                     type="button"
-                                    onClick={() => setSearchMode("find")}
+                                    onClick={() => {
+                                        setSearchMode("find");
+                                        setSearchFeedback(null);
+                                    }}
                                 >
                                     {strings.searchFind}
                                 </button>
@@ -3436,12 +3781,12 @@ export function EditorBootstrapApp() {
                                     class="search-strip__tab"
                                     classList={{ "is-active": searchMode() === "replace" }}
                                     type="button"
-                                    onClick={() => setSearchMode("replace")}
+                                    onClick={() => {
+                                        setSearchMode("replace");
+                                        setSearchFeedback(null);
+                                    }}
                                 >
                                     <span>{strings.searchReplace}</span>
-                                    <span class="search-strip__soon">
-                                        {strings.searchReplaceComingSoon}
-                                    </span>
                                 </button>
                             </div>
                             <div class="search-strip__header-tools">
@@ -3450,7 +3795,7 @@ export function EditorBootstrapApp() {
                                     data-role="search-close"
                                     type="button"
                                     title={strings.searchClose}
-                                    onClick={() => setSearchOpen(false)}
+                                    onClick={closeSearchPanel}
                                 >
                                     <span class="codicon codicon-close" />
                                 </button>
@@ -3536,25 +3881,53 @@ export function EditorBootstrapApp() {
                         <Show when={searchMode() === "replace"}>
                             <div class="search-strip__row search-strip__row--replace">
                                 <div class="search-strip__input-wrap">
-                                    <span class="search-strip__input-icon codicon codicon-edit" />
+                                    <span class="search-strip__input-icon codicon codicon-replace" />
                                     <input
                                         class="search-strip__input"
+                                        data-role="replace-input"
                                         value={replaceQuery()}
                                         placeholder={strings.replacePlaceholder}
-                                        disabled
-                                        onInput={(event) =>
-                                            setReplaceQuery(event.currentTarget.value)
-                                        }
+                                        onInput={(event) => {
+                                            setReplaceQuery(event.currentTarget.value);
+                                            setSearchFeedback(null);
+                                        }}
+                                        onKeyDown={(event) => {
+                                            if (event.key === "Enter") {
+                                                event.preventDefault();
+                                                submitReplace(
+                                                    event.ctrlKey || event.metaKey ? "all" : "single"
+                                                );
+                                                return;
+                                            }
+
+                                            if (event.key === "Escape") {
+                                                event.preventDefault();
+                                                event.stopPropagation();
+                                                closeSearchPanel();
+                                            }
+                                        }}
                                     />
                                 </div>
                                 <div class="search-strip__replace-actions">
                                     <button
                                         class="toolbar__button"
+                                        data-role="replace-button"
+                                        type="button"
+                                        title={strings.searchReplace}
+                                        disabled={!canRunReplace()}
+                                        onClick={() => submitReplace("single")}
+                                    >
+                                        <span class="codicon codicon-replace" />
+                                    </button>
+                                    <button
+                                        class="toolbar__button"
+                                        data-role="replace-all-button"
                                         type="button"
                                         title={strings.replaceAll}
-                                        disabled
+                                        disabled={!canRunReplace()}
+                                        onClick={() => submitReplace("all")}
                                     >
-                                        <span class="codicon codicon-edit-session" />
+                                        <span class="codicon codicon-replace-all" />
                                     </button>
                                 </div>
                             </div>
@@ -3565,19 +3938,17 @@ export function EditorBootstrapApp() {
                                 <span class="search-strip__scope-summary-label">
                                     {strings.searchScopeLabel}
                                 </span>
-                                <span class="search-strip__scope-summary-value">
-                                    {strings.searchScopeWholeSheet}
+                                <span
+                                    class="search-strip__scope-summary-value"
+                                    classList={{ "is-selection": Boolean(activeSearchSelectionRange()) }}
+                                >
+                                    {searchScopeSummary()}
                                 </span>
                             </div>
                             <Show when={searchFeedback()}>
                                 {(feedback) => (
                                     <div class={searchFeedbackClass()}>{feedback().message}</div>
                                 )}
-                            </Show>
-                            <Show when={searchMode() === "replace" && !searchFeedback()}>
-                                <div class="search-strip__feedback search-strip__feedback--warn">
-                                    {strings.searchReplaceComingSoon}
-                                </div>
                             </Show>
                         </div>
                     </div>
@@ -3660,6 +4031,9 @@ export function EditorBootstrapApp() {
                                                                     onOpenFilterMenu={
                                                                         openFilterMenu
                                                                     }
+                                                                    onOpenContextMenu={
+                                                                        openCellContextMenu
+                                                                    }
                                                                 />
                                                             )}
                                                         </For>
@@ -3671,6 +4045,9 @@ export function EditorBootstrapApp() {
                                                             overlay={overlay}
                                                             offsetLeft={0}
                                                             offsetTop={0}
+                                                            isSearchFocused={
+                                                                isSearchFocusedSelection()
+                                                            }
                                                         />
                                                     )}
                                                 </Show>
@@ -3784,6 +4161,9 @@ export function EditorBootstrapApp() {
                                                                         onOpenFilterMenu={
                                                                             openFilterMenu
                                                                         }
+                                                                        onOpenContextMenu={
+                                                                            openCellContextMenu
+                                                                        }
                                                                     />
                                                                 )}
                                                             </For>
@@ -3798,6 +4178,9 @@ export function EditorBootstrapApp() {
                                                                 overlay={overlay}
                                                                 offsetLeft={0}
                                                                 offsetTop={0}
+                                                                isSearchFocused={
+                                                                    isSearchFocusedSelection()
+                                                                }
                                                             />
                                                         )}
                                                     </Show>
@@ -3910,6 +4293,9 @@ export function EditorBootstrapApp() {
                                                                         onOpenFilterMenu={
                                                                             openFilterMenu
                                                                         }
+                                                                        onOpenContextMenu={
+                                                                            openCellContextMenu
+                                                                        }
                                                                     />
                                                                 )}
                                                             </For>
@@ -3924,6 +4310,9 @@ export function EditorBootstrapApp() {
                                                                 overlay={overlay}
                                                                 offsetLeft={0}
                                                                 offsetTop={0}
+                                                                isSearchFocused={
+                                                                    isSearchFocusedSelection()
+                                                                }
                                                             />
                                                         )}
                                                     </Show>
@@ -4084,6 +4473,9 @@ export function EditorBootstrapApp() {
                                                                         onOpenFilterMenu={
                                                                             openFilterMenu
                                                                         }
+                                                                        onOpenContextMenu={
+                                                                            openCellContextMenu
+                                                                        }
                                                                     />
                                                                 )}
                                                             </For>
@@ -4098,6 +4490,9 @@ export function EditorBootstrapApp() {
                                                                 overlay={overlay}
                                                                 offsetLeft={0}
                                                                 offsetTop={0}
+                                                                isSearchFocused={
+                                                                    isSearchFocusedSelection()
+                                                                }
                                                             />
                                                         )}
                                                     </Show>
@@ -4257,11 +4652,167 @@ export function EditorBootstrapApp() {
                 {(menu) => (
                     <div
                         class="context-menu"
+                        classList={{ "context-menu--cell": menu().kind === "cell" }}
                         data-role={
-                            menu().kind === "row" ? "row-context-menu" : "column-context-menu"
+                            menu().kind === "cell"
+                                ? "cell-context-menu"
+                                : menu().kind === "row"
+                                  ? "row-context-menu"
+                                  : "column-context-menu"
                         }
                         style={gridContextMenuStyle() ?? {}}
                     >
+                        <Show when={menu().kind === "cell"}>
+                            <button
+                                class="context-menu__item"
+                                data-role="cell-context-find"
+                                type="button"
+                                onClick={() => {
+                                    setGridContextMenu(null);
+                                    openSearchPanel("find");
+                                }}
+                            >
+                                <span class="context-menu__icon codicon codicon-search" />
+                                <span class="context-menu__label">{strings.searchFind}</span>
+                                <span
+                                    class="context-menu__shortcut"
+                                    data-role="cell-context-find-shortcut"
+                                >
+                                    Ctrl/Cmd+F
+                                </span>
+                            </button>
+                            <button
+                                class="context-menu__item"
+                                data-role="cell-context-replace"
+                                type="button"
+                                onClick={() => {
+                                    setGridContextMenu(null);
+                                    openSearchPanel("replace");
+                                }}
+                            >
+                                <span class="context-menu__icon codicon codicon-replace" />
+                                <span class="context-menu__label">{strings.searchReplace}</span>
+                                <span
+                                    class="context-menu__shortcut"
+                                    data-role="cell-context-replace-shortcut"
+                                >
+                                    Ctrl/Cmd+H
+                                </span>
+                            </button>
+                            <div class="context-menu__separator" aria-hidden="true" />
+                            <button
+                                class="context-menu__item"
+                                data-role="cell-context-filter"
+                                type="button"
+                                disabled={!canToggleFilter()}
+                                onClick={() => {
+                                    setGridContextMenu(null);
+                                    submitFilterToggle();
+                                }}
+                            >
+                                <span class="context-menu__icon codicon codicon-filter" />
+                                <span class="context-menu__label">{filterActionLabel()}</span>
+                            </button>
+                            <div class="context-menu__separator" aria-hidden="true" />
+                            <button
+                                class="context-menu__item"
+                                data-role="cell-context-insert-row-above"
+                                type="button"
+                                disabled={!workbook().canEdit}
+                                onClick={() => {
+                                    const current = menu();
+                                    if (current.kind === "cell") {
+                                        requestInsertRow(current.rowNumber);
+                                    }
+                                }}
+                            >
+                                <span class="context-menu__icon codicon codicon-add" />
+                                <span class="context-menu__label">{strings.insertRowAbove}</span>
+                            </button>
+                            <button
+                                class="context-menu__item"
+                                data-role="cell-context-insert-row-below"
+                                type="button"
+                                disabled={!workbook().canEdit}
+                                onClick={() => {
+                                    const current = menu();
+                                    if (current.kind === "cell") {
+                                        requestInsertRow(current.rowNumber + 1);
+                                    }
+                                }}
+                            >
+                                <span class="context-menu__icon codicon codicon-add" />
+                                <span class="context-menu__label">{strings.insertRowBelow}</span>
+                            </button>
+                            <button
+                                class="context-menu__item context-menu__item--danger"
+                                data-role="cell-context-delete-row"
+                                type="button"
+                                disabled={
+                                    !workbook().canEdit || (activeSheetView()?.rowCount ?? 0) <= 1
+                                }
+                                onClick={() => {
+                                    const current = menu();
+                                    if (current.kind === "cell") {
+                                        requestDeleteRow(current.rowNumber);
+                                    }
+                                }}
+                            >
+                                <span class="context-menu__icon codicon codicon-trash" />
+                                <span class="context-menu__label">{strings.deleteRow}</span>
+                            </button>
+                            <div class="context-menu__separator" aria-hidden="true" />
+                            <button
+                                class="context-menu__item"
+                                data-role="cell-context-insert-column-left"
+                                type="button"
+                                disabled={!workbook().canEdit}
+                                onClick={() => {
+                                    const current = menu();
+                                    if (current.kind === "cell") {
+                                        requestInsertColumn(current.columnNumber);
+                                    }
+                                }}
+                            >
+                                <span class="context-menu__icon codicon codicon-add" />
+                                <span class="context-menu__label">{strings.insertColumnLeft}</span>
+                            </button>
+                            <button
+                                class="context-menu__item"
+                                data-role="cell-context-insert-column-right"
+                                type="button"
+                                disabled={!workbook().canEdit}
+                                onClick={() => {
+                                    const current = menu();
+                                    if (current.kind === "cell") {
+                                        requestInsertColumn(current.columnNumber + 1);
+                                    }
+                                }}
+                            >
+                                <span class="context-menu__icon codicon codicon-add" />
+                                <span class="context-menu__label">
+                                    {strings.insertColumnRight}
+                                </span>
+                            </button>
+                            <button
+                                class="context-menu__item context-menu__item--danger"
+                                data-role="cell-context-delete-column"
+                                type="button"
+                                disabled={
+                                    !workbook().canEdit ||
+                                    (activeSheetView()?.columnCount ?? 0) <= 1
+                                }
+                                onClick={() => {
+                                    const current = menu();
+                                    if (current.kind === "cell") {
+                                        requestDeleteColumn(current.columnNumber);
+                                    }
+                                }}
+                            >
+                                <span class="context-menu__icon codicon codicon-trash" />
+                                <span class="context-menu__label">{strings.deleteColumn}</span>
+                            </button>
+                        </Show>
                         <Show when={menu().kind === "row"}>
                             <button
                                 class="context-menu__item"
