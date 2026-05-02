@@ -2377,6 +2377,120 @@ suite("Solid editor shell DOM", () => {
         });
     });
 
+    test("drags a column resize handle and commits the new width", async () => {
+        await dispatchSessionInit();
+
+        const viewport = query('[data-role="editor-grid-viewport"]');
+        Object.defineProperty(viewport, "clientHeight", {
+            configurable: true,
+            value: 320,
+        });
+        Object.defineProperty(viewport, "clientWidth", {
+            configurable: true,
+            value: 520,
+        });
+        viewport.dispatchEvent(
+            new windowLike.Event("scroll", {
+                bubbles: true,
+                cancelable: true,
+            })
+        );
+        await flush();
+
+        const columnHeader = query('[data-role="grid-column-header"][data-column-number="2"]');
+        const resizeHandle = query(
+            '[data-role="grid-column-header"][data-column-number="2"] [data-role="grid-column-resize-handle"]'
+        );
+        const startWidth = columnHeader.style.width;
+
+        await pointerDown(resizeHandle, {
+            pointerId: 41,
+            clientX: 260,
+        });
+        await pointerMove(windowLike, {
+            pointerId: 41,
+            buttons: 1,
+            clientX: 308,
+        });
+
+        assert.notStrictEqual(
+            query('[data-role="grid-column-header"][data-column-number="2"]').style.width,
+            startWidth
+        );
+
+        await pointerUp(windowLike, {
+            pointerId: 41,
+            buttons: 0,
+            clientX: 308,
+        });
+
+        const lastMessage = normalizeMessage(postedMessages.at(-1)) as {
+            type: string;
+            columnNumber?: number;
+            width?: unknown;
+        };
+        assert.strictEqual(lastMessage.type, "setColumnWidth");
+        assert.strictEqual(lastMessage.columnNumber, 2);
+        assert.strictEqual(typeof lastMessage.width, "number");
+    });
+
+    test("drags a row resize handle and commits the new height", async () => {
+        await dispatchSessionInit();
+
+        const viewport = query('[data-role="editor-grid-viewport"]');
+        Object.defineProperty(viewport, "clientHeight", {
+            configurable: true,
+            value: 320,
+        });
+        Object.defineProperty(viewport, "clientWidth", {
+            configurable: true,
+            value: 520,
+        });
+        viewport.dispatchEvent(
+            new windowLike.Event("scroll", {
+                bubbles: true,
+                cancelable: true,
+            })
+        );
+        await flush();
+
+        const rowHeader = query('[data-role="grid-row-header"][data-row-number="4"]');
+        const resizeHandle = query(
+            '[data-role="grid-row-header"][data-row-number="4"] [data-role="grid-row-resize-handle"]'
+        );
+        const startHeight = rowHeader.style.height;
+
+        await pointerDown(resizeHandle, {
+            pointerId: 42,
+            clientY: 120,
+        });
+        await pointerMove(windowLike, {
+            pointerId: 42,
+            buttons: 1,
+            clientY: 148,
+        });
+
+        assert.notStrictEqual(
+            query('[data-role="grid-row-header"][data-row-number="4"]').style.height,
+            startHeight
+        );
+
+        await pointerUp(windowLike, {
+            pointerId: 42,
+            buttons: 0,
+            clientY: 148,
+        });
+
+        const lastMessage = normalizeMessage(postedMessages.at(-1)) as {
+            type: string;
+            rowNumber?: number;
+            height?: unknown;
+        };
+        assert.strictEqual(lastMessage.type, "setRowHeight");
+        assert.strictEqual(lastMessage.rowNumber, 4);
+        assert.strictEqual(typeof lastMessage.height, "number");
+    });
+
     test("closes the grid context menu with escape", async () => {
         await dispatchSessionInit();
 

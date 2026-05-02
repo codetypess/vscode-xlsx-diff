@@ -10,6 +10,13 @@ import {
     getMinimumVisibleEditorRowCount,
 } from "../../webview/editor-panel/editor-virtual-grid";
 import {
+    DEFAULT_MAXIMUM_DIGIT_WIDTH_PX,
+    MAX_COLUMN_PIXEL_WIDTH,
+    MIN_COLUMN_PIXEL_WIDTH,
+    convertPixelsToWorkbookColumnWidth,
+    stabilizeColumnPixelWidth,
+} from "../../webview/column-layout";
+import {
     buildFillChanges,
     createFillPreviewRange,
     isCellWithinFillPreviewArea,
@@ -20,6 +27,12 @@ import {
     type PendingHistoryChange,
     type PendingHistoryEntry,
 } from "../../webview/editor-panel/editor-pending-history";
+import {
+    MAX_ROW_PIXEL_HEIGHT,
+    MIN_ROW_PIXEL_HEIGHT,
+    convertPixelsToWorkbookRowHeight,
+    stabilizeRowPixelHeight,
+} from "../../webview/row-layout";
 import {
     isCellWithinSelectionRange,
     type SelectionRange,
@@ -206,6 +219,26 @@ interface EditorGridFillDragState {
     pointerId: number;
     sourceRange: SelectionRange;
     previewRange: SelectionRange | null;
+}
+
+interface EditorColumnResizeState {
+    pointerId: number;
+    sheetKey: string;
+    columnNumber: number;
+    startClientX: number;
+    startPixelWidth: number;
+    previewPixelWidth: number;
+    isDragging: boolean;
+}
+
+interface EditorRowResizeState {
+    pointerId: number;
+    sheetKey: string;
+    rowNumber: number;
+    startClientY: number;
+    startPixelHeight: number;
+    previewPixelHeight: number;
+    isDragging: boolean;
 }
 
 type EditorGridSelectionDragKind = "cell" | "row" | "column";
@@ -409,6 +442,14 @@ function focusGotoInput(): void {
 
     input.focus();
     input.select();
+}
+
+function normalizeWorkbookColumnWidth(columnWidth: number): number {
+    return Math.round(columnWidth * 256) / 256;
+}
+
+function normalizeWorkbookRowHeight(rowHeight: number): number {
+    return Math.round(rowHeight * 100) / 100;
 }
 
 function getEditorPendingEditKey(
@@ -673,7 +714,15 @@ function EditorGridColumnHeaderView(props: {
     columnNumber: number;
     label: string;
     isActive: boolean;
+    canResize: boolean;
+    isResizing: boolean;
     onPointerSelectStart: (pointerId: number, options?: { extend?: boolean }) => void;
+    onPointerResizeStart: (
+        pointerId: number,
+        columnNumber: number,
+        startPixelWidth: number,
+        clientX: number
+    ) => void;
     onOpenContextMenu: (columnNumber: number, clientX: number, clientY: number) => void;
 }) {
     return (
@@ -706,6 +755,29 @@ function EditorGridColumnHeaderView(props: {
         >
             <div class="grid__column">
                 <span class="grid__column-label">{props.label}</span>
+                <Show when={props.canResize}>
+                    <span
+                        aria-hidden
+                        class="grid__column-resize-handle"
+                        classList={{ "is-active": props.isResizing }}
+                        data-role="grid-column-resize-handle"
+                        data-column-number={props.columnNumber}
+                        onPointerDown={(event) => {
+                            if (event.button !== 0) {
+                                return;
+                            }
+
+                            event.preventDefault();
+                            event.stopPropagation();
+                            props.onPointerResizeStart(
+                                event.pointerId,
+                                props.columnNumber,
+                                props.width,
+                                event.clientX
+                            );
+                        }}
+                    />
+                </Show>
             </div>
         </div>
     );
@@ -717,7 +789,15 @@ function EditorGridRowHeaderView(props: {
     rowNumber: number;
     rowHeaderWidth: number;
     isActive: boolean;
+    canResize: boolean;
+    isResizing: boolean;
     onPointerSelectStart: (pointerId: number, options?: { extend?: boolean }) => void;
+    onPointerResizeStart: (
+        pointerId: number,
+        rowNumber: number,
+        startPixelHeight: number,
+        clientY: number
+    ) => void;
     onOpenContextMenu: (rowNumber: number, clientX: number, clientY: number) => void;
 }) {
     return (
@@ -750,6 +830,29 @@ function EditorGridRowHeaderView(props: {
         >
             <div class="grid__row-number">
                 <span class="grid__row-label">{props.rowNumber}</span>
+                <Show when={props.canResize}>
+                    <span
+                        aria-hidden
+                        class="grid__row-resize-handle"
+                        classList={{ "is-active": props.isResizing }}
+                        data-role="grid-row-resize-handle"
+                        data-row-number={props.rowNumber}
+                        onPointerDown={(event) => {
+                            if (event.button !== 0) {
+                                return;
+                            }
+
+                            event.preventDefault();
+                            event.stopPropagation();
+                            props.onPointerResizeStart(
+                                event.pointerId,
+                                props.rowNumber,
+                                props.height,
+                                event.clientY
+                            );
+                        }}
+                    />
+                </Show>
             </div>
         </div>
     );
@@ -1353,6 +1456,10 @@ export function EditorBootstrapApp() {
     const [gotoReference, setGotoReference] = createSignal("");
     const [isEditingGotoReference, setIsEditingGotoReference] = createSignal(false);
     const [editingCell, setEditingCell] = createSignal<EditorCellEditingState | null>(null);
+    const [columnResizeState, setColumnResizeState] = createSignal<EditorColumnResizeState | null>(
+        null
+    );
+    const [rowResizeState, setRowResizeState] = createSignal<EditorRowResizeState | null>(null);
     const [fillDragState, setFillDragState] = createSignal<EditorGridFillDragState | null>(null);
     const [searchOptions, setSearchOptions] = createSignal<SearchOptions>({
         isRegexp: false,
@@ -1592,6 +1699,30 @@ export function EditorBootstrapApp() {
             setGridContextMenu(null);
         };
         const handlePointerMove = (event: PointerEvent) => {
+            const activeColumnResize = columnResizeState();
+            if (activeColumnResize?.isDragging && activeColumnResize.pointerId === event.pointerId) {
+                if ((event.buttons & 1) === 0) {
+                    stopColumnResize(event.pointerId, { commit: true });
+                    return;
+                }
+
+                event.preventDefault();
+                updateColumnResize(event.pointerId, event.clientX);
+                return;
+            }
+
+            const activeRowResize = rowResizeState();
+            if (activeRowResize?.isDragging && activeRowResize.pointerId === event.pointerId) {
+                if ((event.buttons & 1) === 0) {
+                    stopRowResize(event.pointerId, { commit: true });
+                    return;
+                }
+
+                event.preventDefault();
+                updateRowResize(event.pointerId, event.clientY);
+                return;
+            }
+
             updateSearchPanelDrag(event.pointerId, event.clientX, event.clientY);
             const currentFillDragState = fillDragState();
             if (currentFillDragState && currentFillDragState.pointerId === event.pointerId) {
@@ -1626,11 +1757,15 @@ export function EditorBootstrapApp() {
             updateSelectionDrag(target);
         };
         const handlePointerUp = (event: PointerEvent) => {
+            stopColumnResize(event.pointerId, { commit: true });
+            stopRowResize(event.pointerId, { commit: true });
             stopSearchPanelDrag(event.pointerId);
             stopFillDrag(event.pointerId, { commit: true });
             stopSelectionDrag(event.pointerId);
         };
         const handlePointerCancel = (event: PointerEvent) => {
+            stopColumnResize(event.pointerId);
+            stopRowResize(event.pointerId);
             stopSearchPanelDrag(event.pointerId);
             stopFillDrag(event.pointerId);
             stopSelectionDrag(event.pointerId);
@@ -1861,6 +1996,54 @@ export function EditorBootstrapApp() {
         setSheetContextMenu(null);
         setGridContextMenu(null);
         setFillDragState(null);
+    });
+
+    createEffect(() => {
+        const activeResize = columnResizeState();
+        if (!activeResize) {
+            return;
+        }
+
+        const sheet = activeSheetView();
+        if (!sheet || activeResize.sheetKey !== sheet.key) {
+            setColumnResizeState(null);
+            return;
+        }
+
+        if (activeResize.isDragging) {
+            return;
+        }
+
+        const currentWidth = normalizeWorkbookColumnWidth(
+            sheet.columnWidths?.[activeResize.columnNumber - 1] ?? 0
+        );
+        if (currentWidth === getPreviewWorkbookColumnWidth(activeResize.previewPixelWidth)) {
+            setColumnResizeState(null);
+        }
+    });
+
+    createEffect(() => {
+        const activeResize = rowResizeState();
+        if (!activeResize) {
+            return;
+        }
+
+        const sheet = activeSheetView();
+        if (!sheet || activeResize.sheetKey !== sheet.key) {
+            setRowResizeState(null);
+            return;
+        }
+
+        if (activeResize.isDragging) {
+            return;
+        }
+
+        const currentHeight = normalizeWorkbookRowHeight(
+            sheet.rowHeights?.[String(activeResize.rowNumber)] ?? 16
+        );
+        if (currentHeight === getPreviewWorkbookRowHeight(activeResize.previewPixelHeight)) {
+            setRowResizeState(null);
+        }
     });
 
     createEffect(() => {
@@ -2124,12 +2307,35 @@ export function EditorBootstrapApp() {
         }
 
         const rows = visibleRowResult();
+        const activeColumnResize = columnResizeState();
+        const activeRowResize = rowResizeState();
+        const previewColumnWidths =
+            activeColumnResize?.sheetKey === sheet.key
+                ? (() => {
+                      const nextColumnWidths = [...(sheet.columnWidths ?? [])];
+                      nextColumnWidths[activeColumnResize.columnNumber - 1] =
+                          getPreviewWorkbookColumnWidth(activeColumnResize.previewPixelWidth);
+                      return nextColumnWidths;
+                  })()
+                : sheet.columnWidths;
+        const previewRowHeights =
+            activeRowResize?.sheetKey === sheet.key
+                ? {
+                      ...(sheet.rowHeights ?? {}),
+                      [String(activeRowResize.rowNumber)]: getPreviewWorkbookRowHeight(
+                          activeRowResize.previewPixelHeight
+                      ),
+                  }
+                : sheet.rowHeights;
         const nextMetrics = deriveEditorGridMetrics(
             {
                 ...createEditorGridMetricsInputFromSheet(sheet),
                 rowHeaderLabelCount: sheet.rowCount + EDITOR_EXTRA_PADDING_ROWS,
                 visibleRows: rows.visibleRows,
                 hiddenRows: rows.hiddenRows,
+                columnWidths: previewColumnWidths,
+                rowHeights: previewRowHeights,
+                maximumDigitWidth: DEFAULT_MAXIMUM_DIGIT_WIDTH_PX,
             },
             viewportState()
         );
@@ -3040,6 +3246,179 @@ export function EditorBootstrapApp() {
         searchPanelDragState = null;
         setSearchOpen(false);
         setSearchFeedback(null);
+    };
+
+    const getPreviewWorkbookColumnWidth = (pixelWidth: number) =>
+        normalizeWorkbookColumnWidth(
+            convertPixelsToWorkbookColumnWidth(pixelWidth, DEFAULT_MAXIMUM_DIGIT_WIDTH_PX)
+        );
+
+    const getPreviewWorkbookRowHeight = (pixelHeight: number) =>
+        normalizeWorkbookRowHeight(convertPixelsToWorkbookRowHeight(pixelHeight));
+
+    const beginColumnResize = (
+        pointerId: number,
+        columnNumber: number,
+        startPixelWidth: number,
+        clientX: number
+    ) => {
+        const sheet = activeSheetView();
+        if (!sheet || !workbook().canEdit) {
+            return;
+        }
+
+        commitEditingCell();
+        setFilterMenu(null);
+        setSheetContextMenu(null);
+        setGridContextMenu(null);
+        setFillDragState(null);
+        selectionDragState = null;
+        globalThis.getSelection?.()?.removeAllRanges();
+        setColumnResizeState({
+            pointerId,
+            sheetKey: sheet.key,
+            columnNumber,
+            startClientX: clientX,
+            startPixelWidth,
+            previewPixelWidth: startPixelWidth,
+            isDragging: true,
+        });
+    };
+
+    const updateColumnResize = (pointerId: number, clientX: number) => {
+        const activeResize = columnResizeState();
+        if (!activeResize?.isDragging || activeResize.pointerId !== pointerId) {
+            return;
+        }
+
+        const nextPixelWidth = Math.max(
+            MIN_COLUMN_PIXEL_WIDTH,
+            Math.min(
+                MAX_COLUMN_PIXEL_WIDTH,
+                stabilizeColumnPixelWidth(
+                    Math.round(activeResize.startPixelWidth + clientX - activeResize.startClientX),
+                    DEFAULT_MAXIMUM_DIGIT_WIDTH_PX
+                )
+            )
+        );
+        if (nextPixelWidth === activeResize.previewPixelWidth) {
+            return;
+        }
+
+        setColumnResizeState({
+            ...activeResize,
+            previewPixelWidth: nextPixelWidth,
+        });
+    };
+
+    const stopColumnResize = (pointerId?: number, options: { commit?: boolean } = {}) => {
+        const activeResize = columnResizeState();
+        if (!activeResize) {
+            return;
+        }
+
+        if (pointerId !== undefined && activeResize.pointerId !== pointerId) {
+            return;
+        }
+
+        const didChange = activeResize.previewPixelWidth !== activeResize.startPixelWidth;
+        if (!(options.commit ?? false) || !didChange) {
+            setColumnResizeState(null);
+            return;
+        }
+
+        setColumnResizeState({
+            ...activeResize,
+            startPixelWidth: activeResize.previewPixelWidth,
+            isDragging: false,
+        });
+        postMessage({
+            type: "setColumnWidth",
+            columnNumber: activeResize.columnNumber,
+            width: getPreviewWorkbookColumnWidth(activeResize.previewPixelWidth),
+        });
+    };
+
+    const beginRowResize = (
+        pointerId: number,
+        rowNumber: number,
+        startPixelHeight: number,
+        clientY: number
+    ) => {
+        const sheet = activeSheetView();
+        if (!sheet || !workbook().canEdit) {
+            return;
+        }
+
+        commitEditingCell();
+        setFilterMenu(null);
+        setSheetContextMenu(null);
+        setGridContextMenu(null);
+        setFillDragState(null);
+        selectionDragState = null;
+        globalThis.getSelection?.()?.removeAllRanges();
+        setRowResizeState({
+            pointerId,
+            sheetKey: sheet.key,
+            rowNumber,
+            startClientY: clientY,
+            startPixelHeight,
+            previewPixelHeight: startPixelHeight,
+            isDragging: true,
+        });
+    };
+
+    const updateRowResize = (pointerId: number, clientY: number) => {
+        const activeResize = rowResizeState();
+        if (!activeResize?.isDragging || activeResize.pointerId !== pointerId) {
+            return;
+        }
+
+        const nextPixelHeight = Math.max(
+            MIN_ROW_PIXEL_HEIGHT,
+            Math.min(
+                MAX_ROW_PIXEL_HEIGHT,
+                stabilizeRowPixelHeight(
+                    Math.round(activeResize.startPixelHeight + clientY - activeResize.startClientY)
+                )
+            )
+        );
+        if (nextPixelHeight === activeResize.previewPixelHeight) {
+            return;
+        }
+
+        setRowResizeState({
+            ...activeResize,
+            previewPixelHeight: nextPixelHeight,
+        });
+    };
+
+    const stopRowResize = (pointerId?: number, options: { commit?: boolean } = {}) => {
+        const activeResize = rowResizeState();
+        if (!activeResize) {
+            return;
+        }
+
+        if (pointerId !== undefined && activeResize.pointerId !== pointerId) {
+            return;
+        }
+
+        const didChange = activeResize.previewPixelHeight !== activeResize.startPixelHeight;
+        if (!(options.commit ?? false) || !didChange) {
+            setRowResizeState(null);
+            return;
+        }
+
+        setRowResizeState({
+            ...activeResize,
+            startPixelHeight: activeResize.previewPixelHeight,
+            isDragging: false,
+        });
+        postMessage({
+            type: "setRowHeight",
+            rowNumber: activeResize.rowNumber,
+            height: getPreviewWorkbookRowHeight(activeResize.previewPixelHeight),
+        });
     };
 
     const submitReplace = (mode: "single" | "all") => {
@@ -4101,6 +4480,18 @@ export function EditorBootstrapApp() {
                                                                         }
                                                                         label={item.label}
                                                                         isActive={item.isActive}
+                                                                        canResize={
+                                                                            workbook().canEdit
+                                                                        }
+                                                                        isResizing={
+                                                                            columnResizeState()
+                                                                                ?.sheetKey ===
+                                                                                activeSheet()
+                                                                                    ?.key &&
+                                                                            columnResizeState()
+                                                                                ?.columnNumber ===
+                                                                                item.columnNumber
+                                                                        }
                                                                         onPointerSelectStart={(
                                                                             pointerId,
                                                                             options
@@ -4109,6 +4500,19 @@ export function EditorBootstrapApp() {
                                                                                 item.columnNumber,
                                                                                 pointerId,
                                                                                 options
+                                                                            )
+                                                                        }
+                                                                        onPointerResizeStart={(
+                                                                            pointerId,
+                                                                            columnNumber,
+                                                                            startPixelWidth,
+                                                                            clientX
+                                                                        ) =>
+                                                                            beginColumnResize(
+                                                                                pointerId,
+                                                                                columnNumber,
+                                                                                startPixelWidth,
+                                                                                clientX
                                                                             )
                                                                         }
                                                                         onOpenContextMenu={
@@ -4233,6 +4637,18 @@ export function EditorBootstrapApp() {
                                                                             headers().rowHeaderWidth
                                                                         }
                                                                         isActive={item.isActive}
+                                                                        canResize={
+                                                                            workbook().canEdit
+                                                                        }
+                                                                        isResizing={
+                                                                            rowResizeState()
+                                                                                ?.sheetKey ===
+                                                                                activeSheet()
+                                                                                    ?.key &&
+                                                                            rowResizeState()
+                                                                                ?.rowNumber ===
+                                                                                item.rowNumber
+                                                                        }
                                                                         onPointerSelectStart={(
                                                                             pointerId,
                                                                             options
@@ -4241,6 +4657,19 @@ export function EditorBootstrapApp() {
                                                                                 item.rowNumber,
                                                                                 pointerId,
                                                                                 options
+                                                                            )
+                                                                        }
+                                                                        onPointerResizeStart={(
+                                                                            pointerId,
+                                                                            rowNumber,
+                                                                            startPixelHeight,
+                                                                            clientY
+                                                                        ) =>
+                                                                            beginRowResize(
+                                                                                pointerId,
+                                                                                rowNumber,
+                                                                                startPixelHeight,
+                                                                                clientY
                                                                             )
                                                                         }
                                                                         onOpenContextMenu={
@@ -4379,6 +4808,18 @@ export function EditorBootstrapApp() {
                                                                             }
                                                                             label={item.label}
                                                                             isActive={item.isActive}
+                                                                            canResize={
+                                                                                workbook().canEdit
+                                                                            }
+                                                                            isResizing={
+                                                                                columnResizeState()
+                                                                                    ?.sheetKey ===
+                                                                                    activeSheet()
+                                                                                        ?.key &&
+                                                                                columnResizeState()
+                                                                                    ?.columnNumber ===
+                                                                                    item.columnNumber
+                                                                            }
                                                                             onPointerSelectStart={(
                                                                                 pointerId,
                                                                                 options
@@ -4387,6 +4828,19 @@ export function EditorBootstrapApp() {
                                                                                     item.columnNumber,
                                                                                     pointerId,
                                                                                     options
+                                                                                )
+                                                                            }
+                                                                            onPointerResizeStart={(
+                                                                                pointerId,
+                                                                                columnNumber,
+                                                                                startPixelWidth,
+                                                                                clientX
+                                                                            ) =>
+                                                                                beginColumnResize(
+                                                                                    pointerId,
+                                                                                    columnNumber,
+                                                                                    startPixelWidth,
+                                                                                    clientX
                                                                                 )
                                                                             }
                                                                             onOpenContextMenu={
@@ -4412,6 +4866,18 @@ export function EditorBootstrapApp() {
                                                                                     .rowHeaderWidth
                                                                             }
                                                                             isActive={item.isActive}
+                                                                            canResize={
+                                                                                workbook().canEdit
+                                                                            }
+                                                                            isResizing={
+                                                                                rowResizeState()
+                                                                                    ?.sheetKey ===
+                                                                                    activeSheet()
+                                                                                        ?.key &&
+                                                                                rowResizeState()
+                                                                                    ?.rowNumber ===
+                                                                                    item.rowNumber
+                                                                            }
                                                                             onPointerSelectStart={(
                                                                                 pointerId,
                                                                                 options
@@ -4420,6 +4886,19 @@ export function EditorBootstrapApp() {
                                                                                     item.rowNumber,
                                                                                     pointerId,
                                                                                     options
+                                                                                )
+                                                                            }
+                                                                            onPointerResizeStart={(
+                                                                                pointerId,
+                                                                                rowNumber,
+                                                                                startPixelHeight,
+                                                                                clientY
+                                                                            ) =>
+                                                                                beginRowResize(
+                                                                                    pointerId,
+                                                                                    rowNumber,
+                                                                                    startPixelHeight,
+                                                                                    clientY
                                                                                 )
                                                                             }
                                                                             onOpenContextMenu={

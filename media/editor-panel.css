@@ -1075,7 +1075,9 @@ body {
 
 .grid__row-number {
     width: 56px;
+    height: 100%;
     padding: 4px 7px;
+    position: relative;
     text-align: right;
     color: var(--vscode-descriptionForeground);
     font-variant-numeric: tabular-nums;
@@ -1121,7 +1123,7 @@ body {
 }
 
 .grid__column-resize-handle::before {
-    content: "";
+    content: none;
     position: absolute;
     top: 5px;
     bottom: 5px;
@@ -1132,9 +1134,26 @@ body {
     opacity: 0;
 }
 
-.grid__column:hover .grid__column-resize-handle::before,
-.grid__column-resize-handle.is-active::before {
-    background: var(--vscode-focusBorder);
+.grid__row-resize-handle {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 10px;
+    cursor: row-resize;
+    touch-action: none;
+}
+
+.grid__row-resize-handle::before {
+    content: none;
+    position: absolute;
+    left: 6px;
+    right: 6px;
+    bottom: 1px;
+    height: 2px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--vscode-descriptionForeground) 36%, transparent 64%);
+    opacity: 0;
 }
 
 .grid__cell {
