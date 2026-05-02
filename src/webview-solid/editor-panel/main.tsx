@@ -160,6 +160,30 @@ function getVsCodeApi(): VsCodeApi {
     };
 }
 
+function getToolbarCellEditTargetKey(target: ToolbarCellEditTarget | null): string | null {
+    if (!target) {
+        return null;
+    }
+
+    return `${target.sheetKey}:${target.rowNumber}:${target.columnNumber}`;
+}
+
+function shouldResetToolbarCellValueDraft(
+    editTarget: ToolbarCellEditTarget | null,
+    activeTarget: ToolbarCellEditTarget | null,
+    isEditable: boolean
+): boolean {
+    if (!editTarget) {
+        return false;
+    }
+
+    if (!activeTarget || !isEditable) {
+        return true;
+    }
+
+    return getToolbarCellEditTargetKey(editTarget) !== getToolbarCellEditTargetKey(activeTarget);
+}
+
 type EditorSearchMode = "find" | "replace";
 type SearchFeedbackTone = "success" | "warn" | "error";
 type SearchFeedbackStatus = EditorSearchResultMessage["status"] | "replaced" | "no-change";
@@ -248,6 +272,12 @@ interface EditorGridSelectionDragState {
     pointerId: number;
     anchorCell: EditorSelectedCell;
     lastTargetKey: string;
+}
+
+interface ToolbarCellEditTarget {
+    sheetKey: string;
+    rowNumber: number;
+    columnNumber: number;
 }
 
 type EditorGridSelectionTarget =
@@ -442,6 +472,21 @@ function focusGotoInput(): void {
 
     input.focus();
     input.select();
+}
+
+function blurActiveEditableElement(): void {
+    const activeElement = document.activeElement;
+    if (
+        activeElement instanceof HTMLInputElement ||
+        activeElement instanceof HTMLTextAreaElement
+    ) {
+        activeElement.blur();
+        return;
+    }
+
+    if (activeElement instanceof HTMLElement && activeElement.isContentEditable) {
+        activeElement.blur();
+    }
 }
 
 function normalizeWorkbookColumnWidth(columnWidth: number): number {
@@ -1335,6 +1380,7 @@ function getEditorStrings(): Pick<
     | "gotoPlaceholder"
     | "goto"
     | "selectedCell"
+    | "multipleCellsSelected"
     | "noCellSelected"
     | "noRowsAvailable"
     | "noSearchMatches"
@@ -1405,6 +1451,7 @@ function getEditorStrings(): Pick<
         gotoPlaceholder: strings?.gotoPlaceholder ?? "A1 or Sheet1!B2",
         goto: strings?.goto ?? "Go",
         selectedCell: strings?.selectedCell ?? "Selected Cell",
+        multipleCellsSelected: strings?.multipleCellsSelected ?? "Multiple cells selected",
         noCellSelected: strings?.noCellSelected ?? "No cell selected",
         noRowsAvailable: strings?.noRowsAvailable ?? "No rows available",
         noSearchMatches: strings?.noSearchMatches ?? "No matching cells were found.",
@@ -1455,6 +1502,10 @@ export function EditorBootstrapApp() {
     const [replaceQuery, setReplaceQuery] = createSignal("");
     const [gotoReference, setGotoReference] = createSignal("");
     const [isEditingGotoReference, setIsEditingGotoReference] = createSignal(false);
+    const [selectedCellValueDraft, setSelectedCellValueDraft] = createSignal("");
+    const [isEditingSelectedCellValue, setIsEditingSelectedCellValue] = createSignal(false);
+    const [selectedCellValueEditTarget, setSelectedCellValueEditTarget] =
+        createSignal<ToolbarCellEditTarget | null>(null);
     const [editingCell, setEditingCell] = createSignal<EditorCellEditingState | null>(null);
     const [columnResizeState, setColumnResizeState] = createSignal<EditorColumnResizeState | null>(
         null
@@ -1677,6 +1728,14 @@ export function EditorBootstrapApp() {
                 setSheetContextMenu(null);
                 setGridContextMenu(null);
                 return;
+            }
+
+            if (
+                !isTextInputTarget(target) &&
+                (resolveEditorGridSelectionTarget(target) ||
+                    target.closest('[data-role="grid-fill-handle"]'))
+            ) {
+                blurActiveEditableElement();
             }
 
             if (
@@ -1938,6 +1997,19 @@ export function EditorBootstrapApp() {
         return currentSelection
             ? `${currentSelection.rowNumber}:${currentSelection.columnNumber}`
             : null;
+    });
+    const activeSelectedCellValueEditTarget = createMemo<ToolbarCellEditTarget | null>(() => {
+        const sheet = activeSheetView();
+        const currentSelection = selection();
+        if (!sheet || !currentSelection || expandedSelectionRange() || !workbook().canEdit) {
+            return null;
+        }
+
+        return {
+            sheetKey: sheet.key,
+            rowNumber: currentSelection.rowNumber,
+            columnNumber: currentSelection.columnNumber,
+        };
     });
     let previousGridMetrics: EditorGridMetrics | null = null;
     let previousCellLayers: EditorGridCellLayers | null = null;
@@ -2296,6 +2368,53 @@ export function EditorBootstrapApp() {
             pendingEdits: session().ui.editingDrafts.pendingEdits,
         })
     );
+    const toolbarSelectedCellValue = createMemo(() =>
+        expandedSelectionRange() ? "" : selectedCellValue()
+    );
+    const selectedCellValuePlaceholder = createMemo(() => {
+        if (!selection()) {
+            return strings.noCellSelected;
+        }
+
+        return expandedSelectionRange() ? strings.multipleCellsSelected : "";
+    });
+    const getSelectedCellValueEditState = () => {
+        const sheet = activeSheetView();
+        const currentSelection = selection();
+        if (!sheet || !currentSelection || expandedSelectionRange()) {
+            return null;
+        }
+
+        return createEditorCellEditingState({
+            activeSheet: sheet,
+            rowNumber: currentSelection.rowNumber,
+            columnNumber: currentSelection.columnNumber,
+            canEdit: workbook().canEdit,
+            pendingEdits: session().ui.editingDrafts.pendingEdits,
+        });
+    };
+    const canEditSelectedCellValue = createMemo(() => Boolean(getSelectedCellValueEditState()));
+    createEffect(() => {
+        const nextValue = toolbarSelectedCellValue();
+        const isEditing = isEditingSelectedCellValue();
+        const editTarget = selectedCellValueEditTarget();
+        const activeTarget = activeSelectedCellValueEditTarget();
+        const isEditable = canEditSelectedCellValue();
+
+        if (
+            isEditing &&
+            shouldResetToolbarCellValueDraft(editTarget, activeTarget, isEditable)
+        ) {
+            setIsEditingSelectedCellValue(false);
+            setSelectedCellValueEditTarget(null);
+            setSelectedCellValueDraft(nextValue);
+            return;
+        }
+
+        if (!isEditing) {
+            setSelectedCellValueDraft(nextValue);
+        }
+    });
     const hasPendingEdits = createMemo(
         () => workbook().hasPendingEdits || session().ui.editingDrafts.pendingEdits.length > 0
     );
@@ -3517,6 +3636,67 @@ export function EditorBootstrapApp() {
         setGotoReference(selectionAddressLabel());
     };
 
+    const resetSelectedCellValueDraft = () => {
+        setIsEditingSelectedCellValue(false);
+        setSelectedCellValueEditTarget(null);
+        setSelectedCellValueDraft(toolbarSelectedCellValue());
+    };
+
+    const commitSelectedCellValueDraft = () => {
+        const nextValue = selectedCellValueDraft();
+        const editTarget = selectedCellValueEditTarget();
+        const activeTarget = activeSelectedCellValueEditTarget();
+        const editableCell = getSelectedCellValueEditState();
+        setIsEditingSelectedCellValue(false);
+        setSelectedCellValueEditTarget(null);
+        if (
+            !editTarget ||
+            shouldResetToolbarCellValueDraft(
+                editTarget,
+                activeTarget,
+                canEditSelectedCellValue()
+            ) ||
+            !editableCell ||
+            editableCell.sheetKey !== editTarget.sheetKey ||
+            editableCell.rowNumber !== editTarget.rowNumber ||
+            editableCell.columnNumber !== editTarget.columnNumber
+        ) {
+            setSelectedCellValueDraft(toolbarSelectedCellValue());
+            return;
+        }
+
+        const activeEdit = editingCell();
+        if (activeEdit) {
+            const isSameCell =
+                activeEdit.sheetKey === editableCell.sheetKey &&
+                activeEdit.rowNumber === editableCell.rowNumber &&
+                activeEdit.columnNumber === editableCell.columnNumber;
+            if (isSameCell) {
+                setEditingCell(null);
+            } else {
+                commitEditingCell();
+            }
+        }
+
+        setSelectedCellValueDraft(nextValue);
+        applyPendingEditChanges([
+            {
+                sheetKey: editableCell.sheetKey,
+                rowNumber: editableCell.rowNumber,
+                columnNumber: editableCell.columnNumber,
+                modelValue: editableCell.modelValue,
+                beforeValue:
+                    getEditorPendingEditValue(
+                        session().ui.editingDrafts.pendingEdits,
+                        editableCell.sheetKey,
+                        editableCell.rowNumber,
+                        editableCell.columnNumber
+                    ) ?? editableCell.modelValue,
+                afterValue: nextValue,
+            },
+        ]);
+    };
+
     const setActiveSheetLocalFilterState = (
         sheetKey: string,
         filterState: EditorSheetFilterState | null
@@ -3890,9 +4070,50 @@ export function EditorBootstrapApp() {
                         <input
                             class="toolbar__input"
                             data-role="selected-cell-value"
-                            readonly
-                            value={selectedCellValue()}
-                            placeholder={strings.noCellSelected}
+                            readOnly={!canEditSelectedCellValue()}
+                            value={selectedCellValueDraft()}
+                            placeholder={selectedCellValuePlaceholder()}
+                            onFocus={(event) => {
+                                if (editingCell()) {
+                                    commitEditingCell();
+                                }
+
+                                const editTarget = activeSelectedCellValueEditTarget();
+                                if (!canEditSelectedCellValue() || !editTarget) {
+                                    return;
+                                }
+
+                                setIsEditingSelectedCellValue(true);
+                                setSelectedCellValueEditTarget(editTarget);
+                                setSelectedCellValueDraft(toolbarSelectedCellValue());
+                                event.currentTarget.select();
+                            }}
+                            onBlur={() => resetSelectedCellValueDraft()}
+                            onInput={(event) => {
+                                if (!isEditingSelectedCellValue()) {
+                                    const editTarget = activeSelectedCellValueEditTarget();
+                                    if (!editTarget) {
+                                        return;
+                                    }
+
+                                    setIsEditingSelectedCellValue(true);
+                                    setSelectedCellValueEditTarget(editTarget);
+                                }
+
+                                setSelectedCellValueDraft(event.currentTarget.value);
+                            }}
+                            onKeyDown={(event) => {
+                                if (event.key === "Enter") {
+                                    event.preventDefault();
+                                    commitSelectedCellValueDraft();
+                                    return;
+                                }
+
+                                if (event.key === "Escape") {
+                                    event.preventDefault();
+                                    resetSelectedCellValueDraft();
+                                }
+                            }}
                         />
                     </label>
                 </div>
@@ -4338,6 +4559,7 @@ export function EditorBootstrapApp() {
                 <div class="pane pane--editor">
                     <Show
                         when={activeSheet()}
+                        keyed
                         fallback={
                             session().mode === "error" && panelMessage() ? (
                                 <div class="empty-shell">
@@ -4352,99 +4574,130 @@ export function EditorBootstrapApp() {
                             ) : null
                         }
                     >
-                        <Show when={gridMetrics()}>
-                            {(metrics) => (
-                                <div
-                                    class="pane__table editor-grid-shell"
-                                    data-role="editor-grid-shell"
-                                >
+                        {(_sheet) => (
+                            <Show when={gridMetrics()}>
+                                {(metrics) => (
                                     <div
-                                        class="editor-grid__viewport"
-                                        data-role="editor-grid-viewport"
-                                        ref={(element) => {
-                                            setViewportElement(element);
-                                            syncViewportFromElement(element);
-                                        }}
-                                        onScroll={(event) =>
-                                            syncViewportFromElement(event.currentTarget)
-                                        }
+                                        class="pane__table editor-grid-shell"
+                                        data-role="editor-grid-shell"
                                     >
                                         <div
-                                            class="editor-grid__canvas"
-                                            style={{
-                                                width: `${metrics().contentWidth}px`,
-                                                height: `${metrics().contentHeight}px`,
+                                            class="editor-grid__viewport"
+                                            data-role="editor-grid-viewport"
+                                            ref={(element) => {
+                                                setViewportElement(element);
+                                                syncViewportFromElement(element);
                                             }}
+                                            onScroll={(event) =>
+                                                syncViewportFromElement(
+                                                    event.currentTarget
+                                                )
+                                            }
                                         >
-                                            <div class="editor-grid__layer editor-grid__layer--body">
-                                                <Show when={cellLayers()}>
-                                                    {(layers) => (
-                                                        <For each={layers().body}>
-                                                            {(item) => (
-                                                                <EditorGridCellView
-                                                                    item={item}
-                                                                    sheetKey={
-                                                                        activeSheet()?.key ?? null
-                                                                    }
-                                                                    offsetLeft={0}
-                                                                    offsetTop={0}
-                                                                    editingCell={editingCell()}
-                                                                    fillSourceRange={fillSourceRange()}
-                                                                    fillPreviewRange={fillPreviewRange()}
-                                                                    onPointerSelectStart={
-                                                                        beginCellSelectionDrag
-                                                                    }
-                                                                    onStartEdit={startEditingCell}
-                                                                    onUpdateDraft={
-                                                                        updateEditingDraft
-                                                                    }
-                                                                    onCommitEdit={commitEditingCell}
-                                                                    onCancelEdit={cancelEditingCell}
-                                                                    isFilterMenuOpen={
-                                                                        filterMenu()?.sheetKey ===
-                                                                            activeSheet()?.key &&
-                                                                        filterMenu()
-                                                                            ?.columnNumber ===
-                                                                            item.columnNumber
-                                                                    }
-                                                                    onOpenFilterMenu={
-                                                                        openFilterMenu
-                                                                    }
-                                                                    onOpenContextMenu={
-                                                                        openCellContextMenu
-                                                                    }
-                                                                />
+                                            <div
+                                                class="editor-grid__canvas"
+                                                style={{
+                                                    width: `${metrics().contentWidth}px`,
+                                                    height: `${metrics().contentHeight}px`,
+                                                }}
+                                            >
+                                                <div class="editor-grid__layer editor-grid__layer--body">
+                                                    <Show when={cellLayers()}>
+                                                        {(layers) => (
+                                                            <For each={layers().body}>
+                                                                {(item) => (
+                                                                    <EditorGridCellView
+                                                                        item={item}
+                                                                        sheetKey={
+                                                                            activeSheet()
+                                                                                ?.key ??
+                                                                            null
+                                                                        }
+                                                                        offsetLeft={0}
+                                                                        offsetTop={0}
+                                                                        editingCell={editingCell()}
+                                                                        fillSourceRange={fillSourceRange()}
+                                                                        fillPreviewRange={fillPreviewRange()}
+                                                                        onPointerSelectStart={
+                                                                            beginCellSelectionDrag
+                                                                        }
+                                                                        onStartEdit={
+                                                                            startEditingCell
+                                                                        }
+                                                                        onUpdateDraft={
+                                                                            updateEditingDraft
+                                                                        }
+                                                                        onCommitEdit={
+                                                                            commitEditingCell
+                                                                        }
+                                                                        onCancelEdit={
+                                                                            cancelEditingCell
+                                                                        }
+                                                                        isFilterMenuOpen={
+                                                                            filterMenu()
+                                                                                ?.sheetKey ===
+                                                                                activeSheet()
+                                                                                    ?.key &&
+                                                                            filterMenu()
+                                                                                ?.columnNumber ===
+                                                                                item.columnNumber
+                                                                        }
+                                                                        onOpenFilterMenu={
+                                                                            openFilterMenu
+                                                                        }
+                                                                        onOpenContextMenu={
+                                                                            openCellContextMenu
+                                                                        }
+                                                                    />
+                                                                )}
+                                                            </For>
+                                                        )}
+                                                    </Show>
+                                                    <Show
+                                                        when={
+                                                            selectionOverlayLayers()?.body
+                                                        }
+                                                        keyed
+                                                    >
+                                                        {(overlay) => (
+                                                            <SelectionOverlayLayerView
+                                                                overlay={overlay}
+                                                                offsetLeft={0}
+                                                                offsetTop={0}
+                                                                isSearchFocused={
+                                                                    isSearchFocusedSelection()
+                                                                }
+                                                            />
+                                                        )}
+                                                    </Show>
+                                                    <Show
+                                                        when={
+                                                            fillHandleLayout()?.layer ===
+                                                            "body"
+                                                        }
+                                                    >
+                                                        <EditorGridFillHandleView
+                                                            layout={fillHandleLayout()!}
+                                                            isActive={Boolean(
+                                                                fillPreviewRange()
                                                             )}
-                                                        </For>
-                                                    )}
-                                                </Show>
-                                                <Show when={selectionOverlayLayers()?.body} keyed>
-                                                    {(overlay) => (
-                                                        <SelectionOverlayLayerView
-                                                            overlay={overlay}
-                                                            offsetLeft={0}
-                                                            offsetTop={0}
-                                                            isSearchFocused={
-                                                                isSearchFocusedSelection()
-                                                            }
-                                                        />
-                                                    )}
-                                                </Show>
-                                                <Show when={fillHandleLayout()?.layer === "body"}>
-                                                    <EditorGridFillHandleView
-                                                        layout={fillHandleLayout()!}
-                                                        isActive={Boolean(fillPreviewRange())}
-                                                        onPointerDown={(pointerId) => {
-                                                            const range = fillSourceRange();
-                                                            if (!range) {
-                                                                return;
-                                                            }
+                                                            onPointerDown={(
+                                                                pointerId
+                                                            ) => {
+                                                                const range =
+                                                                    fillSourceRange();
+                                                                if (!range) {
+                                                                    return;
+                                                                }
 
-                                                            beginFillDrag(pointerId, range);
-                                                        }}
-                                                    />
-                                                </Show>
-                                            </div>
+                                                                beginFillDrag(
+                                                                    pointerId,
+                                                                    range
+                                                                );
+                                                            }}
+                                                        />
+                                                    </Show>
+                                                </div>
                                             <div
                                                 class="editor-grid__overlay editor-grid__overlay--top"
                                                 data-role="editor-grid-top-overlay"
@@ -4998,8 +5251,9 @@ export function EditorBootstrapApp() {
                                         </div>
                                     </div>
                                 </div>
-                            )}
-                        </Show>
+                                )}
+                            </Show>
+                        )}
                     </Show>
                 </div>
             </div>

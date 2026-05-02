@@ -9,8 +9,10 @@ import type {
     DiffPanelSparseCellView,
 } from "../webview/diff-panel/diff-panel-types";
 import {
+    applyPendingDiffEdit,
     beginDiffCellEdit,
     clampDiffHorizontalScroll,
+    createSelectedDiffCell,
     createSaveDiffEditsMessage,
     finalizeDiffCellEdit,
     filterDiffRows,
@@ -22,7 +24,7 @@ import {
     getWrappedDiffIndex,
 } from "../webview-solid/diff-panel/grid-helpers";
 
-function createCell(overrides: Partial<DiffPanelSparseCellView>): DiffPanelSparseCellView {
+function createCell(overrides: Partial<DiffPanelSparseCellView> = {}): DiffPanelSparseCellView {
     return {
         key: "cell:1:1",
         columnNumber: 1,
@@ -39,7 +41,7 @@ function createCell(overrides: Partial<DiffPanelSparseCellView>): DiffPanelSpars
     };
 }
 
-function createRow(overrides: Partial<DiffPanelRowView>): DiffPanelRowView {
+function createRow(overrides: Partial<DiffPanelRowView> = {}): DiffPanelRowView {
     return {
         rowNumber: 1,
         leftRowNumber: 1,
@@ -62,7 +64,7 @@ function createColumn(columnNumber: number): DiffPanelColumnView {
     };
 }
 
-function createSheet(overrides: Partial<DiffPanelSheetView>): DiffPanelSheetView {
+function createSheet(overrides: Partial<DiffPanelSheetView> = {}): DiffPanelSheetView {
     return {
         key: "sheet:1",
         kind: "matched",
@@ -209,35 +211,56 @@ suite("Solid diff grid helpers", () => {
     });
 
     test("selecting a diff cell keeps selection and preview navigation aligned", () => {
-        const row = createRow({ rowNumber: 3 });
+        const sheet = createSheet({
+            columns: [
+                createColumn(1),
+                {
+                    columnNumber: 2,
+                    leftColumnNumber: 5,
+                    rightColumnNumber: 7,
+                    columnWidth: null,
+                    leftLabel: "E",
+                    rightLabel: "G",
+                },
+            ],
+        });
+        const row = createRow({ rowNumber: 3, leftRowNumber: 10, rightRowNumber: 12 });
         const diffCell = createCell({ columnNumber: 2, diffIndex: 4 });
-        const equalCell = createCell({ columnNumber: 3, diffIndex: null, status: "equal" });
+        const equalCell = createCell({ columnNumber: 2, diffIndex: null, status: "equal" });
 
-        assert.deepStrictEqual(getSelectedDiffCellState(row, diffCell), {
+        assert.deepStrictEqual(getSelectedDiffCellState(sheet, row, diffCell, "right"), {
             selectedCell: {
                 rowNumber: 3,
                 columnNumber: 2,
+                sourceRowNumber: 12,
+                sourceColumnNumber: 7,
             },
             activeDiffIndex: 4,
         });
-        assert.deepStrictEqual(getSelectedDiffCellState(row, equalCell), {
+        assert.deepStrictEqual(getSelectedDiffCellState(sheet, row, equalCell, "left"), {
             selectedCell: {
                 rowNumber: 3,
-                columnNumber: 3,
+                columnNumber: 2,
+                sourceRowNumber: 10,
+                sourceColumnNumber: 5,
             },
             activeDiffIndex: null,
         });
     });
 
     test("starts inline editing from the staged value when one already exists", () => {
-        const row = createRow({ rowNumber: 4 });
+        const sheet = createSheet();
+        const row = createRow({ rowNumber: 4, leftRowNumber: 4, rightRowNumber: 4 });
         const cell = createCell({ columnNumber: 2, leftValue: "before", rightValue: "after" });
+        const selection = createSelectedDiffCell(sheet, row, 4, 2, "left");
         const pendingEdits = {
-            [getPendingDiffEditKey(4, 2, "left")]: {
+            [getPendingDiffEditKey("sheet:1", 4, 2, "left")]: {
                 sheetKey: "sheet:1",
                 side: "left" as const,
                 rowNumber: 4,
                 columnNumber: 2,
+                sourceRowNumber: 4,
+                sourceColumnNumber: 2,
                 value: "staged",
             },
         };
@@ -247,7 +270,7 @@ suite("Solid diff grid helpers", () => {
             side: "left",
             sideEditable: true,
             pendingEdits,
-            row,
+            selection,
             cell,
         });
 
@@ -257,12 +280,12 @@ suite("Solid diff grid helpers", () => {
                 side: "left",
                 rowNumber: 4,
                 columnNumber: 2,
+                sourceRowNumber: 4,
+                sourceColumnNumber: 2,
                 value: "staged",
+                modelValue: "before",
             },
-            selectedCell: {
-                rowNumber: 4,
-                columnNumber: 2,
-            },
+            selectedCell: selection,
         });
         assert.strictEqual(
             beginDiffCellEdit({
@@ -270,31 +293,75 @@ suite("Solid diff grid helpers", () => {
                 side: "left",
                 sideEditable: false,
                 pendingEdits: {},
-                row,
+                selection,
                 cell,
             }),
             null
         );
-        assert.strictEqual(
+        assert.deepStrictEqual(
             beginDiffCellEdit({
                 activeSheetKey: "sheet:1",
                 side: "right",
                 sideEditable: true,
                 pendingEdits: {},
-                row,
-                cell: createCell({ rightPresent: false }),
+                selection: createSelectedDiffCell(sheet, row, 4, 2, "right"),
+                cell: null,
             }),
-            null
+            {
+                editingCell: {
+                    sheetKey: "sheet:1",
+                    side: "right",
+                    rowNumber: 4,
+                    columnNumber: 2,
+                    sourceRowNumber: 4,
+                    sourceColumnNumber: 2,
+                    value: "",
+                    modelValue: "",
+                },
+                selectedCell: createSelectedDiffCell(sheet, row, 4, 2, "right"),
+            }
+        );
+    });
+
+    test("starts inline editing for writable empty cells without sparse diff entries", () => {
+        const sheet = createSheet();
+        const row = createRow({ rowNumber: 5, leftRowNumber: 8, rightRowNumber: 9, cells: [] });
+        const selection = createSelectedDiffCell(sheet, row, 5, 2, "left");
+
+        assert.deepStrictEqual(
+            beginDiffCellEdit({
+                activeSheetKey: "sheet:1",
+                side: "left",
+                sideEditable: true,
+                pendingEdits: {},
+                selection,
+                cell: null,
+            }),
+            {
+                editingCell: {
+                    sheetKey: "sheet:1",
+                    side: "left",
+                    rowNumber: 5,
+                    columnNumber: 2,
+                    sourceRowNumber: 8,
+                    sourceColumnNumber: 2,
+                    value: "",
+                    modelValue: "",
+                },
+                selectedCell: selection,
+            }
         );
     });
 
     test("commits and cancels inline edits without corrupting staged state", () => {
         const existingPendingEdits = {
-            [getPendingDiffEditKey(2, 1, "right")]: {
+            [getPendingDiffEditKey("sheet:1", 2, 1, "right")]: {
                 sheetKey: "sheet:1",
                 side: "right" as const,
                 rowNumber: 2,
                 columnNumber: 1,
+                sourceRowNumber: 20,
+                sourceColumnNumber: 10,
                 value: "kept",
             },
         };
@@ -306,7 +373,10 @@ suite("Solid diff grid helpers", () => {
                 side: "left",
                 rowNumber: 1,
                 columnNumber: 1,
+                sourceRowNumber: 11,
+                sourceColumnNumber: 3,
                 value: "discard",
+                modelValue: "initial",
             },
             "cancel"
         );
@@ -321,7 +391,10 @@ suite("Solid diff grid helpers", () => {
                 side: "left",
                 rowNumber: 1,
                 columnNumber: 1,
+                sourceRowNumber: 11,
+                sourceColumnNumber: 3,
                 value: "committed",
+                modelValue: "initial",
             },
             "commit"
         );
@@ -329,39 +402,67 @@ suite("Solid diff grid helpers", () => {
         assert.strictEqual(commitResult.editingCell, null);
         assert.deepStrictEqual(commitResult.pendingEdits, {
             ...existingPendingEdits,
-            [getPendingDiffEditKey(1, 1, "left")]: {
+            [getPendingDiffEditKey("sheet:1", 1, 1, "left")]: {
                 sheetKey: "sheet:1",
                 side: "left",
                 rowNumber: 1,
                 columnNumber: 1,
+                sourceRowNumber: 11,
+                sourceColumnNumber: 3,
                 value: "committed",
             },
         });
+
+        assert.deepStrictEqual(
+            applyPendingDiffEdit(existingPendingEdits, {
+                sheetKey: "sheet:1",
+                side: "right",
+                rowNumber: 2,
+                columnNumber: 1,
+                sourceRowNumber: 20,
+                sourceColumnNumber: 10,
+                value: "baseline",
+                modelValue: "baseline",
+            }),
+            {}
+        );
     });
 
     test("renders staged values and creates save messages from pending edits", () => {
         const row = createRow({ rowNumber: 6 });
         const cell = createCell({ columnNumber: 3, leftValue: "left", rightValue: "right" });
         const pendingEdits = {
-            [getPendingDiffEditKey(6, 3, "right")]: {
+            [getPendingDiffEditKey("sheet:1", 6, 3, "right")]: {
                 sheetKey: "sheet:1",
                 side: "right" as const,
                 rowNumber: 6,
                 columnNumber: 3,
+                sourceRowNumber: 16,
+                sourceColumnNumber: 13,
                 value: "updated",
             },
         };
 
-        assert.strictEqual(getRenderedDiffCellValue(pendingEdits, row, cell, "right"), "updated");
-        assert.strictEqual(getRenderedDiffCellValue({}, row, cell, "left"), "left");
+        assert.strictEqual(
+            getRenderedDiffCellValue(pendingEdits, "sheet:1", row.rowNumber, 3, cell, "right"),
+            "updated"
+        );
+        assert.strictEqual(
+            getRenderedDiffCellValue({}, "sheet:1", row.rowNumber, 3, cell, "left"),
+            "left"
+        );
+        assert.strictEqual(
+            getRenderedDiffCellValue(pendingEdits, "sheet:1", row.rowNumber, 3, null, "right"),
+            "updated"
+        );
         assert.deepStrictEqual(createSaveDiffEditsMessage(pendingEdits), {
             type: "saveEdits",
             edits: [
                 {
                     sheetKey: "sheet:1",
                     side: "right",
-                    rowNumber: 6,
-                    columnNumber: 3,
+                    rowNumber: 16,
+                    columnNumber: 13,
                     value: "updated",
                 },
             ],

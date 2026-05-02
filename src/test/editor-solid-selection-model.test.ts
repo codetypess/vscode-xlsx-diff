@@ -66,13 +66,21 @@ suite("Solid editor selection model", () => {
         assert.strictEqual(selection?.isPresent, false);
     });
 
-    test("returns null for out-of-bounds coordinates", () => {
+    test("creates an optimistic selection for synthetic viewport cells beyond sheet bounds", () => {
         const selection = createOptimisticEditorSelection({
             activeSheet: createActiveSheet(),
             rowNumber: 11,
-            columnNumber: 2,
+            columnNumber: 10,
         });
 
-        assert.strictEqual(selection, null);
+        assert.deepStrictEqual(selection, {
+            key: createCellKey(11, 10),
+            rowNumber: 11,
+            columnNumber: 10,
+            address: "J11",
+            value: "",
+            formula: null,
+            isPresent: false,
+        });
     });
 });

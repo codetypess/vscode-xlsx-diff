@@ -240,12 +240,14 @@ function applyRightCell(
 function finalizeCell(cell: MutableSparseCellView): DiffPanelSparseCellView {
     let status: CellDiffStatus = "equal";
 
-    if (cell.leftPresent && cell.rightPresent) {
-        status = cell.diffIndex === null ? "equal" : "modified";
-    } else if (cell.leftPresent) {
-        status = "removed";
-    } else if (cell.rightPresent) {
-        status = "added";
+    if (cell.diffIndex !== null) {
+        if (cell.leftPresent && cell.rightPresent) {
+            status = "modified";
+        } else if (cell.leftPresent) {
+            status = "removed";
+        } else if (cell.rightPresent) {
+            status = "added";
+        }
     }
 
     return {

@@ -201,6 +201,104 @@ suite("Diff panel render model", () => {
         );
     });
 
+    test("does not surface blank-versus-empty-string cells as rendered diffs", () => {
+        const leftIdCell: CellSnapshot = {
+            key: createCellKey(1, 1),
+            rowNumber: 1,
+            columnNumber: 1,
+            address: "A1",
+            displayValue: "id",
+            formula: null,
+            styleId: null,
+        };
+        const leftValueCell: CellSnapshot = {
+            key: createCellKey(2, 3),
+            rowNumber: 2,
+            columnNumber: 3,
+            address: "C2",
+            displayValue: "SHOW_TYPE",
+            formula: null,
+            styleId: null,
+        };
+        const rightIdCell: CellSnapshot = {
+            key: createCellKey(1, 1),
+            rowNumber: 1,
+            columnNumber: 1,
+            address: "A1",
+            displayValue: "id",
+            formula: null,
+            styleId: null,
+        };
+        const rightBlankCell: CellSnapshot = {
+            key: createCellKey(2, 2),
+            rowNumber: 2,
+            columnNumber: 2,
+            address: "B2",
+            displayValue: "",
+            formula: null,
+            styleId: null,
+        };
+        const rightValueCell: CellSnapshot = {
+            key: createCellKey(2, 3),
+            rowNumber: 2,
+            columnNumber: 3,
+            address: "C2",
+            displayValue: "SHOW_TYPE",
+            formula: null,
+            styleId: null,
+        };
+        const diff = buildWorkbookDiff(
+            createWorkbook({
+                sheets: [
+                    {
+                        name: "Sheet1",
+                        rowCount: 2,
+                        columnCount: 3,
+                        visibility: "visible",
+                        mergedRanges: [],
+                        columnWidths: [],
+                        freezePane: null,
+                        cells: {
+                            [leftIdCell.key]: leftIdCell,
+                            [leftValueCell.key]: leftValueCell,
+                        },
+                        signature: "left:blank-cell",
+                    },
+                ],
+            }),
+            createWorkbook({
+                filePath: "/tmp/item-next.xlsx",
+                fileName: "item-next.xlsx",
+                sheets: [
+                    {
+                        name: "Sheet1",
+                        rowCount: 2,
+                        columnCount: 3,
+                        visibility: "visible",
+                        mergedRanges: [],
+                        columnWidths: [],
+                        freezePane: null,
+                        cells: {
+                            [rightIdCell.key]: rightIdCell,
+                            [rightBlankCell.key]: rightBlankCell,
+                            [rightValueCell.key]: rightValueCell,
+                        },
+                        signature: "right:blank-cell",
+                    },
+                ],
+            })
+        );
+
+        const renderModel = createDiffPanelRenderModel(diff, null);
+        const row = renderModel.activeSheet?.rows.find((candidate) => candidate.rowNumber === 2);
+        const blankCell = row?.cells.find((candidate) => candidate.columnNumber === 2);
+
+        assert.strictEqual(renderModel.activeSheet?.diffCellCount, 0);
+        assert.strictEqual(renderModel.activeSheet?.diffRowCount, 0);
+        assert.ok(blankCell);
+        assert.strictEqual(blankCell?.status, "equal");
+    });
+
     test("merges the primary workbook detail fact into the pane title", () => {
         const diff = buildWorkbookDiff(
             createWorkbook({

@@ -107,6 +107,24 @@ suite("Solid editor editing surface helpers", () => {
         );
     });
 
+    test("allows editing synthetic viewport cells beyond the current sheet bounds", () => {
+        const editingCell = createEditorCellEditingState({
+            activeSheet: createActiveSheet(),
+            rowNumber: 12,
+            columnNumber: 10,
+            canEdit: true,
+            pendingEdits: [],
+        });
+
+        assert.deepStrictEqual(editingCell, {
+            sheetKey: "sheet:1",
+            rowNumber: 12,
+            columnNumber: 10,
+            modelValue: "",
+            draftValue: "",
+        });
+    });
+
     test("committing a changed draft stages a pending edit", () => {
         const editingCell = createEditorCellEditingState({
             activeSheet: createActiveSheet(),

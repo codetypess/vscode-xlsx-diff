@@ -280,7 +280,9 @@ export function applyEditorSessionPatch(
                 ui: {
                     ...state.ui,
                     editingDrafts: {
-                        pendingEdits: patch.pendingEdits ?? state.ui.editingDrafts.pendingEdits,
+                        pendingEdits:
+                            patch.pendingEdits ??
+                            (patch.clearPendingEdits ? [] : state.ui.editingDrafts.pendingEdits),
                         clearRequested:
                             patch.clearPendingEdits ?? state.ui.editingDrafts.clearRequested,
                         preservePendingHistory:

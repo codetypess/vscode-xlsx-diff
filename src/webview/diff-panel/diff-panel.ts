@@ -302,7 +302,7 @@ export class XlsxDiffPanel {
 	<title>XLSX Diff</title>
 </head>
 <body>
-	<div id="app" class="v2-loading">${webviewStrings.loading}</div>
+	<div id="app"></div>
 	<script nonce="${nonce}">window.__XLSX_DIFF_STRINGS__ = ${strings};</script>
 	<script nonce="${nonce}" src="${scriptUri}"></script>
 </body>

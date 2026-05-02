@@ -14,9 +14,7 @@ export function createOptimisticEditorSelection({
         !Number.isInteger(rowNumber) ||
         !Number.isInteger(columnNumber) ||
         rowNumber < 1 ||
-        columnNumber < 1 ||
-        rowNumber > activeSheet.rowCount ||
-        columnNumber > activeSheet.columnCount
+        columnNumber < 1
     ) {
         return null;
     }

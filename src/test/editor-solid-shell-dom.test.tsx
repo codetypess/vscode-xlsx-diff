@@ -942,6 +942,313 @@ suite("Solid editor shell DOM", () => {
         assert.strictEqual(selectedCellValueInput.value, "draft value");
     });
 
+    test("commits toolbar cell value edits only when pressing enter", async () => {
+        await dispatchSessionInit({
+            activeSheet: {
+                cells: {
+                    [createCellKey(2, 3)]: {
+                        key: createCellKey(2, 3),
+                        rowNumber: 2,
+                        columnNumber: 3,
+                        address: "C2",
+                        displayValue: "hello",
+                        formula: null,
+                        styleId: null,
+                    },
+                },
+            },
+        });
+
+        const selectedCellValueInput = query(
+            '[data-role="selected-cell-value"]'
+        ) as HTMLInputElement;
+        assert.strictEqual(selectedCellValueInput.readOnly, false);
+
+        selectedCellValueInput.focus();
+        await flush();
+        await inputText('[data-role="selected-cell-value"]', "blur value");
+
+        const messageCountBeforeBlur = postedMessages.length;
+        selectedCellValueInput.blur();
+        await flush();
+
+        assert.strictEqual(postedMessages.length, messageCountBeforeBlur);
+        assert.strictEqual(selectedCellValueInput.value, "hello");
+
+        selectedCellValueInput.focus();
+        await flush();
+        await inputText('[data-role="selected-cell-value"]', "enter value");
+        await keyDown(selectedCellValueInput, {
+            key: "Enter",
+        });
+
+        assert.deepStrictEqual(normalizeMessage(postedMessages.at(-1)), {
+            type: "setPendingEdits",
+            edits: [
+                {
+                    sheetKey: "sheet:1",
+                    rowNumber: 2,
+                    columnNumber: 3,
+                    value: "enter value",
+                },
+            ],
+        });
+        assert.strictEqual(selectedCellValueInput.value, "enter value");
+    });
+
+    test("resets toolbar cell value edits when selecting another cell", async () => {
+        await dispatchSessionInit({
+            activeSheet: {
+                cells: {
+                    [createCellKey(2, 3)]: {
+                        key: createCellKey(2, 3),
+                        rowNumber: 2,
+                        columnNumber: 3,
+                        address: "C2",
+                        displayValue: "hello",
+                        formula: null,
+                        styleId: null,
+                    },
+                    [createCellKey(2, 4)]: {
+                        key: createCellKey(2, 4),
+                        rowNumber: 2,
+                        columnNumber: 4,
+                        address: "D2",
+                        displayValue: "world",
+                        formula: null,
+                        styleId: null,
+                    },
+                },
+            },
+        });
+
+        const selectedCellValueInput = query(
+            '[data-role="selected-cell-value"]'
+        ) as HTMLInputElement;
+        const viewport = query('[data-role="editor-grid-viewport"]');
+        Object.defineProperty(viewport, "clientHeight", {
+            configurable: true,
+            value: 240,
+        });
+        Object.defineProperty(viewport, "clientWidth", {
+            configurable: true,
+            value: 640,
+        });
+        viewport.dispatchEvent(
+            new windowLike.Event("scroll", {
+                bubbles: true,
+                cancelable: true,
+            })
+        );
+        await flush();
+
+        const targetCell = query('[data-cell-address="D2"]');
+
+        selectedCellValueInput.focus();
+        await flush();
+        assert.strictEqual(documentLike.activeElement, selectedCellValueInput);
+        await inputText('[data-role="selected-cell-value"]', "draft value");
+
+        const messageCountBeforeSelection = postedMessages.length;
+        await pointerDown(targetCell, {
+            pointerId: 23,
+            clientX: 72,
+            clientY: 24,
+        });
+        await pointerUp(windowLike, {
+            pointerId: 23,
+            buttons: 0,
+            clientX: 72,
+            clientY: 24,
+        });
+
+        assert.deepStrictEqual(
+            postedMessages.slice(messageCountBeforeSelection).map(normalizeMessage),
+            [
+                {
+                    type: "selectCell",
+                    rowNumber: 2,
+                    columnNumber: 4,
+                },
+            ]
+        );
+        assert.notStrictEqual(documentLike.activeElement, selectedCellValueInput);
+        assert.strictEqual(selectedCellValueInput.value, "world");
+    });
+
+    test("enters edit mode for synthetic viewport rows beyond the sheet row count", async () => {
+        await dispatchSessionInit({
+            selection: {
+                key: createCellKey(1, 1),
+                rowNumber: 1,
+                columnNumber: 1,
+                address: "A1",
+                value: "",
+                formula: null,
+                isPresent: false,
+            },
+            activeSheet: {
+                rowCount: 2,
+                columnCount: 2,
+                columns: ["A", "B"],
+                cells: {},
+            },
+        });
+
+        const viewport = query('[data-role="editor-grid-viewport"]');
+        Object.defineProperty(viewport, "clientHeight", {
+            configurable: true,
+            value: 240,
+        });
+        Object.defineProperty(viewport, "clientWidth", {
+            configurable: true,
+            value: 360,
+        });
+        viewport.scrollTop = 0;
+        viewport.scrollLeft = 0;
+        viewport.dispatchEvent(
+            new windowLike.Event("scroll", {
+                bubbles: true,
+                cancelable: true,
+            })
+        );
+        await flush();
+
+        const syntheticCell = query('[data-cell-address="B6"]');
+        syntheticCell.dispatchEvent(
+            new windowLike.MouseEvent("dblclick", {
+                bubbles: true,
+                cancelable: true,
+            })
+        );
+        await flush();
+
+        const cellInput = query('[data-role="grid-cell-input"]') as HTMLInputElement;
+        assert.strictEqual(cellInput.value, "");
+        assert.strictEqual(documentLike.activeElement, cellInput);
+
+        cellInput.value = "synthetic";
+        cellInput.dispatchEvent(
+            new windowLike.Event("input", {
+                bubbles: true,
+                cancelable: true,
+            })
+        );
+        await flush();
+
+        cellInput.dispatchEvent(
+            new windowLike.KeyboardEvent("keydown", {
+                bubbles: true,
+                cancelable: true,
+                key: "Enter",
+            })
+        );
+        await flush();
+
+        assert.deepStrictEqual(normalizeMessage(postedMessages.at(-1)), {
+            type: "setPendingEdits",
+            edits: [
+                {
+                    sheetKey: "sheet:1",
+                    rowNumber: 6,
+                    columnNumber: 2,
+                    value: "synthetic",
+                },
+            ],
+        });
+    });
+
+    test("clears pending save state after a save-complete session patch", async () => {
+        await dispatchSessionInit({
+            selection: {
+                key: createCellKey(1, 1),
+                rowNumber: 1,
+                columnNumber: 1,
+                address: "A1",
+                value: "",
+                formula: null,
+                isPresent: false,
+            },
+            activeSheet: {
+                rowCount: 2,
+                columnCount: 2,
+                columns: ["A", "B"],
+                cells: {},
+            },
+        });
+
+        const viewport = query('[data-role="editor-grid-viewport"]');
+        Object.defineProperty(viewport, "clientHeight", {
+            configurable: true,
+            value: 240,
+        });
+        Object.defineProperty(viewport, "clientWidth", {
+            configurable: true,
+            value: 360,
+        });
+        viewport.dispatchEvent(
+            new windowLike.Event("scroll", {
+                bubbles: true,
+                cancelable: true,
+            })
+        );
+        await flush();
+
+        const syntheticCell = query('[data-cell-address="B6"]');
+        syntheticCell.dispatchEvent(
+            new windowLike.MouseEvent("dblclick", {
+                bubbles: true,
+                cancelable: true,
+            })
+        );
+        await flush();
+
+        const cellInput = query('[data-role="grid-cell-input"]') as HTMLInputElement;
+        cellInput.value = "synthetic";
+        cellInput.dispatchEvent(
+            new windowLike.Event("input", {
+                bubbles: true,
+                cancelable: true,
+            })
+        );
+        await flush();
+
+        cellInput.dispatchEvent(
+            new windowLike.KeyboardEvent("keydown", {
+                bubbles: true,
+                cancelable: true,
+                key: "Enter",
+            })
+        );
+        await flush();
+
+        const saveButton = query('[data-role="save-button"]') as HTMLButtonElement;
+        assert.strictEqual(saveButton.disabled, false);
+        assert.ok(saveButton.classList.contains("is-dirty"));
+        assert.ok(query('[data-cell-address="B6"]').classList.contains("grid__cell--pending"));
+
+        windowLike.dispatchEvent(
+            new windowLike.MessageEvent("message", {
+                data: createEditorSessionPatchMessage([
+                    {
+                        kind: "document:workbook",
+                        hasPendingEdits: false,
+                    },
+                    {
+                        kind: "ui:editingDrafts",
+                        clearPendingEdits: true,
+                        preservePendingHistory: true,
+                    },
+                ]),
+            })
+        );
+        await flush();
+
+        assert.strictEqual(saveButton.disabled, true);
+        assert.ok(!saveButton.classList.contains("is-dirty"));
+        assert.ok(!query('[data-cell-address="B6"]').classList.contains("grid__cell--pending"));
+    });
+
     test("moves the active selection with keyboard navigation", async () => {
         await dispatchSessionInit();
 

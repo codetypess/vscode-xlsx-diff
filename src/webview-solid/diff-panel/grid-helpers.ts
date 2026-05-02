@@ -4,23 +4,35 @@ import type {
     DiffPanelSheetView,
     DiffPanelSparseCellView,
 } from "../../webview/diff-panel/diff-panel-types";
-import type {
-    DiffWebviewOutgoingMessage,
-    DiffWebviewPendingEdit,
-} from "../shared/session-protocol";
+import type { DiffWebviewOutgoingMessage } from "../shared/session-protocol";
 
 export type RowFilterMode = "all" | "diffs" | "same";
 
 export interface SelectedDiffCell {
     rowNumber: number;
     columnNumber: number;
+    sourceRowNumber: number | null;
+    sourceColumnNumber: number | null;
 }
 
 export interface DraftEditState {
     sheetKey: string;
     rowNumber: number;
     columnNumber: number;
+    sourceRowNumber: number | null;
+    sourceColumnNumber: number | null;
     side: "left" | "right";
+    value: string;
+    modelValue: string;
+}
+
+export interface PendingDiffEdit {
+    sheetKey: string;
+    side: "left" | "right";
+    rowNumber: number;
+    columnNumber: number;
+    sourceRowNumber: number | null;
+    sourceColumnNumber: number | null;
     value: string;
 }
 
@@ -39,11 +51,37 @@ export interface DiffPreviewState {
 export const DIFF_GRID_COLUMN_WIDTH_PX = 120;
 
 export function getPendingDiffEditKey(
+    sheetKey: string,
     rowNumber: number,
     columnNumber: number,
     side: "left" | "right"
 ): string {
-    return `${side}:${rowNumber}:${columnNumber}`;
+    return `${sheetKey}:${side}:${rowNumber}:${columnNumber}`;
+}
+
+export function getSourceRowNumber(
+    row: DiffPanelRowView | null,
+    side: "left" | "right"
+): number | null {
+    return side === "left" ? (row?.leftRowNumber ?? null) : (row?.rightRowNumber ?? null);
+}
+
+export function createSelectedDiffCell(
+    sheet: DiffPanelSheetView,
+    row: DiffPanelRowView | null,
+    rowNumber: number,
+    columnNumber: number,
+    side: "left" | "right"
+): SelectedDiffCell {
+    const column = sheet.columns[columnNumber - 1];
+
+    return {
+        rowNumber,
+        columnNumber,
+        sourceRowNumber: getSourceRowNumber(row, side),
+        sourceColumnNumber:
+            side === "left" ? (column?.leftColumnNumber ?? null) : (column?.rightColumnNumber ?? null),
+    };
 }
 
 export function filterDiffRows(rows: DiffPanelRowView[], mode: RowFilterMode): DiffPanelRowView[] {
@@ -122,17 +160,16 @@ export function getDiffPreviewState(
 }
 
 export function getSelectedDiffCellState(
+    sheet: DiffPanelSheetView,
     row: DiffPanelRowView,
-    cell: DiffPanelSparseCellView
+    cell: DiffPanelSparseCellView,
+    side: "left" | "right"
 ): {
     selectedCell: SelectedDiffCell;
     activeDiffIndex: number | null;
 } {
     return {
-        selectedCell: {
-            rowNumber: row.rowNumber,
-            columnNumber: cell.columnNumber,
-        },
+        selectedCell: createSelectedDiffCell(sheet, row, row.rowNumber, cell.columnNumber, side),
         activeDiffIndex: cell.diffIndex,
     };
 }
@@ -142,15 +179,15 @@ export function beginDiffCellEdit({
     side,
     sideEditable,
     pendingEdits,
-    row,
+    selection,
     cell,
 }: {
     activeSheetKey: string | null;
     side: "left" | "right";
     sideEditable: boolean;
-    pendingEdits: Record<string, DiffWebviewPendingEdit>;
-    row: DiffPanelRowView;
-    cell: DiffPanelSparseCellView;
+    pendingEdits: Record<string, PendingDiffEdit>;
+    selection: SelectedDiffCell;
+    cell: DiffPanelSparseCellView | null;
 }): {
     editingCell: DraftEditState;
     selectedCell: SelectedDiffCell;
@@ -159,33 +196,76 @@ export function beginDiffCellEdit({
         return null;
     }
 
-    if ((side === "left" && !cell.leftPresent) || (side === "right" && !cell.rightPresent)) {
+    if (selection.sourceRowNumber === null || selection.sourceColumnNumber === null) {
         return null;
     }
 
-    const pendingEdit = pendingEdits[getPendingDiffEditKey(row.rowNumber, cell.columnNumber, side)];
+    const pendingEdit = pendingEdits[
+        getPendingDiffEditKey(
+            activeSheetKey,
+            selection.rowNumber,
+            selection.columnNumber,
+            side
+        )
+    ];
+    const modelValue = side === "left" ? (cell?.leftValue ?? "") : (cell?.rightValue ?? "");
 
     return {
         editingCell: {
             sheetKey: activeSheetKey,
-            rowNumber: row.rowNumber,
-            columnNumber: cell.columnNumber,
+            rowNumber: selection.rowNumber,
+            columnNumber: selection.columnNumber,
+            sourceRowNumber: selection.sourceRowNumber,
+            sourceColumnNumber: selection.sourceColumnNumber,
             side,
-            value: pendingEdit?.value ?? (side === "left" ? cell.leftValue : cell.rightValue),
+            value: pendingEdit?.value ?? modelValue,
+            modelValue,
         },
-        selectedCell: {
-            rowNumber: row.rowNumber,
-            columnNumber: cell.columnNumber,
+        selectedCell: selection,
+    };
+}
+
+export function applyPendingDiffEdit(
+    pendingEdits: Record<string, PendingDiffEdit>,
+    draft: DraftEditState
+): Record<string, PendingDiffEdit> {
+    const key = getPendingDiffEditKey(
+        draft.sheetKey,
+        draft.rowNumber,
+        draft.columnNumber,
+        draft.side
+    );
+
+    if (draft.value === draft.modelValue) {
+        if (!Object.hasOwn(pendingEdits, key)) {
+            return pendingEdits;
+        }
+
+        const nextPendingEdits = { ...pendingEdits };
+        delete nextPendingEdits[key];
+        return nextPendingEdits;
+    }
+
+    return {
+        ...pendingEdits,
+        [key]: {
+            sheetKey: draft.sheetKey,
+            side: draft.side,
+            rowNumber: draft.rowNumber,
+            columnNumber: draft.columnNumber,
+            sourceRowNumber: draft.sourceRowNumber,
+            sourceColumnNumber: draft.sourceColumnNumber,
+            value: draft.value,
         },
     };
 }
 
 export function finalizeDiffCellEdit(
-    pendingEdits: Record<string, DiffWebviewPendingEdit>,
+    pendingEdits: Record<string, PendingDiffEdit>,
     draft: DraftEditState | null,
     disposition: "commit" | "cancel"
 ): {
-    pendingEdits: Record<string, DiffWebviewPendingEdit>;
+    pendingEdits: Record<string, PendingDiffEdit>;
     editingCell: DraftEditState | null;
 } {
     if (!draft) {
@@ -202,41 +282,47 @@ export function finalizeDiffCellEdit(
         };
     }
 
-    const edit: DiffWebviewPendingEdit = {
-        sheetKey: draft.sheetKey,
-        side: draft.side,
-        rowNumber: draft.rowNumber,
-        columnNumber: draft.columnNumber,
-        value: draft.value,
-    };
-
     return {
-        pendingEdits: {
-            ...pendingEdits,
-            [getPendingDiffEditKey(edit.rowNumber, edit.columnNumber, edit.side)]: edit,
-        },
+        pendingEdits: applyPendingDiffEdit(pendingEdits, draft),
         editingCell: null,
     };
 }
 
 export function getRenderedDiffCellValue(
-    pendingEdits: Record<string, DiffWebviewPendingEdit>,
-    row: DiffPanelRowView,
-    cell: DiffPanelSparseCellView,
+    pendingEdits: Record<string, PendingDiffEdit>,
+    sheetKey: string,
+    rowNumber: number,
+    columnNumber: number,
+    cell: DiffPanelSparseCellView | null,
     side: "left" | "right"
 ): string {
-    const pendingEdit = pendingEdits[getPendingDiffEditKey(row.rowNumber, cell.columnNumber, side)];
+    const pendingEdit = pendingEdits[
+        getPendingDiffEditKey(sheetKey, rowNumber, columnNumber, side)
+    ];
     if (pendingEdit) {
         return pendingEdit.value;
     }
 
-    return side === "left" ? cell.leftValue : cell.rightValue;
+    return side === "left" ? (cell?.leftValue ?? "") : (cell?.rightValue ?? "");
 }
 
 export function createSaveDiffEditsMessage(
-    pendingEdits: Record<string, DiffWebviewPendingEdit>
+    pendingEdits: Record<string, PendingDiffEdit>
 ): DiffWebviewOutgoingMessage | null {
-    const edits = Object.values(pendingEdits);
+    const edits = Object.values(pendingEdits)
+        .filter(
+            (edit): edit is PendingDiffEdit & {
+                sourceRowNumber: number;
+                sourceColumnNumber: number;
+            } => edit.sourceRowNumber !== null && edit.sourceColumnNumber !== null
+        )
+        .map((edit) => ({
+            sheetKey: edit.sheetKey,
+            side: edit.side,
+            rowNumber: edit.sourceRowNumber,
+            columnNumber: edit.sourceColumnNumber,
+            value: edit.value,
+        }));
     if (edits.length === 0) {
         return null;
     }

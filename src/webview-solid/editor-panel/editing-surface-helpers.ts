@@ -11,7 +11,6 @@ export interface EditorCellEditingState {
 }
 
 function isCellPositionInBounds(
-    activeSheet: EditorActiveSheetView,
     rowNumber: number,
     columnNumber: number
 ): boolean {
@@ -19,9 +18,7 @@ function isCellPositionInBounds(
         Number.isInteger(rowNumber) &&
         Number.isInteger(columnNumber) &&
         rowNumber >= 1 &&
-        columnNumber >= 1 &&
-        rowNumber <= activeSheet.rowCount &&
-        columnNumber <= activeSheet.columnCount
+        columnNumber >= 1
     );
 }
 
@@ -54,7 +51,7 @@ export function createEditorCellEditingState({
     canEdit: boolean;
     pendingEdits: readonly EditorPendingEdit[];
 }): EditorCellEditingState | null {
-    if (!canEdit || !isCellPositionInBounds(activeSheet, rowNumber, columnNumber)) {
+    if (!canEdit || !isCellPositionInBounds(rowNumber, columnNumber)) {
         return null;
     }
 

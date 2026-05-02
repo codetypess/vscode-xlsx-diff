@@ -198,6 +198,49 @@ suite("Solid webview session reducers", () => {
         assert.strictEqual(nextState.ui.panel.perfTraceId, null);
     });
 
+    test("editor reducer clears pending drafts when a patch requests pending-edit cleanup", () => {
+        const initializedState = reduceEditorSessionMessage(
+            createInitialEditorSessionState(),
+            createEditorSessionInitMessage(createEditorPayload(), {
+                silent: false,
+                clearPendingEdits: false,
+                preservePendingHistory: false,
+                reuseActiveSheetData: false,
+                useModelSelection: false,
+                perfTraceId: null,
+                resetPendingHistory: false,
+                replacePendingEdits: [
+                    {
+                        sheetKey: "sheet:1",
+                        rowNumber: 6,
+                        columnNumber: 2,
+                        value: "draft",
+                    },
+                ],
+            })
+        );
+
+        const nextState = reduceEditorSessionMessage(
+            initializedState,
+            createEditorSessionPatchMessage([
+                {
+                    kind: "document:workbook",
+                    hasPendingEdits: false,
+                },
+                {
+                    kind: "ui:editingDrafts",
+                    clearPendingEdits: true,
+                    preservePendingHistory: true,
+                },
+            ])
+        );
+
+        assert.deepStrictEqual(nextState.ui.editingDrafts.pendingEdits, []);
+        assert.strictEqual(nextState.ui.editingDrafts.clearRequested, true);
+        assert.strictEqual(nextState.ui.editingDrafts.preservePendingHistory, true);
+        assert.strictEqual(nextState.document.workbook.hasPendingEdits, false);
+    });
+
     test("editor reducer merges partial active-sheet patches with the existing sheet payload", () => {
         const initializedState = reduceEditorSessionMessage(
             createInitialEditorSessionState(),
