@@ -1,5 +1,13 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js";
 import { render } from "solid-js/web";
+import {
+    AiOutlineAlignCenter,
+    AiOutlineAlignLeft,
+    AiOutlineAlignRight,
+    AiOutlineVerticalAlignBottom,
+    AiOutlineVerticalAlignMiddle,
+    AiOutlineVerticalAlignTop,
+} from "solid-icons/ai";
 import { createCellKey, getCellAddress } from "../../core/model/cells";
 import type { EditorAlignmentPatch } from "../../core/model/alignment";
 import type { EditorActiveSheetView, EditorSelectedCell } from "../../core/model/types";
@@ -4189,7 +4197,7 @@ export function EditorBootstrapApp() {
                             onMouseDown={(event) => event.preventDefault()}
                             onClick={() => applyToolbarAlignment({ horizontal: "left" })}
                         >
-                            L
+                            <AiOutlineAlignLeft class="toolbar__toggle-icon" aria-hidden />
                         </button>
                         <button
                             class="toolbar__toggle"
@@ -4203,7 +4211,7 @@ export function EditorBootstrapApp() {
                             onMouseDown={(event) => event.preventDefault()}
                             onClick={() => applyToolbarAlignment({ horizontal: "center" })}
                         >
-                            C
+                            <AiOutlineAlignCenter class="toolbar__toggle-icon" aria-hidden />
                         </button>
                         <button
                             class="toolbar__toggle"
@@ -4217,7 +4225,7 @@ export function EditorBootstrapApp() {
                             onMouseDown={(event) => event.preventDefault()}
                             onClick={() => applyToolbarAlignment({ horizontal: "right" })}
                         >
-                            R
+                            <AiOutlineAlignRight class="toolbar__toggle-icon" aria-hidden />
                         </button>
                     </div>
                     <div class="toolbar__segmented" role="group" aria-label="Vertical alignment">
@@ -4233,7 +4241,7 @@ export function EditorBootstrapApp() {
                             onMouseDown={(event) => event.preventDefault()}
                             onClick={() => applyToolbarAlignment({ vertical: "top" })}
                         >
-                            T
+                            <AiOutlineVerticalAlignTop class="toolbar__toggle-icon" aria-hidden />
                         </button>
                         <button
                             class="toolbar__toggle"
@@ -4247,7 +4255,10 @@ export function EditorBootstrapApp() {
                             onMouseDown={(event) => event.preventDefault()}
                             onClick={() => applyToolbarAlignment({ vertical: "center" })}
                         >
-                            M
+                            <AiOutlineVerticalAlignMiddle
+                                class="toolbar__toggle-icon"
+                                aria-hidden
+                            />
                         </button>
                         <button
                             class="toolbar__toggle"
@@ -4261,7 +4272,10 @@ export function EditorBootstrapApp() {
                             onMouseDown={(event) => event.preventDefault()}
                             onClick={() => applyToolbarAlignment({ vertical: "bottom" })}
                         >
-                            B
+                            <AiOutlineVerticalAlignBottom
+                                class="toolbar__toggle-icon"
+                                aria-hidden
+                            />
                         </button>
                     </div>
                     <button

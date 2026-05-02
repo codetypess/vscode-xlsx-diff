@@ -218,6 +218,12 @@ body {
     line-height: 1;
 }
 
+.toolbar__toggle-icon svg {
+    width: 14px;
+    height: 14px;
+    display: block;
+}
+
 .toolbar__toggle:hover {
     background: color-mix(in srgb, var(--vscode-focusBorder) 12%, transparent 88%);
     color: var(--vscode-editor-foreground);
