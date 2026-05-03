@@ -1,4 +1,4 @@
-import { copyFile, mkdir } from "node:fs/promises";
+import { copyFile, mkdir, stat } from "node:fs/promises";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { getCellAddress, getRangeAddress } from "../model/cells";
@@ -10,6 +10,60 @@ import type {
 import type { SheetAutoFilterSnapshot } from "../model/types";
 import type { AutoFilterDefinition } from "fastxlsx";
 import { Workbook } from "./runtime";
+
+function formatWorkbookSavePerfLogValue(value: unknown): string {
+    if (value === undefined) {
+        return "undefined";
+    }
+
+    if (
+        value === null ||
+        typeof value === "number" ||
+        typeof value === "boolean" ||
+        typeof value === "bigint"
+    ) {
+        return String(value);
+    }
+
+    if (typeof value === "string") {
+        return JSON.stringify(value);
+    }
+
+    try {
+        return JSON.stringify(value) ?? String(value);
+    } catch {
+        return String(value);
+    }
+}
+
+function getWorkbookSavePerfNowMs(): number | null {
+    const perf = globalThis.performance;
+    if (typeof perf?.now !== "function") {
+        return null;
+    }
+
+    return Number(perf.now().toFixed(2));
+}
+
+function logWorkbookSavePerf(event: string, details: Record<string, unknown> = {}): void {
+    const now = new Date();
+    const serializedDetails = Object.entries({
+        time: now.toISOString(),
+        epochMs: now.getTime(),
+        perfNowMs: getWorkbookSavePerfNowMs(),
+        ...details,
+    }).map(([key, value]) => `${key}=${formatWorkbookSavePerfLogValue(value)}`);
+
+    console.info(`[xlsx-editor][core] ${event} ${serializedDetails.join(" ")}`);
+}
+
+async function getFileSizeBytes(filePath: string): Promise<number | null> {
+    try {
+        return (await stat(filePath)).size;
+    } catch {
+        return null;
+    }
+}
 
 export interface CellEdit {
     sheetName: string;
@@ -104,6 +158,17 @@ export interface WorkbookEditState {
     viewEdits?: SheetViewEdit[];
 }
 
+function getDirtyOrAllAlignmentKeys<T>(
+    alignments: Readonly<Record<string, T>> | undefined,
+    dirtyKeys: readonly string[] | undefined
+): string[] {
+    if (dirtyKeys && dirtyKeys.length > 0) {
+        return [...dirtyKeys];
+    }
+
+    return Object.keys(alignments ?? {});
+}
+
 function createAutoFilterDefinition(
     currentDefinition: AutoFilterDefinition | null,
     autoFilter: SheetAutoFilterSnapshot
@@ -167,14 +232,30 @@ export async function writeWorkbookEditsToDestination(
     destinationUri: vscode.Uri,
     edits: WorkbookEditState
 ): Promise<void> {
+    const startedAt = performance.now();
+    const samePath = sourceUri.fsPath === destinationUri.fsPath;
+    logWorkbookSavePerf("writeWorkbookEdits:start", {
+        sourcePath: sourceUri.fsPath,
+        destinationPath: destinationUri.fsPath,
+        samePath,
+        cellEditCount: edits.cellEdits.length,
+        sheetEditCount: edits.sheetEdits.length,
+        viewEditCount: edits.viewEdits?.length ?? 0,
+    });
+
     if (sourceUri.scheme !== "file" || destinationUri.scheme !== "file") {
         throw new Error("Cell editing is only supported for local files.");
     }
 
     await mkdir(path.dirname(destinationUri.fsPath), { recursive: true });
 
-    if (sourceUri.fsPath !== destinationUri.fsPath) {
+    if (!samePath) {
+        const copyStartedAt = performance.now();
         await copyFile(sourceUri.fsPath, destinationUri.fsPath);
+        logWorkbookSavePerf("writeWorkbookEdits:copied", {
+            durationMs: Number((performance.now() - copyStartedAt).toFixed(2)),
+            destinationSizeBytes: await getFileSizeBytes(destinationUri.fsPath),
+        });
     }
 
     if (
@@ -182,11 +263,21 @@ export async function writeWorkbookEditsToDestination(
         edits.sheetEdits.length === 0 &&
         (edits.viewEdits?.length ?? 0) === 0
     ) {
+        logWorkbookSavePerf("writeWorkbookEdits:no-op", {
+            durationMs: Number((performance.now() - startedAt).toFixed(2)),
+            destinationSizeBytes: await getFileSizeBytes(destinationUri.fsPath),
+        });
         return;
     }
 
+    const openStartedAt = performance.now();
     const workbook = await Workbook.open(destinationUri.fsPath);
+    logWorkbookSavePerf("writeWorkbookEdits:opened", {
+        durationMs: Number((performance.now() - openStartedAt).toFixed(2)),
+        sourceSizeBytes: await getFileSizeBytes(destinationUri.fsPath),
+    });
 
+    const applyStartedAt = performance.now();
     workbook.batch((currentWorkbook) => {
         for (const edit of edits.sheetEdits) {
             if (edit.type === "addSheet") {
@@ -246,6 +337,34 @@ export async function writeWorkbookEditsToDestination(
 
         for (const edit of edits.viewEdits ?? []) {
             const sheet = getSheet(edit.sheetName);
+            const viewEditStartedAt = performance.now();
+            const dirtyOrAllCellAlignmentKeys = getDirtyOrAllAlignmentKeys(
+                edit.cellAlignments,
+                edit.dirtyCellAlignmentKeys
+            );
+            const dirtyOrAllRowAlignmentKeys = getDirtyOrAllAlignmentKeys(
+                edit.rowAlignments,
+                edit.dirtyRowAlignmentKeys
+            );
+            const dirtyOrAllColumnAlignmentKeys = getDirtyOrAllAlignmentKeys(
+                edit.columnAlignments,
+                edit.dirtyColumnAlignmentKeys
+            );
+            logWorkbookSavePerf("writeWorkbookEdits:viewEdit:start", {
+                sheetName: edit.sheetName,
+                columnWidthCount: edit.columnWidths?.length ?? 0,
+                rowHeightCount: Object.keys(edit.rowHeights ?? {}).length,
+                cellAlignmentCount: Object.keys(edit.cellAlignments ?? {}).length,
+                rowAlignmentCount: Object.keys(edit.rowAlignments ?? {}).length,
+                columnAlignmentCount: Object.keys(edit.columnAlignments ?? {}).length,
+                dirtyCellAlignmentKeyCount: edit.dirtyCellAlignmentKeys?.length ?? 0,
+                dirtyRowAlignmentKeyCount: edit.dirtyRowAlignmentKeys?.length ?? 0,
+                dirtyColumnAlignmentKeyCount: edit.dirtyColumnAlignmentKeys?.length ?? 0,
+                appliedCellAlignmentKeyCount: dirtyOrAllCellAlignmentKeys.length,
+                appliedRowAlignmentKeyCount: dirtyOrAllRowAlignmentKeys.length,
+                appliedColumnAlignmentKeyCount: dirtyOrAllColumnAlignmentKeys.length,
+            });
+
             if (edit.autoFilter === null) {
                 sheet.removeAutoFilter();
             } else if (edit.autoFilter) {
@@ -275,23 +394,34 @@ export async function writeWorkbookEditsToDestination(
                 sheet.setRowHeight(Number(rowNumberText), rowHeight ?? null);
             }
 
-            for (const [columnNumberText, alignment] of Object.entries(
-                edit.columnAlignments ?? {}
-            )) {
+            for (const columnNumberText of dirtyOrAllColumnAlignmentKeys) {
+                const alignment = edit.columnAlignments?.[columnNumberText] ?? null;
+                const columnNumber = Number(columnNumberText);
+                if (!Number.isInteger(columnNumber)) {
+                    continue;
+                }
+
                 sheet.setColumnStyle(Number(columnNumberText), {
-                    applyAlignment: true,
+                    applyAlignment: alignment ? true : null,
                     alignment,
                 });
             }
 
-            for (const [rowNumberText, alignment] of Object.entries(edit.rowAlignments ?? {})) {
-                sheet.setRowStyle(Number(rowNumberText), {
-                    applyAlignment: true,
+            for (const rowNumberText of dirtyOrAllRowAlignmentKeys) {
+                const alignment = edit.rowAlignments?.[rowNumberText] ?? null;
+                const rowNumber = Number(rowNumberText);
+                if (!Number.isInteger(rowNumber)) {
+                    continue;
+                }
+
+                sheet.setRowStyle(rowNumber, {
+                    applyAlignment: alignment ? true : null,
                     alignment,
                 });
             }
 
-            for (const [cellKey, alignment] of Object.entries(edit.cellAlignments ?? {})) {
+            for (const cellKey of dirtyOrAllCellAlignmentKeys) {
+                const alignment = edit.cellAlignments?.[cellKey] ?? null;
                 const [rowNumberText, columnNumberText] = cellKey.split(":");
                 const rowNumber = Number(rowNumberText);
                 const columnNumber = Number(columnNumberText);
@@ -301,8 +431,27 @@ export async function writeWorkbookEditsToDestination(
 
                 sheet.setAlignment(rowNumber, columnNumber, alignment);
             }
+
+            logWorkbookSavePerf("writeWorkbookEdits:viewEdit:done", {
+                sheetName: edit.sheetName,
+                durationMs: Number((performance.now() - viewEditStartedAt).toFixed(2)),
+                appliedCellAlignmentKeyCount: dirtyOrAllCellAlignmentKeys.length,
+                appliedRowAlignmentKeyCount: dirtyOrAllRowAlignmentKeys.length,
+                appliedColumnAlignmentKeyCount: dirtyOrAllColumnAlignmentKeys.length,
+            });
         }
     });
+    logWorkbookSavePerf("writeWorkbookEdits:applied", {
+        durationMs: Number((performance.now() - applyStartedAt).toFixed(2)),
+    });
 
+    const saveStartedAt = performance.now();
     await workbook.save(destinationUri.fsPath);
+    logWorkbookSavePerf("writeWorkbookEdits:saved", {
+        durationMs: Number((performance.now() - saveStartedAt).toFixed(2)),
+        destinationSizeBytes: await getFileSizeBytes(destinationUri.fsPath),
+    });
+    logWorkbookSavePerf("writeWorkbookEdits:done", {
+        durationMs: Number((performance.now() - startedAt).toFixed(2)),
+    });
 }

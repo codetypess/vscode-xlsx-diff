@@ -1,3 +1,9 @@
+import type {
+    CellEdit,
+    SheetEdit,
+    SheetViewEdit,
+} from "../../core/fastxlsx/write-cell-value";
+
 function formatPerfLogValue(value: unknown): string {
     if (value === undefined) {
         return "undefined";
@@ -46,4 +52,40 @@ export function formatPerfLog(
     }).map(([key, value]) => `${key}=${formatPerfLogValue(value)}`);
 
     return `[xlsx-editor][${scope}] ${event} ${serializedDetails.join(" ")}`;
+}
+
+export function logPerf(
+    scope: "host" | "provider" | "webview",
+    event: string,
+    details: Readonly<Record<string, unknown>> = {}
+): void {
+    console.info(formatPerfLog(scope, event, details));
+}
+
+export function toPerfErrorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
+}
+
+export function summarizePendingStateForPerf(state: {
+    cellEdits: readonly CellEdit[];
+    sheetEdits: readonly SheetEdit[];
+    viewEdits?: readonly SheetViewEdit[];
+}): Record<string, unknown> {
+    return {
+        cellEditCount: state.cellEdits.length,
+        sheetEditCount: state.sheetEdits.length,
+        viewEditCount: state.viewEdits?.length ?? 0,
+        totalDirtyCellAlignmentKeys: (state.viewEdits ?? []).reduce(
+            (total, edit) => total + (edit.dirtyCellAlignmentKeys?.length ?? 0),
+            0
+        ),
+        totalDirtyRowAlignmentKeys: (state.viewEdits ?? []).reduce(
+            (total, edit) => total + (edit.dirtyRowAlignmentKeys?.length ?? 0),
+            0
+        ),
+        totalDirtyColumnAlignmentKeys: (state.viewEdits ?? []).reduce(
+            (total, edit) => total + (edit.dirtyColumnAlignmentKeys?.length ?? 0),
+            0
+        ),
+    };
 }

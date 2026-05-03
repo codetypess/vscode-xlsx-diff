@@ -6,6 +6,7 @@ import {
     type WorkbookEditState,
 } from "../../core/fastxlsx/write-cell-value";
 import { areCellAlignmentMapsEquivalent, cloneCellAlignmentMap } from "../../core/model/alignment";
+import { logPerf, summarizePendingStateForPerf, toPerfErrorMessage } from "./editor-perf-log";
 
 async function writePendingWorkbookEditsToDestination(
     sourceUri: vscode.Uri,
@@ -15,6 +16,10 @@ async function writePendingWorkbookEditsToDestination(
     const { writeWorkbookEditsToDestination } =
         await import("../../core/fastxlsx/write-cell-value");
     await writeWorkbookEditsToDestination(sourceUri, destinationUri, edits);
+}
+
+function logDocumentPerf(event: string, details: Record<string, unknown> = {}): void {
+    logPerf("provider", event, details);
 }
 
 function getCellEditKey(edit: CellEdit): string {
@@ -397,10 +402,38 @@ export class XlsxEditorDocument implements vscode.CustomDocument {
     }
 
     public async saveTo(destination: vscode.Uri): Promise<void> {
-        await writePendingWorkbookEditsToDestination(
-            this.getReadUri(),
-            destination,
-            this.getPendingState()
-        );
+        const startedAt = performance.now();
+        const sourceUri = this.getReadUri();
+        const pendingState = this.getPendingState();
+        logDocumentPerf("document:saveTo:start", {
+            sourcePath: sourceUri.fsPath,
+            destinationPath: destination.fsPath,
+            sourceScheme: sourceUri.scheme,
+            destinationScheme: destination.scheme,
+            usingBackupSource: this.backupUri !== null,
+            samePath: sourceUri.fsPath === destination.fsPath,
+            ...summarizePendingStateForPerf(pendingState),
+        });
+
+        try {
+            await writePendingWorkbookEditsToDestination(sourceUri, destination, pendingState);
+            logDocumentPerf("document:saveTo:done", {
+                durationMs: Number((performance.now() - startedAt).toFixed(2)),
+                sourcePath: sourceUri.fsPath,
+                destinationPath: destination.fsPath,
+                samePath: sourceUri.fsPath === destination.fsPath,
+                ...summarizePendingStateForPerf(pendingState),
+            });
+        } catch (error) {
+            logDocumentPerf("document:saveTo:error", {
+                durationMs: Number((performance.now() - startedAt).toFixed(2)),
+                sourcePath: sourceUri.fsPath,
+                destinationPath: destination.fsPath,
+                samePath: sourceUri.fsPath === destination.fsPath,
+                errorMessage: toPerfErrorMessage(error),
+                ...summarizePendingStateForPerf(pendingState),
+            });
+            throw error;
+        }
     }
 }

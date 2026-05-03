@@ -34,7 +34,7 @@ import {
     resolveEditorCellReference,
     validateEditorSheetName,
 } from "./editor-panel-logic";
-import { formatPerfLog } from "./editor-perf-log";
+import { logPerf, summarizePendingStateForPerf } from "./editor-perf-log";
 import {
     applyAlignmentPatchToSheetSnapshot,
     applyGridSheetEditToSheet,
@@ -133,32 +133,8 @@ function summarizeSheetForPerf(
     };
 }
 
-function summarizePendingStateForPerf(state: {
-    cellEdits: readonly CellEdit[];
-    sheetEdits: readonly SheetEdit[];
-    viewEdits?: readonly SheetViewEdit[];
-}): Record<string, unknown> {
-    return {
-        cellEditCount: state.cellEdits.length,
-        sheetEditCount: state.sheetEdits.length,
-        viewEditCount: state.viewEdits?.length ?? 0,
-        totalDirtyCellAlignmentKeys: (state.viewEdits ?? []).reduce(
-            (total, edit) => total + (edit.dirtyCellAlignmentKeys?.length ?? 0),
-            0
-        ),
-        totalDirtyRowAlignmentKeys: (state.viewEdits ?? []).reduce(
-            (total, edit) => total + (edit.dirtyRowAlignmentKeys?.length ?? 0),
-            0
-        ),
-        totalDirtyColumnAlignmentKeys: (state.viewEdits ?? []).reduce(
-            (total, edit) => total + (edit.dirtyColumnAlignmentKeys?.length ?? 0),
-            0
-        ),
-    };
-}
-
 function logEditorPanelPerf(event: string, details: Record<string, unknown> = {}): void {
-    console.info(formatPerfLog("host", event, details));
+    logPerf("host", event, details);
 }
 
 interface NumericSheetDimensionPromptOptions {
@@ -783,8 +759,20 @@ export class XlsxEditorPanel {
     }
 
     private async commitSavedState(): Promise<void> {
+        const startedAt = performance.now();
+        logEditorPanelPerf("commitSavedState:start", {
+            panelId: this.panelId,
+            hasWorkbook: Boolean(this.workbook),
+            activeSheetKey: this.state.activeSheetKey,
+            ...summarizePendingStateForPerf(this.createPendingState()),
+        });
         if (!this.workbook) {
             await this.enqueueReload({ silent: true, clearPendingEdits: true });
+            logEditorPanelPerf("commitSavedState:reloaded", {
+                panelId: this.panelId,
+                durationMs: Number((performance.now() - startedAt).toFixed(2)),
+                activeSheetKey: this.state.activeSheetKey,
+            });
             return;
         }
 
@@ -812,6 +800,12 @@ export class XlsxEditorPanel {
             clearPendingEdits: true,
             preservePendingHistory: true,
             useModelSelection: true,
+        });
+        logEditorPanelPerf("commitSavedState:done", {
+            panelId: this.panelId,
+            durationMs: Number((performance.now() - startedAt).toFixed(2)),
+            activeSheetKey: this.state.activeSheetKey,
+            ...summarizePendingStateForPerf(this.createPendingState()),
         });
     }
 
@@ -842,8 +836,21 @@ export class XlsxEditorPanel {
     }
 
     private async requestDocumentSave(): Promise<void> {
+        const startedAt = performance.now();
+        logEditorPanelPerf("requestDocumentSave:start", {
+            panelId: this.panelId,
+            activeSheetKey: this.state.activeSheetKey,
+            hasPendingExternalWorkbookChange: this.hasPendingExternalWorkbookChange,
+            ...summarizePendingStateForPerf(this.createPendingState()),
+        });
         const shouldSave = await XlsxEditorPanel.confirmDocumentSave(this.document);
         if (!shouldSave) {
+            logEditorPanelPerf("requestDocumentSave:cancelled", {
+                panelId: this.panelId,
+                durationMs: Number((performance.now() - startedAt).toFixed(2)),
+                activeSheetKey: this.state.activeSheetKey,
+                hasPendingExternalWorkbookChange: this.hasPendingExternalWorkbookChange,
+            });
             if (this.document.hasPendingEdits()) {
                 await this.render(undefined, {
                     silent: true,
@@ -856,30 +863,64 @@ export class XlsxEditorPanel {
 
         XlsxEditorPanel.allowNextConfirmedSave(this.document);
         await this.controller.onRequestSave();
+        logEditorPanelPerf("requestDocumentSave:dispatched", {
+            panelId: this.panelId,
+            durationMs: Number((performance.now() - startedAt).toFixed(2)),
+            activeSheetKey: this.state.activeSheetKey,
+            ...summarizePendingStateForPerf(this.createPendingState()),
+        });
     }
 
     private async handleDocumentSave(): Promise<void> {
+        const startedAt = performance.now();
+        logEditorPanelPerf("handleDocumentSave:start", {
+            panelId: this.panelId,
+            activeSheetKey: this.state.activeSheetKey,
+            hasPendingExternalWorkbookChange: this.hasPendingExternalWorkbookChange,
+            ...summarizePendingStateForPerf(this.createPendingState()),
+        });
         this.isSavingDocument = false;
         this.noteLocalSaveCompletion();
         if (this.hasPendingExternalWorkbookChange) {
             this.hasPendingExternalWorkbookChange = false;
             await this.enqueueReload({ silent: true, clearPendingEdits: true });
+            logEditorPanelPerf("handleDocumentSave:reloaded", {
+                panelId: this.panelId,
+                durationMs: Number((performance.now() - startedAt).toFixed(2)),
+                activeSheetKey: this.state.activeSheetKey,
+            });
             return;
         }
 
         await this.commitSavedState();
+        logEditorPanelPerf("handleDocumentSave:done", {
+            panelId: this.panelId,
+            durationMs: Number((performance.now() - startedAt).toFixed(2)),
+            activeSheetKey: this.state.activeSheetKey,
+            ...summarizePendingStateForPerf(this.createPendingState()),
+        });
     }
 
     private startDocumentSave(): void {
         this.isSavingDocument = true;
         this.clearAutoRefreshTimer();
         this.suppressAutoRefreshUntil = Number.POSITIVE_INFINITY;
+        logEditorPanelPerf("startDocumentSave", {
+            panelId: this.panelId,
+            activeSheetKey: this.state.activeSheetKey,
+            ...summarizePendingStateForPerf(this.createPendingState()),
+        });
     }
 
     private cancelDocumentSave(): void {
         this.isSavingDocument = false;
         this.clearAutoRefreshTimer();
         this.suppressAutoRefreshUntil = Date.now() + 1500;
+        logEditorPanelPerf("cancelDocumentSave", {
+            panelId: this.panelId,
+            activeSheetKey: this.state.activeSheetKey,
+            ...summarizePendingStateForPerf(this.createPendingState()),
+        });
     }
 
     private getSheetEntries(): WorkingSheetEntry[] {

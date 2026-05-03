@@ -4,8 +4,17 @@ import { type WorkbookEditState } from "../../core/fastxlsx/write-cell-value";
 import { rememberRecentWorkbookResourceUri } from "../../scm/recent-workbook-resource-context";
 import { withWorkbookSaveProgress } from "../../workbook/save-progress";
 import { readEditorBackupState, writeEditorBackupState } from "./editor-backup-state";
-import { formatPerfLog } from "./editor-perf-log";
+import {
+    formatPerfLog,
+    logPerf,
+    summarizePendingStateForPerf,
+    toPerfErrorMessage,
+} from "./editor-perf-log";
 import { XlsxEditorDocument } from "./xlsx-editor-document";
+
+function logProviderPerf(event: string, details: Record<string, unknown> = {}): void {
+    logPerf("provider", event, details);
+}
 
 async function getXlsxEditorPanelModule(): Promise<typeof import("./editor-panel")> {
     return import("./editor-panel");
@@ -73,9 +82,7 @@ export class XlsxCustomEditorProvider
                     console.info(
                         formatPerfLog("provider", "onPendingStateChanged:no-op", {
                             durationMs: Number((performance.now() - startedAt).toFixed(2)),
-                            cellEditCount: state.cellEdits.length,
-                            sheetEditCount: state.sheetEdits.length,
-                            viewEditCount: state.viewEdits?.length ?? 0,
+                            ...summarizePendingStateForPerf(state),
                         })
                     );
                     return;
@@ -84,9 +91,7 @@ export class XlsxCustomEditorProvider
                 console.info(
                     formatPerfLog("provider", "onPendingStateChanged:updated", {
                         durationMs: Number((performance.now() - startedAt).toFixed(2)),
-                        cellEditCount: state.cellEdits.length,
-                        sheetEditCount: state.sheetEdits.length,
-                        viewEditCount: state.viewEdits?.length ?? 0,
+                        ...summarizePendingStateForPerf(state),
                     })
                 );
                 this.onDidChangeCustomDocumentEmitter.fire({ document });
@@ -116,7 +121,32 @@ export class XlsxCustomEditorProvider
         destination: vscode.Uri,
         _cancellation: vscode.CancellationToken
     ): Promise<void> {
-        await document.saveTo(destination);
+        const startedAt = performance.now();
+        const pendingState = document.getPendingState();
+        logProviderPerf("saveDocumentAs:start", {
+            sourcePath: document.getReadUri().fsPath,
+            destinationPath: destination.fsPath,
+            ...summarizePendingStateForPerf(pendingState),
+        });
+
+        try {
+            await document.saveTo(destination);
+            logProviderPerf("saveDocumentAs:done", {
+                durationMs: Number((performance.now() - startedAt).toFixed(2)),
+                sourcePath: document.getReadUri().fsPath,
+                destinationPath: destination.fsPath,
+                ...summarizePendingStateForPerf(pendingState),
+            });
+        } catch (error) {
+            logProviderPerf("saveDocumentAs:error", {
+                durationMs: Number((performance.now() - startedAt).toFixed(2)),
+                sourcePath: document.getReadUri().fsPath,
+                destinationPath: destination.fsPath,
+                errorMessage: toPerfErrorMessage(error),
+                ...summarizePendingStateForPerf(pendingState),
+            });
+            throw error;
+        }
     }
 
     public async revertCustomDocument(
@@ -155,6 +185,9 @@ export class XlsxCustomEditorProvider
     private async saveDocument(document: XlsxEditorDocument): Promise<void> {
         const inFlightSave = this.inFlightSaves.get(document);
         if (inFlightSave) {
+            logProviderPerf("saveDocument:reuseInFlight", {
+                documentPath: document.uri.fsPath,
+            });
             return inFlightSave;
         }
 
@@ -166,12 +199,27 @@ export class XlsxCustomEditorProvider
     }
 
     private async runSaveDocument(document: XlsxEditorDocument): Promise<void> {
+        const confirmStartedAt = performance.now();
+        logProviderPerf("saveDocument:confirm:start", {
+            documentPath: document.uri.fsPath,
+        });
         const { XlsxEditorPanel } = await getXlsxEditorPanelModule();
         const confirmed = await XlsxEditorPanel.confirmDocumentSave(document);
+        logProviderPerf("saveDocument:confirm:done", {
+            durationMs: Number((performance.now() - confirmStartedAt).toFixed(2)),
+            documentPath: document.uri.fsPath,
+            confirmed,
+        });
         if (!confirmed) {
             return;
         }
 
+        const pendingState = document.getPendingState();
+        const startedAt = performance.now();
+        logProviderPerf("saveDocument:start", {
+            documentPath: document.uri.fsPath,
+            ...summarizePendingStateForPerf(pendingState),
+        });
         await XlsxEditorPanel.beginDocumentSave(document);
 
         try {
@@ -183,7 +231,18 @@ export class XlsxCustomEditorProvider
             // Saving already clears VS Code's dirty state for the custom editor.
             // Emitting another content-change event here marks the tab dirty again.
             await XlsxEditorPanel.commitDocumentSave(document);
+            logProviderPerf("saveDocument:done", {
+                durationMs: Number((performance.now() - startedAt).toFixed(2)),
+                documentPath: document.uri.fsPath,
+                ...summarizePendingStateForPerf(pendingState),
+            });
         } catch (error) {
+            logProviderPerf("saveDocument:error", {
+                durationMs: Number((performance.now() - startedAt).toFixed(2)),
+                documentPath: document.uri.fsPath,
+                errorMessage: toPerfErrorMessage(error),
+                ...summarizePendingStateForPerf(pendingState),
+            });
             await XlsxEditorPanel.failDocumentSave(document);
             throw error;
         }

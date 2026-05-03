@@ -5324,7 +5324,7 @@ export function EditorBootstrapApp() {
             <div class="panes panes--single">
                 <div class="pane pane--editor">
                     <Show
-                        when={activeSheet()}
+                        when={activeSheet()?.key ?? null}
                         keyed
                         fallback={
                             session().mode === "error" && panelMessage() ? (

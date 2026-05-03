@@ -1448,6 +1448,83 @@ suite("Solid editor shell DOM", () => {
         assert.ok(!query('[data-cell-address="B6"]').classList.contains("grid__cell--pending"));
     });
 
+    test("preserves viewport scroll after a save-complete patch for the same sheet", async () => {
+        await dispatchSessionInit({
+            activeSheet: {
+                rowCount: 200,
+                columnCount: 8,
+            },
+        });
+
+        const viewport = query('[data-role="editor-grid-viewport"]');
+        Object.defineProperty(viewport, "clientHeight", {
+            configurable: true,
+            value: 240,
+        });
+        Object.defineProperty(viewport, "clientWidth", {
+            configurable: true,
+            value: 360,
+        });
+        viewport.scrollTop = 960;
+        viewport.scrollLeft = 120;
+        viewport.dispatchEvent(
+            new windowLike.Event("scroll", {
+                bubbles: true,
+                cancelable: true,
+            })
+        );
+        await flush();
+
+        windowLike.dispatchEvent(
+            new windowLike.MessageEvent("message", {
+                data: createEditorSessionPatchMessage([
+                    {
+                        kind: "document:workbook",
+                        hasPendingEdits: false,
+                    },
+                    {
+                        kind: "document:activeSheet",
+                        activeSheet: {
+                            key: "sheet:1",
+                            rowCount: 200,
+                            columnCount: 8,
+                            freezePane: null,
+                            autoFilter: null,
+                        },
+                    },
+                    {
+                        kind: "ui:selection",
+                        selection: {
+                            key: createCellKey(2, 3),
+                            rowNumber: 2,
+                            columnNumber: 3,
+                            address: "C2",
+                            value: "hello",
+                            formula: null,
+                            isPresent: true,
+                        },
+                    },
+                    {
+                        kind: "ui:editingDrafts",
+                        clearPendingEdits: true,
+                        preservePendingHistory: true,
+                    },
+                    {
+                        kind: "ui:viewport",
+                        reuseActiveSheetData: true,
+                        useModelSelection: true,
+                    },
+                ]),
+            })
+        );
+        await flush();
+
+        const nextViewport = query('[data-role="editor-grid-viewport"]');
+        assert.strictEqual(nextViewport, viewport);
+        assert.strictEqual(nextViewport.scrollTop, 960);
+        assert.strictEqual(nextViewport.scrollLeft, 120);
+    });
+
     test("moves the active selection with keyboard navigation", async () => {
         await dispatchSessionInit();
 
