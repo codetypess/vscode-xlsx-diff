@@ -8,12 +8,19 @@
 			"DOM",
 			"DOM.Iterable"
 		],
+		"jsx": "preserve",
+		"jsxImportSource": "solid-js",
+		"types": [
+			"node",
+			"vscode"
+		],
 		"strict": true,
 		"noImplicitReturns": true,
 		"noFallthroughCasesInSwitch": true
 	},
 	"include": [
 		"src/webview/**/*.ts",
+		"src/webview/**/*.tsx",
 		"src/core/model/types.ts"
 	]
 }

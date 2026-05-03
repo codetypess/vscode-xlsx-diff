@@ -77,7 +77,7 @@ async function main() {
 
     await build(
         createWebviewBuildConfig({
-            entryFile: "src/webview-solid/editor-panel/main.tsx",
+            entryFile: "src/webview/editor-panel/main.tsx",
             outputFile: "editor-panel.js",
             globalName: "XlsxEditorPanelBootstrap",
         })
@@ -85,7 +85,7 @@ async function main() {
 
     await build(
         createWebviewBuildConfig({
-            entryFile: "src/webview-solid/diff-panel/main.tsx",
+            entryFile: "src/webview/diff-panel/main.tsx",
             outputFile: "diff-panel.js",
             globalName: "XlsxDiffPanelBootstrap",
         })

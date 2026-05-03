@@ -9,7 +9,7 @@ import {
     getPixelColumnLeft,
     getPixelColumnOffset,
     getPixelColumnWidth,
-} from "../column-layout";
+} from "../shared/column-layout";
 import {
     DEFAULT_ROW_PIXEL_HEIGHT,
     type PixelRowLayout,
@@ -19,7 +19,7 @@ import {
     getPixelRowOffset,
     getPixelRowTop,
     getPixelRowWindow,
-} from "../row-layout";
+} from "../shared/row-layout";
 
 export const EDITOR_VIRTUAL_ROW_HEIGHT = DEFAULT_ROW_PIXEL_HEIGHT;
 export const EDITOR_VIRTUAL_COLUMN_WIDTH = DEFAULT_COLUMN_PIXEL_WIDTH;

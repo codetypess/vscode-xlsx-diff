@@ -6,12 +6,12 @@ import {
     convertPixelsToWorkbookColumnWidth,
     convertWorkbookColumnWidthToPixels,
     stabilizeColumnPixelWidth,
-} from "../webview/column-layout";
+} from "../webview/shared/column-layout";
 import {
     convertPixelsToWorkbookRowHeight,
     convertWorkbookRowHeightToPixels,
     stabilizeRowPixelHeight,
-} from "../webview/row-layout";
+} from "../webview/shared/row-layout";
 import {
     EDITOR_VIRTUAL_COLUMN_WIDTH,
     EDITOR_VIRTUAL_HEADER_HEIGHT,

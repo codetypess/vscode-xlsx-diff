@@ -2,7 +2,10 @@
 /// <reference types="node" />
 
 import * as assert from "assert";
-import { getMaxVisibleSheetTabsForWidth, partitionSheetTabs } from "../webview/editor-sheet-tabs";
+import {
+    getMaxVisibleSheetTabsForWidth,
+    partitionSheetTabs,
+} from "../webview/shared/editor-sheet-tabs";
 
 interface TestSheetTab {
     key: string;

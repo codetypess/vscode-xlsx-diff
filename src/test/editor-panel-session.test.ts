@@ -3,7 +3,7 @@
 
 import * as assert from "assert";
 import type { EditorRenderModel, EditorRenderPayload } from "../core/model/types";
-import type { EditorSessionPatchMessage } from "../webview-solid/shared/session-protocol";
+import type { EditorSessionPatchMessage } from "../webview/shared/session-protocol";
 import { XlsxEditorPanel } from "../webview/editor-panel/editor-panel";
 
 function createEditorRenderModel(): EditorRenderModel {

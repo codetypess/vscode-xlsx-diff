@@ -2,7 +2,7 @@
 /// <reference types="node" />
 
 import * as assert from "assert";
-import { getFreezePaneCountsForCell, hasLockedView } from "../webview/view-lock";
+import { getFreezePaneCountsForCell, hasLockedView } from "../webview/shared/view-lock";
 
 suite("View lock helpers", () => {
     test("treats only positive freeze counts as a locked view", () => {

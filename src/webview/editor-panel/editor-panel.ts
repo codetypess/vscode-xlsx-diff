@@ -21,19 +21,29 @@ import { toErrorMessage } from "../../error-message";
 import { getRuntimeMessages } from "../../i18n";
 import { rememberRecentWorkbookResourceUri } from "../../scm/recent-workbook-resource-context";
 import {
-    createSessionStatusMessage,
-    isEditorWebviewOutgoingMessage,
-    type EditorWebviewOutgoingMessage,
-} from "../../webview-solid/shared/session-protocol";
-import { getWorkbookResourceName } from "../../workbook/resource-uri";
-import { escapeWatcherGlobSegment } from "../webview-utils";
-import {
     getInsertEditorSheetIndex,
     getNewEditorSheetName,
     resolveEditorSearchResult,
     resolveEditorCellReference,
     validateEditorSheetName,
 } from "./editor-panel-logic";
+import {
+    createSessionStatusMessage,
+    isEditorWebviewOutgoingMessage,
+    type EditorWebviewOutgoingMessage,
+} from "../shared/session-protocol";
+import type {
+    EditorAlignmentTargetKind,
+    EditorPanelStrings,
+    EditorSearchResultMessage,
+    StructuralHistoryEntry,
+    WorkingSheetEntry,
+    XlsxEditorPanelController,
+} from "./editor-panel-types";
+import type { SelectionRange } from "./editor-selection-range";
+import { hasLockedView } from "../shared/view-lock";
+import { getWorkbookResourceName } from "../../workbook/resource-uri";
+import { escapeWatcherGlobSegment } from "../webview-utils";
 import { logPerf, summarizePendingStateForPerf } from "./editor-perf-log";
 import {
     applyAlignmentPatchToSheetSnapshot,
@@ -65,15 +75,6 @@ import {
     createEditorSessionMessage,
     type ActiveSheetAlignmentRenderPatch,
 } from "./editor-panel-protocol-adapter";
-import type {
-    EditorAlignmentTargetKind,
-    EditorPanelStrings,
-    EditorSearchResultMessage,
-    StructuralHistoryEntry,
-    WorkingSheetEntry,
-    XlsxEditorPanelController,
-} from "./editor-panel-types";
-import type { SelectionRange } from "./editor-selection-range";
 import {
     createEditorRenderModel,
     createInitialEditorPanelState,
@@ -81,7 +82,6 @@ import {
     setActiveEditorSheet,
     setSelectedEditorCell,
 } from "./editor-render-model";
-import { hasLockedView } from "../view-lock";
 import {
     commitEditorWorkbookSession,
     loadEditorWorkbookSession,

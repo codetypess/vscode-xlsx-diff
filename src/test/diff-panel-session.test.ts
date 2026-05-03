@@ -5,7 +5,7 @@ import * as assert from "assert";
 import { buildWorkbookDiff } from "../core/diff/build-workbook-diff";
 import type { CellSnapshot, SheetSnapshot, WorkbookSnapshot } from "../core/model/types";
 import { createCellKey, getCellAddress } from "../core/model/cells";
-import type { DiffSessionPatchMessage } from "../webview-solid/shared/session-protocol";
+import type { DiffSessionPatchMessage } from "../webview/shared/session-protocol";
 import { XlsxDiffPanel } from "../webview/diff-panel";
 
 function createCell(rowNumber: number, columnNumber: number, value: string): CellSnapshot {

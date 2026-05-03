@@ -9,15 +9,15 @@ import {
     createEditorSessionPatchMessage,
     type EditorSessionInitMessage,
     type EditorSessionPatchMessage,
-} from "../../webview-solid/shared/session-protocol";
-import { createWebviewNonce } from "../webview-utils";
-import { mapPendingCellEditsToWebview } from "./editor-panel-state";
+} from "../shared/session-protocol";
 import type {
     EditorAlignmentTargetKind,
     EditorPanelStrings,
     WorkingSheetEntry,
 } from "./editor-panel-types";
 import type { SelectionRange } from "./editor-selection-range";
+import { createWebviewNonce } from "../webview-utils";
+import { mapPendingCellEditsToWebview } from "./editor-panel-state";
 
 export interface ActiveSheetAlignmentRenderPatch {
     sheetKey: string;

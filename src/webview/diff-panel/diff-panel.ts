@@ -15,12 +15,12 @@ import {
     createSessionStatusMessage,
     isDiffWebviewOutgoingMessage,
     type DiffWebviewOutgoingMessage,
-} from "../../webview-solid/shared/session-protocol";
+} from "../shared/session-protocol";
+import { createDiffPanelRenderModel } from "./diff-panel-model";
+import type { DiffPanelRenderModel } from "./diff-panel-types";
 import { getWorkbookResourceName } from "../../workbook/resource-uri";
 import { withWorkbookSaveProgress } from "../../workbook/save-progress";
 import { createWebviewNonce, escapeWatcherGlobSegment } from "../webview-utils";
-import { createDiffPanelRenderModel } from "./diff-panel-model";
-import type { DiffPanelRenderModel } from "./diff-panel-types";
 
 function getWebviewStrings(): DiffPanelStrings {
     return getRuntimeMessages().diffPanel;
