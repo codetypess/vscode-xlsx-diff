@@ -8,7 +8,6 @@
 			"DOM",
 			"DOM.Iterable"
 		],
-		"jsx": "react-jsx",
 		"strict": true,
 		"noImplicitReturns": true,
 		"noFallthroughCasesInSwitch": true
@@ -16,9 +15,5 @@
 	"include": [
 		"src/webview/**/*.ts",
 		"src/core/model/types.ts"
-	],
-	"exclude": [
-		"src/webview/diff-panel/diff-panel-webview.ts",
-		"src/webview/editor-panel/editor-panel-webview.ts"
 	]
 }
