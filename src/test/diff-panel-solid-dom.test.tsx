@@ -227,6 +227,76 @@ function createMappedDiffPayload(): DiffPanelRenderModel {
     };
 }
 
+function createLargeDiffPayload(): DiffPanelRenderModel {
+    const rowCount = 20;
+    const diffRowNumbers = [1, 15];
+    const rows = Array.from({ length: rowCount }, (_, index) => {
+        const rowNumber = index + 1;
+        const diffIndex = diffRowNumbers.indexOf(rowNumber);
+        const hasDiff = diffIndex >= 0;
+
+        return {
+            rowNumber,
+            leftRowNumber: rowNumber,
+            rightRowNumber: rowNumber,
+            hasDiff,
+            diffTone: hasDiff ? ("modified" as const) : ("equal" as const),
+            cells: hasDiff
+                ? [
+                      {
+                          key: `cell:${rowNumber}:2`,
+                          columnNumber: 2,
+                          address: `B${rowNumber}`,
+                          status: "modified" as const,
+                          diffIndex,
+                          leftPresent: true,
+                          rightPresent: true,
+                          leftValue: `left ${rowNumber}`,
+                          rightValue: `right ${rowNumber}`,
+                          leftFormula: null,
+                          rightFormula: null,
+                      },
+                  ]
+                : [],
+        };
+    });
+
+    return {
+        ...createDiffPayload(),
+        sheets: [
+            {
+                key: "sheet:1",
+                kind: "matched",
+                label: "Sheet1",
+                diffRowCount: diffRowNumbers.length,
+                diffCellCount: diffRowNumbers.length,
+                mergedRangesChanged: false,
+                freezePaneChanged: false,
+                visibilityChanged: false,
+                sheetOrderChanged: false,
+                hasDiff: true,
+                diffTone: "modified",
+                isActive: true,
+            },
+        ],
+        activeSheet: {
+            ...createDiffPayload().activeSheet!,
+            rowCount,
+            rows,
+            diffRows: diffRowNumbers,
+            diffCells: diffRowNumbers.map((rowNumber, diffIndex) => ({
+                key: `diff:B${rowNumber}`,
+                rowNumber,
+                columnNumber: 2,
+                address: `B${rowNumber}`,
+                diffIndex,
+            })),
+            diffRowCount: diffRowNumbers.length,
+            diffCellCount: diffRowNumbers.length,
+        },
+    };
+}
+
 suite("Solid diff panel DOM", () => {
     let dom: JSDOM;
     let documentLike: any;
@@ -255,6 +325,17 @@ suite("Solid diff panel DOM", () => {
 
     const click = async (selector: string) => {
         const element = query(selector);
+        element.dispatchEvent(
+            new windowLike.MouseEvent("click", {
+                bubbles: true,
+                cancelable: true,
+            })
+        );
+        await flush();
+        return element;
+    };
+
+    const clickElement = async (element: HTMLElement) => {
         element.dispatchEvent(
             new windowLike.MouseEvent("click", {
                 bubbles: true,
@@ -432,5 +513,45 @@ suite("Solid diff panel DOM", () => {
                 },
             ],
         });
+    });
+
+    test("reveals the target diff row when navigating to the next diff", async () => {
+        await dispatchSessionInit(createLargeDiffPayload());
+
+        const viewport = query(".diff-gridViewport");
+        Object.defineProperty(viewport, "clientHeight", {
+            configurable: true,
+            value: 54,
+        });
+        windowLike.dispatchEvent(
+            new windowLike.Event("resize", {
+                bubbles: true,
+                cancelable: true,
+            })
+        );
+        await flush();
+
+        const nextDiffButton = Array.from(
+            documentLike.querySelectorAll(".diff-button")
+        ).find((element) => element.textContent?.includes("Next Diff"));
+        assert.ok(nextDiffButton, "Expected Next Diff button");
+
+        await clickElement(nextDiffButton as HTMLElement);
+
+        assert.ok(viewport.scrollTop > 0, `Expected viewport scrollTop to advance, got ${viewport.scrollTop}`);
+    });
+
+    test("renders diff cell tooltips with source addresses and values", async () => {
+        await dispatchSessionInit(createMappedDiffPayload());
+
+        const leftCell = query(
+            'button[data-role="diff-cell"][data-side="left"][data-row-number="1"][data-column-number="2"]'
+        );
+        const rightCell = query(
+            'button[data-role="diff-cell"][data-side="right"][data-row-number="1"][data-column-number="2"]'
+        );
+
+        assert.strictEqual(leftCell.getAttribute("title"), "E7\nbefore");
+        assert.strictEqual(rightCell.getAttribute("title"), "F8\nafter");
     });
 });

@@ -1,13 +1,11 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js";
 import { render } from "solid-js/web";
-import {
-    AiOutlineAlignCenter,
-    AiOutlineAlignLeft,
-    AiOutlineAlignRight,
-    AiOutlineVerticalAlignBottom,
-    AiOutlineVerticalAlignMiddle,
-    AiOutlineVerticalAlignTop,
-} from "solid-icons/ai";
+import MdAlignHorizontalCenterSvg from "../../../media/mdicons/MdAlignHorizontalCenter.svg?raw";
+import MdAlignHorizontalLeftSvg from "../../../media/mdicons/MdAlignHorizontalLeft.svg?raw";
+import MdAlignHorizontalRightSvg from "../../../media/mdicons/MdAlignHorizontalRight.svg?raw";
+import MdAlignVerticalBottomSvg from "../../../media/mdicons/MdAlignVerticalBottom.svg?raw";
+import MdAlignVerticalCenterSvg from "../../../media/mdicons/MdAlignVerticalCenter.svg?raw";
+import MdAlignVerticalTopSvg from "../../../media/mdicons/MdAlignVerticalTop.svg?raw";
 import { createCellKey, getCellAddress } from "../../core/model/cells";
 import type { EditorAlignmentPatch } from "../../core/model/alignment";
 import type { EditorActiveSheetView, EditorSelectedCell } from "../../core/model/types";
@@ -18,14 +16,21 @@ import {
     getMinimumVisibleEditorRowCount,
 } from "../../webview/editor-panel/editor-virtual-grid";
 import {
+    getMaxVisibleSheetTabsForWidth,
+    partitionSheetTabs,
+} from "../../webview/editor-sheet-tabs";
+import {
     DEFAULT_MAXIMUM_DIGIT_WIDTH_PX,
     MAX_COLUMN_PIXEL_WIDTH,
     MIN_COLUMN_PIXEL_WIDTH,
     convertPixelsToWorkbookColumnWidth,
+    getFontShorthand,
+    measureMaximumDigitWidth,
     stabilizeColumnPixelWidth,
 } from "../../webview/column-layout";
 import {
     buildFillChanges,
+    createAutoFillDownPreviewRange,
     createFillPreviewRange,
     isCellWithinFillPreviewArea,
     type FillBounds,
@@ -152,10 +157,15 @@ import {
     getNextEditorViewportPageNavigationTarget,
     isEditorClearCellKey,
 } from "./keyboard-navigation-helpers";
+import { getFreezePaneCountsForCell, hasLockedView } from "../../webview/view-lock";
 
 interface VsCodeApi {
     postMessage(message: EditorWebviewOutgoingMessage): void;
 }
+
+const IS_DEBUG_MODE = Boolean(
+    (globalThis as Record<string, unknown>).__XLSX_EDITOR_DEBUG__ === true
+);
 
 function getVsCodeApi(): VsCodeApi {
     const candidate = (globalThis as Record<string, unknown>).acquireVsCodeApi;
@@ -200,6 +210,28 @@ interface SearchFeedbackState {
     status: SearchFeedbackStatus;
     tone: SearchFeedbackTone;
     message: string;
+}
+
+interface DebugRenderStats {
+    renderedRowCount: number;
+    renderedColumnCount: number;
+    frozenRenderedRowCount: number;
+    frozenRenderedColumnCount: number;
+    scrollableRenderedRowCount: number;
+    scrollableRenderedColumnCount: number;
+    viewportHeight: number;
+    viewportWidth: number;
+    scrollTop: number;
+    scrollLeft: number;
+    sheetKey: string;
+    sheetRowCount: number;
+    sheetColumnCount: number;
+    visibleSheetRowCount: number;
+    hiddenSheetRowCount: number;
+    pendingDraftCount: number;
+    hasWorkbookPendingEdits: boolean;
+    selectionLabel: string;
+    editingCellLabel: string | null;
 }
 
 interface SheetContextMenuState {
@@ -311,8 +343,19 @@ interface EditorGridFillHandleLayout {
     top: number;
 }
 
+interface FillHandleClickState {
+    rowNumber: number;
+    columnNumber: number;
+    timeStamp: number;
+}
+
 const FILL_HANDLE_SIZE = 8;
 const FILL_HANDLE_HALF_SIZE = FILL_HANDLE_SIZE / 2;
+const FILL_HANDLE_DOUBLE_CLICK_MS = 400;
+const SHEET_TAB_ITEM_GAP = 1;
+const SHEET_TAB_ESTIMATED_WIDTH = 120;
+const SHEET_TAB_VISIBLE_MAX_WIDTH = 144;
+const SHEET_TAB_OVERFLOW_TRIGGER_WIDTH = 32;
 
 function isTextInputTarget(target: EventTarget | null): boolean {
     if (!(target instanceof HTMLElement)) {
@@ -450,6 +493,14 @@ function hasExpandedSelectionRange(range: SelectionRange | null): range is Selec
     return Boolean(
         range && (range.startRow !== range.endRow || range.startColumn !== range.endColumn)
     );
+}
+
+function formatSelectionRangeAddress(range: SelectionRange): string {
+    return `${getCellAddress(range.startRow, range.startColumn)}:${getCellAddress(range.endRow, range.endColumn)}`;
+}
+
+function ToolbarSvgIcon(props: { svg: string }) {
+    return <span class="toolbar__toggle-icon" aria-hidden innerHTML={props.svg} />;
 }
 
 function focusSearchInput(): void {
@@ -601,6 +652,119 @@ function isEditorSearchResultMessage(value: unknown): value is EditorSearchResul
 
 function formatTemplate(template: string, values: Record<string, string>): string {
     return template.replace(/\{(\w+)\}/g, (_match, key: string) => values[key] ?? "");
+}
+
+function getEditorCellTitle(address: string, value: string, formula: string | null): string {
+    const lines = [address];
+
+    if (value) {
+        lines.push(value);
+    }
+
+    if (formula) {
+        lines.push(`fx ${formula}`);
+    }
+
+    return lines.join("\n");
+}
+
+function areSheetTabWidthsEqual(
+    left: Record<string, number>,
+    right: Record<string, number>
+): boolean {
+    const leftKeys = Object.keys(left);
+    const rightKeys = Object.keys(right);
+    if (leftKeys.length !== rightKeys.length) {
+        return false;
+    }
+
+    return leftKeys.every((key) => left[key] === right[key]);
+}
+
+function getMaxVisibleEditorSheetTabs(
+    sheets: ReadonlyArray<{ key: string; isActive: boolean }>,
+    containerWidth: number,
+    measuredTabWidths: Record<string, number>
+): number {
+    if (containerWidth <= 0) {
+        return sheets.length;
+    }
+
+    return getMaxVisibleSheetTabsForWidth(sheets, {
+        containerWidth,
+        getTabWidth: (sheet) => measuredTabWidths[sheet.key] ?? SHEET_TAB_ESTIMATED_WIDTH,
+        itemGap: SHEET_TAB_ITEM_GAP,
+        overflowTriggerWidth: SHEET_TAB_OVERFLOW_TRIGGER_WIDTH,
+    });
+}
+
+function classNames(values: Array<string | false | null | undefined>): string {
+    return values.filter(Boolean).join(" ");
+}
+
+function serializeSelectionToClipboard(
+    range: SelectionRange,
+    getCellValue: (rowNumber: number, columnNumber: number) => string
+): string {
+    const rows: string[] = [];
+    for (let rowNumber = range.startRow; rowNumber <= range.endRow; rowNumber += 1) {
+        const cells: string[] = [];
+        for (
+            let columnNumber = range.startColumn;
+            columnNumber <= range.endColumn;
+            columnNumber += 1
+        ) {
+            cells.push(getCellValue(rowNumber, columnNumber));
+        }
+
+        rows.push(cells.join("\t"));
+    }
+
+    return rows.join("\n");
+}
+
+function getGridWidth(grid: string[][]): number {
+    return grid.reduce((maximumWidth, row) => Math.max(maximumWidth, row.length), 0);
+}
+
+function getPasteGridForSelection(
+    grid: string[][],
+    selectionRange: SelectionRange
+): string[][] {
+    if (!hasExpandedSelectionRange(selectionRange)) {
+        return grid;
+    }
+
+    const selectionHeight = selectionRange.endRow - selectionRange.startRow + 1;
+    const selectionWidth = selectionRange.endColumn - selectionRange.startColumn + 1;
+    const gridWidth = getGridWidth(grid);
+
+    if (grid.length === 1 && gridWidth === 1) {
+        const value = grid[0]?.[0] ?? "";
+        return Array.from({ length: selectionHeight }, () =>
+            Array.from({ length: selectionWidth }, () => value)
+        );
+    }
+
+    if (grid.length === selectionHeight && gridWidth === selectionWidth) {
+        return Array.from({ length: selectionHeight }, (_, rowIndex) =>
+            Array.from(
+                { length: selectionWidth },
+                (_, columnIndex) => grid[rowIndex]?.[columnIndex] ?? ""
+            )
+        );
+    }
+
+    return grid;
+}
+
+function normalizePastedRows(text: string): string[][] {
+    const lines = text.replaceAll("\r", "").split("\n");
+    if (lines.length > 0 && lines[lines.length - 1] === "") {
+        lines.pop();
+    }
+
+    return lines.map((line) => line.split("\t"));
 }
 
 function getSelectionOverlayStyle(
@@ -946,6 +1110,15 @@ function EditorGridFillHandleView(props: {
     );
 }
 
+function PendingMarkerView(props: { extraClass?: string }) {
+    return (
+        <span
+            class={classNames(["diff-marker", "diff-marker--pending", props.extraClass])}
+            aria-hidden="true"
+        />
+    );
+}
+
 function GridCellValueView(props: { value: string }) {
     if (!props.value) {
         return null;
@@ -1043,7 +1216,11 @@ function EditorGridCellView(props: {
             data-cell-address={getCellAddress(props.item.rowNumber, props.item.columnNumber)}
             data-row-number={props.item.rowNumber}
             data-column-number={props.item.columnNumber}
-            title={props.item.formula ?? props.item.displayValue}
+            title={getEditorCellTitle(
+                getCellAddress(props.item.rowNumber, props.item.columnNumber),
+                props.item.displayValue,
+                props.item.formula
+            )}
             style={style()}
             onPointerDown={(event) => {
                 if (event.button !== 0 || isTextInputTarget(event.target)) {
@@ -1356,6 +1533,8 @@ function getEditorStrings(): Pick<
     | "reload"
     | "save"
     | "readOnly"
+    | "lockView"
+    | "unlockView"
     | "moreSheets"
     | "addSheet"
     | "deleteSheet"
@@ -1396,6 +1575,8 @@ function getEditorStrings(): Pick<
     | "searchMatchFound"
     | "searchMatchFoundInSelection"
     | "searchMatchSummary"
+    | "debugRenderSummary"
+    | "debugRenderTooltip"
     | "searchRegex"
     | "searchMatchCase"
     | "searchWholeWord"
@@ -1426,6 +1607,8 @@ function getEditorStrings(): Pick<
         reload: strings?.reload ?? "Reload",
         save: strings?.save ?? "Save",
         readOnly: strings?.readOnly ?? "Read-only",
+        lockView: strings?.lockView ?? "Lock View",
+        unlockView: strings?.unlockView ?? "Unlock View",
         moreSheets: strings?.moreSheets ?? "More",
         addSheet: strings?.addSheet ?? "Add Sheet",
         deleteSheet: strings?.deleteSheet ?? "Delete Sheet",
@@ -1468,6 +1651,9 @@ function getEditorStrings(): Pick<
         searchMatchFoundInSelection:
             strings?.searchMatchFoundInSelection ?? "Found at {address} in selected range {range}.",
         searchMatchSummary: strings?.searchMatchSummary ?? "Match {index} of {count}.",
+        debugRenderSummary: strings?.debugRenderSummary ?? "{rowCount} rows {columnCount} cols",
+        debugRenderTooltip:
+            strings?.debugRenderTooltip ?? "Rendered {rowCount} rows and {columnCount} columns.",
         searchRegex: strings?.searchRegex ?? "Regex",
         searchMatchCase: strings?.searchMatchCase ?? "Match Case",
         searchWholeWord: strings?.searchWholeWord ?? "Whole Word",
@@ -1526,11 +1712,26 @@ export function EditorBootstrapApp() {
         wholeWord: false,
     });
     const [searchFeedback, setSearchFeedback] = createSignal<SearchFeedbackState | null>(null);
+    const [maximumDigitWidth, setMaximumDigitWidth] = createSignal(
+        DEFAULT_MAXIMUM_DIGIT_WIDTH_PX
+    );
+    const [isSaving, setIsSaving] = createSignal(false);
+    const [sheetTabsViewportWidth, setSheetTabsViewportWidth] = createSignal(0);
+    const [measuredSheetTabWidths, setMeasuredSheetTabWidths] = createSignal<
+        Record<string, number>
+    >({});
+    const [isSheetOverflowOpen, setIsSheetOverflowOpen] = createSignal(false);
+    const [isDebugRenderPopoverOpen, setIsDebugRenderPopoverOpen] = createSignal(false);
     const strings = getEditorStrings();
     let appElement: HTMLDivElement | undefined;
     let searchPanelElement: HTMLDivElement | undefined;
+    let sheetTabsViewportElement: HTMLDivElement | undefined;
+    let sheetTabsOverflowElement: HTMLDivElement | undefined;
+    let sheetTabsMeasureElement: HTMLDivElement | undefined;
     let searchPanelDragState: SearchPanelDragState | null = null;
     let selectionDragState: EditorGridSelectionDragState | null = null;
+    let lastFillHandleClickState: FillHandleClickState | null = null;
+    let lastPendingNotification: boolean | null = null;
     let previousPendingEditsSnapshot: EditorPendingEdit[] = [];
     let lastEditingDraftSyncKey: string | null = null;
 
@@ -1578,6 +1779,52 @@ export function EditorBootstrapApp() {
     };
 
     onMount(() => {
+        const measureMaximumDigitWidthFromDocument = () => {
+            if (globalThis.navigator?.userAgent?.includes("jsdom")) {
+                setMaximumDigitWidth(DEFAULT_MAXIMUM_DIGIT_WIDTH_PX);
+                return;
+            }
+
+            try {
+                setMaximumDigitWidth(measureMaximumDigitWidth(getFontShorthand(document.body)));
+            } catch {
+                setMaximumDigitWidth(DEFAULT_MAXIMUM_DIGIT_WIDTH_PX);
+            }
+        };
+
+        const measureSheetTabsViewport = () => {
+            setSheetTabsViewportWidth(
+                Math.ceil(sheetTabsViewportElement?.getBoundingClientRect().width ?? 0)
+            );
+        };
+
+        const measureSheetTabWidths = () => {
+            if (!sheetTabsMeasureElement) {
+                return;
+            }
+
+            const nextMeasuredTabWidths: Record<string, number> = {};
+            for (const element of sheetTabsMeasureElement.querySelectorAll<HTMLElement>(
+                '[data-role="sheet-tab-measure"]'
+            )) {
+                const sheetKey = element.dataset.sheetKey;
+                if (!sheetKey) {
+                    continue;
+                }
+
+                nextMeasuredTabWidths[sheetKey] = Math.min(
+                    SHEET_TAB_VISIBLE_MAX_WIDTH,
+                    Math.ceil(element.getBoundingClientRect().width)
+                );
+            }
+
+            setMeasuredSheetTabWidths((current) =>
+                areSheetTabWidthsEqual(current, nextMeasuredTabWidths)
+                    ? current
+                    : nextMeasuredTabWidths
+            );
+        };
+
         const syncClampedSearchPanelPosition = (panelElementOverride?: HTMLDivElement | null) => {
             const currentPosition = searchPanelPosition();
             const resolvedPanelElement = panelElementOverride ?? searchPanelElement ?? null;
@@ -1687,6 +1934,7 @@ export function EditorBootstrapApp() {
             pointerId?: number,
             options: {
                 commit?: boolean;
+                timeStamp?: number;
             } = {}
         ) => {
             const currentFillDragState = fillDragState();
@@ -1700,7 +1948,37 @@ export function EditorBootstrapApp() {
 
             setFillDragState(null);
 
-            if (!options.commit || !currentFillDragState.previewRange) {
+            if (!currentFillDragState.previewRange) {
+                if (options.commit && typeof options.timeStamp === "number") {
+                    const sourceRange = currentFillDragState.sourceRange;
+                    const isRepeatedClick = Boolean(
+                        lastFillHandleClickState &&
+                            lastFillHandleClickState.rowNumber === sourceRange.endRow &&
+                            lastFillHandleClickState.columnNumber === sourceRange.endColumn &&
+                            options.timeStamp >= lastFillHandleClickState.timeStamp &&
+                            options.timeStamp - lastFillHandleClickState.timeStamp <=
+                                FILL_HANDLE_DOUBLE_CLICK_MS
+                    );
+                    if (isRepeatedClick) {
+                        lastFillHandleClickState = null;
+                        commitAutoFillDown(currentFillDragState.sourceRange);
+                        return;
+                    }
+
+                    lastFillHandleClickState = {
+                        rowNumber: sourceRange.endRow,
+                        columnNumber: sourceRange.endColumn,
+                        timeStamp: options.timeStamp,
+                    };
+                    return;
+                }
+
+                lastFillHandleClickState = null;
+                return;
+            }
+
+            lastFillHandleClickState = null;
+            if (!options.commit) {
                 return;
             }
 
@@ -1715,6 +1993,9 @@ export function EditorBootstrapApp() {
         ) => {
             const payload = event.data;
             if (isEditorSessionIncomingMessage(payload)) {
+                if (payload.type !== "session:status" || payload.status.kind === "error") {
+                    setIsSaving(false);
+                }
                 setSession((current) => reduceEditorSessionMessage(current, payload));
                 return;
             }
@@ -1757,7 +2038,7 @@ export function EditorBootstrapApp() {
             if (
                 target.closest(".context-menu") ||
                 target.closest('[data-role="sheet-tab"]') ||
-                target.closest('[data-role="sheet-menu-toggle"]')
+                target.closest('[data-role="sheet-tab-overflow"]')
             ) {
                 return;
             }
@@ -1821,13 +2102,13 @@ export function EditorBootstrapApp() {
                 return;
             }
 
-            updateSelectionDrag(target);
+                updateSelectionDrag(target);
         };
         const handlePointerUp = (event: PointerEvent) => {
             stopColumnResize(event.pointerId, { commit: true });
             stopRowResize(event.pointerId, { commit: true });
             stopSearchPanelDrag(event.pointerId);
-            stopFillDrag(event.pointerId, { commit: true });
+            stopFillDrag(event.pointerId, { commit: true, timeStamp: event.timeStamp });
             stopSelectionDrag(event.pointerId);
         };
         const handlePointerCancel = (event: PointerEvent) => {
@@ -1837,10 +2118,55 @@ export function EditorBootstrapApp() {
             stopFillDrag(event.pointerId);
             stopSelectionDrag(event.pointerId);
         };
+        const handleCopy = (event: ClipboardEvent) => {
+            const currentSelectionRange = selectionRange();
+            if (
+                isTextInputTarget(event.target) ||
+                editingCell() ||
+                !activeSheetView() ||
+                !currentSelectionRange
+            ) {
+                return;
+            }
+
+            const text = serializeSelectionToClipboard(currentSelectionRange, getEffectiveCellValue);
+            if (!text) {
+                return;
+            }
+
+            event.preventDefault();
+            event.clipboardData?.setData("text/plain", text);
+        };
+        const handlePaste = (event: ClipboardEvent) => {
+            if (
+                isTextInputTarget(event.target) ||
+                editingCell() ||
+                !activeSheetView() ||
+                !selection() ||
+                !workbook().canEdit
+            ) {
+                return;
+            }
+
+            const text = event.clipboardData?.getData("text/plain");
+            if (!text) {
+                return;
+            }
+
+            event.preventDefault();
+            applyPastedGrid(normalizePastedRows(text));
+        };
         const handleResize = () => {
+            measureMaximumDigitWidthFromDocument();
             syncClampedSearchPanelPosition();
+            measureSheetTabsViewport();
+            measureSheetTabWidths();
         };
         const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.defaultPrevented) {
+                return;
+            }
+
             const normalizedKey = event.key.toLowerCase();
             const hasPrimaryModifier = event.metaKey || event.ctrlKey;
             const editableTextInputTarget = isEditableTextInputTarget(event.target);
@@ -1874,7 +2200,13 @@ export function EditorBootstrapApp() {
                 return;
             }
 
-            if (!event.altKey && hasPrimaryModifier && !editableTextInputTarget) {
+            if (!event.altKey && hasPrimaryModifier && normalizedKey === "s") {
+                event.preventDefault();
+                triggerSave();
+                return;
+            }
+
+            if (!event.altKey && hasPrimaryModifier && !editingCell()) {
                 if (normalizedKey === "f") {
                     event.preventDefault();
                     openSearchPanel("find");
@@ -1886,7 +2218,9 @@ export function EditorBootstrapApp() {
                     openSearchPanel("replace");
                     return;
                 }
+            }
 
+            if (!event.altKey && hasPrimaryModifier && !editableTextInputTarget) {
                 if (normalizedKey === "g" && !editingCell()) {
                     event.preventDefault();
                     focusGotoInput();
@@ -1957,9 +2291,29 @@ export function EditorBootstrapApp() {
         window.addEventListener("pointermove", handlePointerMove);
         window.addEventListener("pointerup", handlePointerUp);
         window.addEventListener("pointercancel", handlePointerCancel);
+        document.addEventListener("keydown", handleKeyDown);
         window.addEventListener("keydown", handleKeyDown);
         window.addEventListener("resize", handleResize);
+        window.visualViewport?.addEventListener("resize", handleResize);
+        document.addEventListener("copy", handleCopy);
+        document.addEventListener("paste", handlePaste);
         vscode.postMessage(createWebviewReadyMessage());
+        measureMaximumDigitWidthFromDocument();
+        measureSheetTabsViewport();
+        measureSheetTabWidths();
+
+        const resizeObserver =
+            typeof ResizeObserver === "undefined"
+                ? null
+                : new ResizeObserver(() => {
+                      measureMaximumDigitWidthFromDocument();
+                      measureSheetTabsViewport();
+                      measureSheetTabWidths();
+                  });
+        resizeObserver?.observe(document.body);
+        if (sheetTabsViewportElement) {
+            resizeObserver?.observe(sheetTabsViewportElement);
+        }
 
         onCleanup(() => {
             window.removeEventListener("message", handleMessage);
@@ -1967,8 +2321,13 @@ export function EditorBootstrapApp() {
             window.removeEventListener("pointermove", handlePointerMove);
             window.removeEventListener("pointerup", handlePointerUp);
             window.removeEventListener("pointercancel", handlePointerCancel);
+            document.removeEventListener("keydown", handleKeyDown);
             window.removeEventListener("keydown", handleKeyDown);
             window.removeEventListener("resize", handleResize);
+            window.visualViewport?.removeEventListener("resize", handleResize);
+            document.removeEventListener("copy", handleCopy);
+            document.removeEventListener("paste", handlePaste);
+            resizeObserver?.disconnect();
         });
     });
 
@@ -2076,6 +2435,83 @@ export function EditorBootstrapApp() {
         setSheetContextMenu(null);
         setGridContextMenu(null);
         setFillDragState(null);
+    });
+
+    createEffect(() => {
+        workbook().sheets.length;
+        activeSheetTabKey();
+        pendingSheetKeySignature();
+
+        queueMicrotask(() => {
+            setSheetTabsViewportWidth(
+                Math.ceil(sheetTabsViewportElement?.getBoundingClientRect().width ?? 0)
+            );
+
+            if (!sheetTabsMeasureElement) {
+                return;
+            }
+
+            const nextMeasuredTabWidths: Record<string, number> = {};
+            for (const element of sheetTabsMeasureElement.querySelectorAll<HTMLElement>(
+                '[data-role="sheet-tab-measure"]'
+            )) {
+                const sheetKey = element.dataset.sheetKey;
+                if (!sheetKey) {
+                    continue;
+                }
+
+                nextMeasuredTabWidths[sheetKey] = Math.min(
+                    SHEET_TAB_VISIBLE_MAX_WIDTH,
+                    Math.ceil(element.getBoundingClientRect().width)
+                );
+            }
+
+            setMeasuredSheetTabWidths((current) =>
+                areSheetTabWidthsEqual(current, nextMeasuredTabWidths)
+                    ? current
+                    : nextMeasuredTabWidths
+            );
+        });
+    });
+
+    createEffect(() => {
+        activeSheetTabKey();
+        workbook().sheets.length;
+        sheetTabLayout().hasOverflow;
+        setIsSheetOverflowOpen(false);
+    });
+
+    createEffect(() => {
+        if (!isSheetOverflowOpen()) {
+            return;
+        }
+
+        const handlePointerDown = (event: PointerEvent) => {
+            const target = event.target;
+            if (!(target instanceof Node)) {
+                return;
+            }
+
+            if (sheetTabsOverflowElement?.contains(target)) {
+                return;
+            }
+
+            setIsSheetOverflowOpen(false);
+        };
+
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === "Escape") {
+                setIsSheetOverflowOpen(false);
+            }
+        };
+
+        document.addEventListener("pointerdown", handlePointerDown);
+        document.addEventListener("keydown", handleKeyDown);
+
+        onCleanup(() => {
+            document.removeEventListener("pointerdown", handlePointerDown);
+            document.removeEventListener("keydown", handleKeyDown);
+        });
     });
 
     createEffect(() => {
@@ -2243,9 +2679,13 @@ export function EditorBootstrapApp() {
                 setPendingUndoHistory([]);
                 setPendingRedoHistory([]);
             }
+            lastPendingNotification = null;
         } else if (editingDrafts.resetPendingHistory) {
             setPendingUndoHistory([]);
             setPendingRedoHistory([]);
+            lastPendingNotification = null;
+        } else if (editingDrafts.pendingEdits.length === 0) {
+            lastPendingNotification = null;
         }
 
         previousPendingEditsSnapshot = editingDrafts.pendingEdits.map((edit) => ({ ...edit }));
@@ -2462,12 +2902,90 @@ export function EditorBootstrapApp() {
                 hiddenRows: rows.hiddenRows,
                 columnWidths: previewColumnWidths,
                 rowHeights: previewRowHeights,
-                maximumDigitWidth: DEFAULT_MAXIMUM_DIGIT_WIDTH_PX,
+                maximumDigitWidth: maximumDigitWidth(),
             },
             viewportState()
         );
         previousGridMetrics = reuseEquivalentEditorGridMetrics(previousGridMetrics, nextMetrics);
         return previousGridMetrics;
+    });
+    const debugRenderStats = createMemo<DebugRenderStats | null>(() => {
+        if (!IS_DEBUG_MODE) {
+            return null;
+        }
+
+        const metrics = gridMetrics();
+        const sheet = activeSheetView();
+        if (!metrics || !sheet) {
+            return null;
+        }
+
+        const pendingEdits = session().ui.editingDrafts.pendingEdits;
+        const selectionValue = selection();
+        const expandedSelection = expandedSelectionRange();
+        const currentEditingCell = editingCell();
+        const visibleRows = visibleRowResult();
+        return {
+            renderedRowCount:
+                metrics.window.frozenRowNumbers.length + metrics.window.rowNumbers.length,
+            renderedColumnCount:
+                metrics.window.frozenColumnNumbers.length + metrics.window.columnNumbers.length,
+            frozenRenderedRowCount: metrics.window.frozenRowNumbers.length,
+            frozenRenderedColumnCount: metrics.window.frozenColumnNumbers.length,
+            scrollableRenderedRowCount: metrics.window.rowNumbers.length,
+            scrollableRenderedColumnCount: metrics.window.columnNumbers.length,
+            viewportHeight: metrics.viewport.viewportHeight,
+            viewportWidth: metrics.viewport.viewportWidth,
+            scrollTop: metrics.viewport.scrollTop,
+            scrollLeft: metrics.viewport.scrollLeft,
+            sheetKey: sheet.key,
+            sheetRowCount: sheet.rowCount,
+            sheetColumnCount: sheet.columnCount,
+            visibleSheetRowCount: visibleRows.visibleRows.length,
+            hiddenSheetRowCount: visibleRows.hiddenRows.length,
+            pendingDraftCount: pendingEdits.length,
+            hasWorkbookPendingEdits: workbook().hasPendingEdits,
+            selectionLabel: expandedSelection
+                ? formatSelectionRangeAddress(expandedSelection)
+                : selectionValue?.address ?? "none",
+            editingCellLabel: currentEditingCell
+                ? getCellAddress(currentEditingCell.rowNumber, currentEditingCell.columnNumber)
+                : null,
+        };
+    });
+    const debugRenderSummary = createMemo(() => {
+        const stats = debugRenderStats();
+        if (!stats) {
+            return null;
+        }
+
+        return formatTemplate(strings.debugRenderSummary, {
+            rowCount: String(stats.renderedRowCount),
+            columnCount: String(stats.renderedColumnCount),
+        });
+    });
+    const debugRenderTooltipLines = createMemo<string[]>(() => {
+        const stats = debugRenderStats();
+        if (!stats) {
+            return [];
+        }
+
+        const summary = formatTemplate(strings.debugRenderTooltip, {
+            rowCount: String(stats.renderedRowCount),
+            columnCount: String(stats.renderedColumnCount),
+        });
+        return [
+            summary,
+            `sheet: ${stats.sheetKey} (${stats.sheetRowCount}x${stats.sheetColumnCount})`,
+            `render rows: frozen ${stats.frozenRenderedRowCount} + scroll ${stats.scrollableRenderedRowCount}`,
+            `render cols: frozen ${stats.frozenRenderedColumnCount} + scroll ${stats.scrollableRenderedColumnCount}`,
+            `viewport: ${stats.viewportWidth}x${stats.viewportHeight}`,
+            `scroll: top ${Math.round(stats.scrollTop)}, left ${Math.round(stats.scrollLeft)}`,
+            `filter rows: visible ${stats.visibleSheetRowCount}, hidden ${stats.hiddenSheetRowCount}`,
+            `selection: ${stats.selectionLabel}`,
+            `editing: ${stats.editingCellLabel ?? "none"}`,
+            `pending edits: drafts ${stats.pendingDraftCount}, workbook ${stats.hasWorkbookPendingEdits ? "yes" : "no"}`,
+        ];
     });
     const headerLayers = createMemo(() => {
         const metrics = gridMetrics();
@@ -2581,7 +3099,13 @@ export function EditorBootstrapApp() {
             selection: selection(),
         })
     );
-    const canApplyAlignment = createMemo(() => Boolean(workbook().canEdit && selection()));
+    const canApplyAlignment = createMemo(
+        () => Boolean(workbook().canEdit && selection() && !isSaving())
+    );
+    const viewLocked = createMemo(() => hasLockedView(activeSheetView()?.freezePane));
+    const viewLockActionLabel = createMemo(() =>
+        viewLocked() ? strings.unlockView : strings.lockView
+    );
 
     const shellCapabilities = createMemo(() => getEditorShellCapabilities(workbook()));
     const canUndoEdits = createMemo(
@@ -2611,6 +3135,26 @@ export function EditorBootstrapApp() {
     });
     const activeSheetTabKey = createMemo(
         () => workbook().sheets.find((item) => item.isActive)?.key ?? null
+    );
+    const pendingSheetKeys = createMemo(() => {
+        const keys = new Set<string>();
+        for (const edit of session().ui.editingDrafts.pendingEdits) {
+            keys.add(edit.sheetKey);
+        }
+        return keys;
+    });
+    const pendingSheetKeySignature = createMemo(() =>
+        Array.from(pendingSheetKeys()).sort().join("\0")
+    );
+    const sheetTabLayout = createMemo(() =>
+        partitionSheetTabs(
+            workbook().sheets,
+            getMaxVisibleEditorSheetTabs(
+                workbook().sheets,
+                sheetTabsViewportWidth(),
+                measuredSheetTabWidths()
+            )
+        )
     );
     const candidateFilterRange = createMemo<SelectionRange | null>(() => {
         const sheet = activeSheetView();
@@ -2685,6 +3229,24 @@ export function EditorBootstrapApp() {
         vscode.postMessage(message);
     };
 
+    const notifyPendingEditState = (nextHasPendingEdits: boolean) => {
+        if (lastPendingNotification === nextHasPendingEdits) {
+            return;
+        }
+
+        lastPendingNotification = nextHasPendingEdits;
+        postMessage({
+            type: "pendingEditStateChanged",
+            hasPendingEdits: nextHasPendingEdits,
+        });
+    };
+
+    const handleSetSheet = (sheetKey: string) => {
+        setSheetContextMenu(null);
+        setIsSheetOverflowOpen(false);
+        postMessage(createEditorSetSheetMessage(sheetKey));
+    };
+
     const syncPendingEdits = (nextPendingEdits: readonly EditorPendingEdit[]) => {
         const pendingEdits = [...nextPendingEdits];
         setSession((current) => ({
@@ -2697,6 +3259,9 @@ export function EditorBootstrapApp() {
                 },
             },
         }));
+        notifyPendingEditState(
+            workbook().hasPendingEdits || pendingEdits.length > 0
+        );
         postMessage({
             type: "setPendingEdits",
             edits: pendingEdits,
@@ -2978,6 +3543,63 @@ export function EditorBootstrapApp() {
         ]);
     };
 
+    const applyPastedGrid = (grid: string[][]) => {
+        const currentSelectionRange = selectionRange();
+        const sheet = activeSheetView();
+        if (!sheet || !currentSelectionRange || grid.length === 0 || !workbook().canEdit) {
+            return;
+        }
+
+        const pasteGrid = getPasteGridForSelection(grid, currentSelectionRange);
+        const bounds = getEditorGridFillBounds(gridMetrics());
+        if (!bounds) {
+            return;
+        }
+
+        const changes: PendingHistoryChange[] = [];
+        const anchorCell = {
+            rowNumber: currentSelectionRange.startRow,
+            columnNumber: currentSelectionRange.startColumn,
+        };
+
+        for (let rowOffset = 0; rowOffset < pasteGrid.length; rowOffset += 1) {
+            const targetRow = anchorCell.rowNumber + rowOffset;
+            if (targetRow > bounds.maxRow) {
+                break;
+            }
+
+            const values = pasteGrid[rowOffset] ?? [];
+            for (let columnOffset = 0; columnOffset < values.length; columnOffset += 1) {
+                const targetColumn = anchorCell.columnNumber + columnOffset;
+                if (targetColumn > bounds.maxColumn) {
+                    break;
+                }
+
+                if (!canEditGridCell(targetRow, targetColumn)) {
+                    continue;
+                }
+
+                const modelValue = getModelCellValue(targetRow, targetColumn);
+                changes.push({
+                    sheetKey: sheet.key,
+                    rowNumber: targetRow,
+                    columnNumber: targetColumn,
+                    modelValue,
+                    beforeValue:
+                        getEditorPendingEditValue(
+                            session().ui.editingDrafts.pendingEdits,
+                            sheet.key,
+                            targetRow,
+                            targetColumn
+                        ) ?? modelValue,
+                    afterValue: values[columnOffset] ?? "",
+                });
+            }
+        }
+
+        applyPendingEditChanges(changes);
+    };
+
     const revealSearchMatch = (
         match: { rowNumber: number; columnNumber: number },
         scope: EditorSearchResultMessage["scope"],
@@ -3097,6 +3719,24 @@ export function EditorBootstrapApp() {
             previewRange: null,
         });
         globalThis.getSelection?.()?.removeAllRanges();
+    };
+
+    const commitAutoFillDown = (sourceRange: SelectionRange) => {
+        const bounds = getEditorGridFillBounds(gridMetrics());
+        if (!bounds) {
+            return;
+        }
+
+        const previewRange = createAutoFillDownPreviewRange({
+            sourceRange,
+            bounds,
+            getCellValue: getEffectiveCellValue,
+        });
+        if (!previewRange) {
+            return;
+        }
+
+        applyFillDragChanges(sourceRange, previewRange);
     };
 
     const updateFillDrag = (target: Extract<EditorGridSelectionTarget, { kind: "cell" }>) => {
@@ -3375,9 +4015,23 @@ export function EditorBootstrapApp() {
         setSearchFeedback(null);
     };
 
+    const triggerSave = () => {
+        if (shellCapabilities().isReadOnly || isSaving()) {
+            return;
+        }
+
+        commitEditingCell();
+        if (!hasPendingEdits()) {
+            return;
+        }
+
+        setIsSaving(true);
+        postMessage({ type: "requestSave" });
+    };
+
     const getPreviewWorkbookColumnWidth = (pixelWidth: number) =>
         normalizeWorkbookColumnWidth(
-            convertPixelsToWorkbookColumnWidth(pixelWidth, DEFAULT_MAXIMUM_DIGIT_WIDTH_PX)
+            convertPixelsToWorkbookColumnWidth(pixelWidth, maximumDigitWidth())
         );
 
     const getPreviewWorkbookRowHeight = (pixelHeight: number) =>
@@ -3424,7 +4078,7 @@ export function EditorBootstrapApp() {
                 MAX_COLUMN_PIXEL_WIDTH,
                 stabilizeColumnPixelWidth(
                     Math.round(activeResize.startPixelWidth + clientX - activeResize.startClientX),
-                    DEFAULT_MAXIMUM_DIGIT_WIDTH_PX
+                    maximumDigitWidth()
                 )
             )
         );
@@ -4004,6 +4658,7 @@ export function EditorBootstrapApp() {
     const openSheetContextMenu = (sheetKey: string, x: number, y: number) => {
         const safeX = Math.max(8, Math.min(x, window.innerWidth - 196));
         const safeY = Math.max(8, Math.min(y, window.innerHeight - 152));
+        setIsSheetOverflowOpen(false);
         setSheetContextMenu({
             sheetKey,
             x: safeX,
@@ -4012,6 +4667,42 @@ export function EditorBootstrapApp() {
         setFilterMenu(null);
         setGridContextMenu(null);
         closeSearchPanel();
+    };
+
+    const getViewLockTarget = () => {
+        const sheet = activeSheetView();
+        if (!sheet) {
+            return null;
+        }
+
+        const anchorCell =
+            selection() ??
+            selectionAnchorCell() ??
+            (sheet.rowCount > 0 && sheet.columnCount > 0
+                ? {
+                      rowNumber: 1,
+                      columnNumber: 1,
+                  }
+                : null);
+        return getFreezePaneCountsForCell(anchorCell);
+    };
+
+    const toggleViewLock = () => {
+        if (!workbook().canEdit) {
+            return;
+        }
+
+        commitEditingCell();
+        const target = getViewLockTarget();
+        if (!viewLocked() && (!target || (target.rowCount === 0 && target.columnCount === 0))) {
+            return;
+        }
+
+        postMessage({
+            type: "toggleViewLock",
+            rowCount: target?.rowCount ?? 0,
+            columnCount: target?.columnCount ?? 0,
+        });
     };
 
     const applyToolbarAlignment = (alignment: EditorAlignmentPatch) => {
@@ -4126,6 +4817,58 @@ export function EditorBootstrapApp() {
                     </label>
                 </div>
                 <div class="toolbar__group">
+                    <Show when={debugRenderStats()}>
+                        {(stats) => (
+                            <div
+                                class="toolbar__debug-statsShell"
+                                data-role="debug-render-stats-shell"
+                                onMouseEnter={() => setIsDebugRenderPopoverOpen(true)}
+                                onMouseLeave={() => setIsDebugRenderPopoverOpen(false)}
+                                onFocusIn={() => setIsDebugRenderPopoverOpen(true)}
+                                onFocusOut={() => setIsDebugRenderPopoverOpen(false)}
+                            >
+                                <div
+                                    class="toolbar__debug-stats"
+                                    data-role="debug-render-stats"
+                                    tabindex="0"
+                                >
+                                    <span class="toolbar__debug-statsValue">
+                                        {debugRenderSummary() ??
+                                            formatTemplate(strings.debugRenderSummary, {
+                                                rowCount: String(stats().renderedRowCount),
+                                                columnCount: String(stats().renderedColumnCount),
+                                            })}
+                                    </span>
+                                </div>
+                                <Show
+                                    when={
+                                        isDebugRenderPopoverOpen() &&
+                                        debugRenderTooltipLines().length > 0
+                                    }
+                                >
+                                    <div
+                                        class="toolbar__debug-popover"
+                                        data-role="debug-render-popover"
+                                        role="tooltip"
+                                    >
+                                        <For each={debugRenderTooltipLines()}>
+                                            {(line, index) => (
+                                                <div
+                                                    class="toolbar__debug-popoverLine"
+                                                    classList={{
+                                                        "toolbar__debug-popoverLine--summary":
+                                                            index() === 0,
+                                                    }}
+                                                >
+                                                    {line}
+                                                </div>
+                                            )}
+                                        </For>
+                                    </div>
+                                </Show>
+                            </div>
+                        )}
+                    </Show>
                     <Show when={shellCapabilities().isReadOnly}>
                         <span class="badge badge--warn" data-role="read-only-badge">
                             {strings.readOnly}
@@ -4153,14 +4896,7 @@ export function EditorBootstrapApp() {
                         data-role="search-toggle"
                         type="button"
                         title={strings.search}
-                        onClick={() => {
-                            if (searchOpen()) {
-                                closeSearchPanel();
-                                return;
-                            }
-
-                            openSearchPanel(searchMode());
-                        }}
+                        onClick={() => openSearchPanel("find")}
                     >
                         <span class="toolbar__button-icon codicon codicon-search" />
                     </button>
@@ -4169,7 +4905,7 @@ export function EditorBootstrapApp() {
                         data-role="undo-button"
                         type="button"
                         title={strings.undo}
-                        disabled={!canUndoEdits()}
+                        disabled={!canUndoEdits() || isSaving()}
                         onClick={undoPendingEdits}
                     >
                         <span class="toolbar__button-icon toolbar__button-icon--flip codicon codicon-redo" />
@@ -4179,7 +4915,7 @@ export function EditorBootstrapApp() {
                         data-role="redo-button"
                         type="button"
                         title={strings.redo}
-                        disabled={!canRedoEdits()}
+                        disabled={!canRedoEdits() || isSaving()}
                         onClick={redoPendingEdits}
                     >
                         <span class="toolbar__button-icon codicon codicon-redo" />
@@ -4197,7 +4933,7 @@ export function EditorBootstrapApp() {
                             onMouseDown={(event) => event.preventDefault()}
                             onClick={() => applyToolbarAlignment({ horizontal: "left" })}
                         >
-                            <AiOutlineAlignLeft class="toolbar__toggle-icon" aria-hidden />
+                            <ToolbarSvgIcon svg={MdAlignHorizontalLeftSvg} />
                         </button>
                         <button
                             class="toolbar__toggle"
@@ -4211,7 +4947,7 @@ export function EditorBootstrapApp() {
                             onMouseDown={(event) => event.preventDefault()}
                             onClick={() => applyToolbarAlignment({ horizontal: "center" })}
                         >
-                            <AiOutlineAlignCenter class="toolbar__toggle-icon" aria-hidden />
+                            <ToolbarSvgIcon svg={MdAlignHorizontalCenterSvg} />
                         </button>
                         <button
                             class="toolbar__toggle"
@@ -4225,7 +4961,7 @@ export function EditorBootstrapApp() {
                             onMouseDown={(event) => event.preventDefault()}
                             onClick={() => applyToolbarAlignment({ horizontal: "right" })}
                         >
-                            <AiOutlineAlignRight class="toolbar__toggle-icon" aria-hidden />
+                            <ToolbarSvgIcon svg={MdAlignHorizontalRightSvg} />
                         </button>
                     </div>
                     <div class="toolbar__segmented" role="group" aria-label="Vertical alignment">
@@ -4241,7 +4977,7 @@ export function EditorBootstrapApp() {
                             onMouseDown={(event) => event.preventDefault()}
                             onClick={() => applyToolbarAlignment({ vertical: "top" })}
                         >
-                            <AiOutlineVerticalAlignTop class="toolbar__toggle-icon" aria-hidden />
+                            <ToolbarSvgIcon svg={MdAlignVerticalTopSvg} />
                         </button>
                         <button
                             class="toolbar__toggle"
@@ -4255,10 +4991,7 @@ export function EditorBootstrapApp() {
                             onMouseDown={(event) => event.preventDefault()}
                             onClick={() => applyToolbarAlignment({ vertical: "center" })}
                         >
-                            <AiOutlineVerticalAlignMiddle
-                                class="toolbar__toggle-icon"
-                                aria-hidden
-                            />
+                            <ToolbarSvgIcon svg={MdAlignVerticalCenterSvg} />
                         </button>
                         <button
                             class="toolbar__toggle"
@@ -4272,10 +5005,7 @@ export function EditorBootstrapApp() {
                             onMouseDown={(event) => event.preventDefault()}
                             onClick={() => applyToolbarAlignment({ vertical: "bottom" })}
                         >
-                            <AiOutlineVerticalAlignBottom
-                                class="toolbar__toggle-icon"
-                                aria-hidden
-                            />
+                            <ToolbarSvgIcon svg={MdAlignVerticalBottomSvg} />
                         </button>
                     </div>
                     <button
@@ -4289,17 +5019,39 @@ export function EditorBootstrapApp() {
                     </button>
                     <button
                         class="toolbar__button toolbar__button--icon"
-                        classList={{ "is-dirty": hasPendingEdits() }}
+                        classList={{ "is-active": viewLocked() }}
+                        data-role="view-lock-button"
+                        type="button"
+                        title={viewLockActionLabel()}
+                        disabled={shellCapabilities().isReadOnly || isSaving()}
+                        onClick={toggleViewLock}
+                    >
+                        <span
+                            class={`toolbar__button-icon codicon ${
+                                viewLocked() ? "codicon-lock" : "codicon-unlock"
+                            }`}
+                        />
+                    </button>
+                    <button
+                        class="toolbar__button toolbar__button--icon"
+                        classList={{
+                            "is-dirty": hasPendingEdits(),
+                            "is-loading": isSaving(),
+                        }}
                         data-role="save-button"
                         type="button"
                         title={strings.save}
-                        disabled={shellCapabilities().isReadOnly || !hasPendingEdits()}
-                        onClick={() => {
-                            commitEditingCell();
-                            postMessage({ type: "requestSave" });
-                        }}
+                        disabled={shellCapabilities().isReadOnly || !hasPendingEdits() || isSaving()}
+                        onClick={triggerSave}
                     >
-                        <span class="toolbar__button-icon codicon codicon-save" />
+                        <span
+                            class="toolbar__button-icon codicon"
+                            classList={{
+                                "codicon-save": !isSaving(),
+                                "codicon-loading": isSaving(),
+                                "toolbar__button-icon--spin": isSaving(),
+                            }}
+                        />
                     </button>
                 </div>
             </div>
@@ -5273,17 +6025,42 @@ export function EditorBootstrapApp() {
             </div>
 
             <div class="footer">
-                <div class="tabs">
-                    <div class="tabs__viewport">
+                <div
+                    class="tabs"
+                    onContextMenu={(event) => {
+                        const target = event.target;
+                        if (
+                            target instanceof HTMLElement &&
+                            target.closest('[data-role="sheet-tab"], [data-role="sheet-tab-overflow"]')
+                        ) {
+                            return;
+                        }
+
+                        const targetSheetKey = activeSheetTabKey();
+                        if (!targetSheetKey) {
+                            return;
+                        }
+
+                        event.preventDefault();
+                        openSheetContextMenu(targetSheetKey, event.clientX, event.clientY);
+                    }}
+                >
+                    <div
+                        class="tabs__viewport"
+                        ref={(element) => {
+                            sheetTabsViewportElement = element;
+                        }}
+                    >
                         <div class="tabs__content">
                             <div class="tabs__list">
-                                <For each={workbook().sheets}>
+                                <For each={sheetTabLayout().visibleTabs}>
                                     {(sheet) => (
                                         <button
                                             class="tab"
                                             classList={{ "is-active": sheet.isActive }}
                                             data-role="sheet-tab"
                                             data-sheet-key={sheet.key}
+                                            title={sheet.label}
                                             type="button"
                                             onContextMenu={(event) => {
                                                 event.preventDefault();
@@ -5293,37 +6070,108 @@ export function EditorBootstrapApp() {
                                                     event.clientY
                                                 );
                                             }}
-                                            onClick={() =>
-                                                postMessage(createEditorSetSheetMessage(sheet.key))
-                                            }
+                                            onClick={() => handleSetSheet(sheet.key)}
                                         >
+                                            <Show when={pendingSheetKeys().has(sheet.key)}>
+                                                <PendingMarkerView extraClass="tab__marker" />
+                                            </Show>
                                             <span class="tab__label">{sheet.label}</span>
                                         </button>
                                     )}
                                 </For>
-                                <button
-                                    class="tab"
-                                    data-role="sheet-menu-toggle"
-                                    type="button"
-                                    disabled={!activeSheetTabKey()}
-                                    onClick={(event) => {
-                                        const targetSheetKey = activeSheetTabKey();
-                                        if (!targetSheetKey) {
-                                            return;
-                                        }
-
-                                        const rect = event.currentTarget.getBoundingClientRect();
-                                        openSheetContextMenu(
-                                            targetSheetKey,
-                                            rect.left,
-                                            rect.top - 8
-                                        );
+                            </div>
+                            <Show when={sheetTabLayout().hasOverflow}>
+                                <div
+                                    class="tabs__overflow"
+                                    data-role="sheet-tab-overflow"
+                                    ref={(element) => {
+                                        sheetTabsOverflowElement = element;
+                                    }}
+                                    onContextMenu={(event) => {
+                                        event.preventDefault();
                                     }}
                                 >
-                                    <span class="tab__label">{strings.moreSheets}</span>
-                                </button>
-                            </div>
+                                    <button
+                                        aria-label={strings.moreSheets}
+                                        aria-expanded={isSheetOverflowOpen()}
+                                        aria-haspopup="menu"
+                                        class="tab tab--overflowTrigger"
+                                        classList={{ "is-active": isSheetOverflowOpen() }}
+                                        title={strings.moreSheets}
+                                        type="button"
+                                        onClick={() => {
+                                            setSheetContextMenu(null);
+                                            setIsSheetOverflowOpen((current) => !current);
+                                        }}
+                                    >
+                                        <span class="codicon codicon-more tab__icon" aria-hidden />
+                                        <span class="tabs__overflowCount" aria-hidden>
+                                            {sheetTabLayout().overflowTabs.length}
+                                        </span>
+                                    </button>
+                                    <Show when={isSheetOverflowOpen()}>
+                                        <div
+                                            class="tabs__overflowMenu"
+                                            data-role="sheet-tab-overflow"
+                                            role="menu"
+                                        >
+                                            <For each={sheetTabLayout().overflowTabs}>
+                                                {(sheet) => (
+                                                    <button
+                                                        class="context-menu__item tabs__overflowItem"
+                                                        role="menuitem"
+                                                        title={sheet.label}
+                                                        type="button"
+                                                        onClick={() => handleSetSheet(sheet.key)}
+                                                        onContextMenu={(event) => {
+                                                            event.preventDefault();
+                                                            setIsSheetOverflowOpen(false);
+                                                            openSheetContextMenu(
+                                                                sheet.key,
+                                                                event.clientX,
+                                                                event.clientY
+                                                            );
+                                                        }}
+                                                    >
+                                                        <Show when={pendingSheetKeys().has(sheet.key)}>
+                                                            <PendingMarkerView extraClass="tab__marker" />
+                                                        </Show>
+                                                        <span class="tabs__overflowLabel">
+                                                            {sheet.label}
+                                                        </span>
+                                                    </button>
+                                                )}
+                                            </For>
+                                        </div>
+                                    </Show>
+                                </div>
+                            </Show>
                         </div>
+                    </div>
+                    <div
+                        aria-hidden="true"
+                        class="tabs__measure"
+                        ref={(element) => {
+                            sheetTabsMeasureElement = element;
+                        }}
+                    >
+                        <For each={workbook().sheets}>
+                            {(sheet) => (
+                                <button
+                                    class="tab tabs__measureTab"
+                                    classList={{ "is-active": sheet.isActive }}
+                                    data-role="sheet-tab-measure"
+                                    data-sheet-key={sheet.key}
+                                    tabIndex={-1}
+                                    type="button"
+                                >
+                                    <Show when={pendingSheetKeys().has(sheet.key)}>
+                                        <PendingMarkerView extraClass="tab__marker" />
+                                    </Show>
+                                    <span class="tab__label">{sheet.label}</span>
+                                </button>
+                            )}
+                        </For>
                     </div>
                 </div>
             </div>

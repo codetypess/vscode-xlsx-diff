@@ -7,6 +7,8 @@ import {
     DEFAULT_MAXIMUM_DIGIT_WIDTH_PX,
     createPixelColumnLayout,
     getFontShorthand,
+    getPixelColumnLeft,
+    getPixelColumnRight,
     getPixelColumnWidth,
     getPixelColumnWindow,
     measureMaximumDigitWidth,
@@ -279,6 +281,25 @@ function getSelectionAddress(
     }
 
     return `${columnLabel}${selection.sourceRowNumber}`;
+}
+
+function getDiffCellTitle(
+    columnLabel: string,
+    rowNumber: number | null,
+    value: string,
+    formula: string | null
+): string {
+    const lines = rowNumber === null || !columnLabel ? [] : [`${columnLabel}${rowNumber}`];
+
+    if (value) {
+        lines.push(value);
+    }
+
+    if (formula) {
+        lines.push(`fx ${formula}`);
+    }
+
+    return lines.join("\n");
 }
 
 function getPendingSummary(
@@ -737,7 +758,16 @@ function DiffBootstrapApp() {
     };
 
     const measureMaximumDigitWidthFromDocument = () => {
-        setMaximumDigitWidth(measureMaximumDigitWidth(getFontShorthand(document.body)));
+        if (globalThis.navigator?.userAgent?.includes("jsdom")) {
+            setMaximumDigitWidth(DEFAULT_MAXIMUM_DIGIT_WIDTH_PX);
+            return;
+        }
+
+        try {
+            setMaximumDigitWidth(measureMaximumDigitWidth(getFontShorthand(document.body)));
+        } catch {
+            setMaximumDigitWidth(DEFAULT_MAXIMUM_DIGIT_WIDTH_PX);
+        }
     };
 
     const measureSheetTabsViewport = () => {
@@ -1077,6 +1107,56 @@ function DiffBootstrapApp() {
         }
     });
 
+    const ensureColumnVisible = (columnNumber: number) => {
+        const layout = columnLayout();
+        if (!layout || horizontalViewportWidth() <= 0) {
+            return;
+        }
+
+        const cellLeft = getPixelColumnLeft(layout, columnNumber);
+        const cellRight = getPixelColumnRight(layout, columnNumber);
+        const viewportLeft = horizontalScrollLeft();
+        const viewportRight = viewportLeft + horizontalViewportWidth();
+
+        if (cellLeft < viewportLeft) {
+            syncHorizontalScroll(cellLeft);
+            return;
+        }
+
+        if (cellRight > viewportRight) {
+            syncHorizontalScroll(cellRight - horizontalViewportWidth());
+        }
+    };
+
+    const scrollToRow = (rowNumber: number) => {
+        if (!gridViewportElement) {
+            return;
+        }
+
+        const rowIndex = filteredRows().findIndex((row) => row.rowNumber === rowNumber);
+        if (rowIndex < 0) {
+            return;
+        }
+
+        const nextScrollTop = rowIndex * ROW_HEIGHT;
+        gridViewportElement.scrollTo({
+            top: nextScrollTop,
+            behavior: "auto",
+        });
+        setScrollTop(nextScrollTop);
+    };
+
+    createEffect(() => {
+        const currentSheetKey = activeSheet()?.key ?? null;
+        const currentViewportWidth = horizontalViewportWidth();
+        const currentSelection = selectedCell();
+        if (!currentSheetKey || currentViewportWidth <= 0 || !currentSelection) {
+            return;
+        }
+
+        ensureColumnVisible(currentSelection.columnNumber);
+    });
+
     createEffect(() => {
         if (!isSheetOverflowOpen()) {
             return;
@@ -1204,6 +1284,7 @@ function DiffBootstrapApp() {
             createSelectedDiffCell(sheet, row, diffCell.rowNumber, diffCell.columnNumber, side)
         );
         setSelectedSide(side);
+        scrollToRow(diffCell.rowNumber);
     };
 
     const syncHorizontalScroll = (nextScrollLeft: number) => {
@@ -1576,6 +1657,26 @@ function DiffBootstrapApp() {
                                         side
                                     );
                                 };
+                                const title = () => {
+                                    const cell = resolvedCell();
+                                    const sourceRowNumber =
+                                        side === "left" ? row.leftRowNumber : row.rightRowNumber;
+                                    const columnLabel =
+                                        side === "left"
+                                            ? (column.leftLabel ?? "")
+                                            : (column.rightLabel ?? "");
+                                    const formula = effectivePendingEdits()[pendingKey]
+                                        ? null
+                                        : side === "left"
+                                          ? (cell?.leftFormula ?? null)
+                                          : (cell?.rightFormula ?? null);
+                                    return getDiffCellTitle(
+                                        columnLabel,
+                                        sourceRowNumber,
+                                        displayValue(),
+                                        formula
+                                    );
+                                };
 
                                 return (
                                     <button
@@ -1596,6 +1697,7 @@ function DiffBootstrapApp() {
                                         data-side={side}
                                         data-row-number={row.rowNumber}
                                         data-column-number={column.columnNumber}
+                                        title={title()}
                                         type="button"
                                         onClick={() => {
                                             const sheet = activeSheet();

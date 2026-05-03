@@ -82,6 +82,12 @@ function createPointerEvent(windowLike: any, type: string, init: Record<string, 
         configurable: true,
         value: init.pointerId ?? 1,
     });
+    if (typeof init.timeStamp === "number") {
+        Object.defineProperty(event, "timeStamp", {
+            configurable: true,
+            value: init.timeStamp,
+        });
+    }
     return event;
 }
 
@@ -90,7 +96,7 @@ function normalizeMessage<T>(value: T): T {
 }
 
 suite("Solid editor shell DOM", () => {
-    let dom: JSDOM;
+    let dom: JSDOM | null = null;
     let documentLike: any;
     let windowLike: any;
     let postedMessages: unknown[];
@@ -98,6 +104,50 @@ suite("Solid editor shell DOM", () => {
     const flush = async () => {
         await Promise.resolve();
         await Promise.resolve();
+    };
+
+    const mountEditorDom = async ({ debugMode = false }: { debugMode?: boolean } = {}) => {
+        dom?.window.close();
+        dom = new JSDOM('<!doctype html><html><body><div id="app"></div></body></html>', {
+            url: "https://example.test/",
+            pretendToBeVisual: true,
+            runScripts: "dangerously",
+        });
+        windowLike = dom.window as any;
+        documentLike = windowLike.document;
+        postedMessages = [];
+
+        windowLike.ResizeObserver = class {
+            observe() {
+                return undefined;
+            }
+
+            disconnect() {
+                return undefined;
+            }
+        };
+        windowLike.HTMLElement.prototype.scrollTo = function scrollTo(position: {
+            top?: number;
+            left?: number;
+        }) {
+            if (typeof position.top === "number") {
+                this.scrollTop = position.top;
+            }
+            if (typeof position.left === "number") {
+                this.scrollLeft = position.left;
+            }
+        };
+        windowLike.__XLSX_EDITOR_STRINGS__ = {};
+        windowLike.__XLSX_EDITOR_DEBUG__ = debugMode;
+        windowLike.acquireVsCodeApi = () => ({
+            postMessage(message: unknown) {
+                postedMessages.push(message);
+            },
+        });
+
+        const bundle = fs.readFileSync(EDITOR_BUNDLE_PATH, "utf8");
+        windowLike.eval(bundle);
+        await flush();
     };
 
     const dispatchSessionInit = async (
@@ -200,51 +250,45 @@ suite("Solid editor shell DOM", () => {
         return eventTarget;
     };
 
-    setup(async () => {
-        dom = new JSDOM('<!doctype html><html><body><div id="app"></div></body></html>', {
-            url: "https://example.test/",
-            pretendToBeVisual: true,
-            runScripts: "dangerously",
-        });
-        windowLike = dom.window as any;
-        documentLike = windowLike.document;
-        postedMessages = [];
+    const dispatchClipboardEvent = async (
+        type: "copy" | "paste",
+        clipboardText = "",
+        target: Document | Element = documentLike
+    ) => {
+        const clipboardStore = new Map<string, string>();
+        if (clipboardText) {
+            clipboardStore.set("text/plain", clipboardText);
+        }
 
-        windowLike.ResizeObserver = class {
-            observe() {
-                return undefined;
-            }
-
-            disconnect() {
-                return undefined;
-            }
+        const event = new windowLike.Event(type, {
+            bubbles: true,
+            cancelable: true,
+        }) as Event & {
+            clipboardData?: {
+                getData: (format: string) => string;
+                setData: (format: string, value: string) => void;
+            };
         };
-        windowLike.HTMLElement.prototype.scrollTo = function scrollTo(position: {
-            top?: number;
-            left?: number;
-        }) {
-            if (typeof position.top === "number") {
-                this.scrollTop = position.top;
-            }
-            if (typeof position.left === "number") {
-                this.scrollLeft = position.left;
-            }
-        };
-        windowLike.__XLSX_EDITOR_STRINGS__ = {};
-        windowLike.__XLSX_EDITOR_DEBUG__ = false;
-        windowLike.acquireVsCodeApi = () => ({
-            postMessage(message: unknown) {
-                postedMessages.push(message);
+        Object.defineProperty(event, "clipboardData", {
+            configurable: true,
+            value: {
+                getData: (format: string) => clipboardStore.get(format) ?? "",
+                setData: (format: string, value: string) => {
+                    clipboardStore.set(format, value);
+                },
             },
         });
-
-        const bundle = fs.readFileSync(EDITOR_BUNDLE_PATH, "utf8");
-        windowLike.eval(bundle);
+        target.dispatchEvent(event);
         await flush();
+        return clipboardStore;
+    };
+
+    setup(async () => {
+        await mountEditorDom();
     });
 
     teardown(() => {
-        dom.window.close();
+        dom?.window.close();
     });
 
     test("opens, closes, switches replace mode, and drags the search panel", async () => {
@@ -364,6 +408,79 @@ suite("Solid editor shell DOM", () => {
         assert.strictEqual(documentLike.activeElement, gotoInput);
         assert.strictEqual(gotoInput.selectionStart, 0);
         assert.strictEqual(gotoInput.selectionEnd, gotoInput.value.length);
+    });
+
+    test("keeps search open and switches back to find when clicking the search button from replace mode", async () => {
+        await dispatchSessionInit();
+
+        await click('[data-role="search-toggle"]');
+
+        const searchTabs = Array.from(documentLike.querySelectorAll(".search-strip__tab"));
+        await click(searchTabs[1]);
+        assert.ok(documentLike.querySelector(".search-strip__row--replace"));
+
+        await click('[data-role="search-toggle"]');
+
+        assert.ok(documentLike.querySelector('[data-role="search-strip"]'));
+        assert.strictEqual(documentLike.querySelector(".search-strip__row--replace"), null);
+    });
+
+    test("dispatches save from keyboard shortcuts while an editable toolbar field is focused", async () => {
+        await dispatchSessionInit({
+            hasPendingEdits: true,
+        });
+
+        const selectedCellValueInput = query(
+            '[data-role="selected-cell-value"]'
+        ) as HTMLInputElement;
+        await keyDown(selectedCellValueInput, {
+            key: "s",
+            metaKey: true,
+        });
+
+        assert.deepStrictEqual(normalizeMessage(postedMessages.at(-1)), {
+            type: "requestSave",
+        });
+    });
+
+    test("does not open search shortcuts while a grid cell editor is active", async () => {
+        await dispatchSessionInit({
+            activeSheet: {
+                cells: {
+                    [createCellKey(2, 3)]: {
+                        key: createCellKey(2, 3),
+                        rowNumber: 2,
+                        columnNumber: 3,
+                        address: "C2",
+                        displayValue: "hello",
+                        formula: null,
+                        styleId: null,
+                    },
+                },
+            },
+        });
+
+        const cell = query('[data-cell-address="C2"]');
+        cell.dispatchEvent(
+            new windowLike.MouseEvent("dblclick", {
+                bubbles: true,
+                cancelable: true,
+            })
+        );
+        await flush();
+
+        const cellInput = query('[data-role="grid-cell-input"]') as HTMLInputElement;
+        await keyDown(cellInput, {
+            key: "f",
+            metaKey: true,
+        });
+        assert.strictEqual(documentLike.querySelector('[data-role="search-strip"]'), null);
+
+        await keyDown(cellInput, {
+            key: "h",
+            metaKey: true,
+        });
+        assert.strictEqual(documentLike.querySelector('[data-role="search-strip"]'), null);
     });
 
     test("closes the search panel from escape when focus is outside editable inputs", async () => {
@@ -1076,6 +1193,79 @@ suite("Solid editor shell DOM", () => {
         assert.strictEqual(selectedCellValueInput.value, "world");
     });
 
+    test("copies the current selection to the clipboard", async () => {
+        await dispatchSessionInit({
+            activeSheet: {
+                cells: {
+                    [createCellKey(2, 3)]: {
+                        key: createCellKey(2, 3),
+                        rowNumber: 2,
+                        columnNumber: 3,
+                        address: "C2",
+                        displayValue: "hello",
+                        formula: null,
+                        styleId: null,
+                    },
+                },
+            },
+        });
+
+        const clipboard = await dispatchClipboardEvent("copy");
+        assert.strictEqual(clipboard.get("text/plain"), "hello");
+    });
+
+    test("pastes clipboard text into editable cells", async () => {
+        await dispatchSessionInit({
+            activeSheet: {
+                rowCount: 6,
+                columnCount: 6,
+                cells: {
+                    [createCellKey(2, 3)]: {
+                        key: createCellKey(2, 3),
+                        rowNumber: 2,
+                        columnNumber: 3,
+                        address: "C2",
+                        displayValue: "",
+                        formula: null,
+                        styleId: null,
+                    },
+                },
+            },
+        });
+
+        await dispatchClipboardEvent("paste", "first\tsecond\nthird\tfourth");
+
+        assert.deepStrictEqual(normalizeMessage(postedMessages.at(-1)), {
+            type: "setPendingEdits",
+            edits: [
+                {
+                    sheetKey: "sheet:1",
+                    rowNumber: 2,
+                    columnNumber: 3,
+                    value: "first",
+                },
+                {
+                    sheetKey: "sheet:1",
+                    rowNumber: 2,
+                    columnNumber: 4,
+                    value: "second",
+                },
+                {
+                    sheetKey: "sheet:1",
+                    rowNumber: 3,
+                    columnNumber: 3,
+                    value: "third",
+                },
+                {
+                    sheetKey: "sheet:1",
+                    rowNumber: 3,
+                    columnNumber: 4,
+                    value: "fourth",
+                },
+            ],
+        });
+    });
+
     test("enters edit mode for synthetic viewport rows beyond the sheet row count", async () => {
         await dispatchSessionInit({
             selection: {
@@ -1227,6 +1417,14 @@ suite("Solid editor shell DOM", () => {
         assert.ok(saveButton.classList.contains("is-dirty"));
         assert.ok(query('[data-cell-address="B6"]').classList.contains("grid__cell--pending"));
 
+        await click(saveButton);
+
+        assert.deepStrictEqual(normalizeMessage(postedMessages.at(-1)), {
+            type: "requestSave",
+        });
+        assert.strictEqual(saveButton.disabled, true);
+        assert.ok(saveButton.classList.contains("is-loading"));
+
         windowLike.dispatchEvent(
             new windowLike.MessageEvent("message", {
                 data: createEditorSessionPatchMessage([
@@ -1246,6 +1444,7 @@ suite("Solid editor shell DOM", () => {
 
         assert.strictEqual(saveButton.disabled, true);
         assert.ok(!saveButton.classList.contains("is-dirty"));
+        assert.ok(!saveButton.classList.contains("is-loading"));
         assert.ok(!query('[data-cell-address="B6"]').classList.contains("grid__cell--pending"));
     });
 
@@ -1836,6 +2035,118 @@ suite("Solid editor shell DOM", () => {
             buttons: 0,
             clientX: 96,
             clientY: 128,
+        });
+
+        assert.deepStrictEqual(normalizeMessage(postedMessages.at(-1)), {
+            type: "setPendingEdits",
+            edits: [
+                {
+                    sheetKey: "sheet:1",
+                    rowNumber: 3,
+                    columnNumber: 3,
+                    value: "5",
+                },
+                {
+                    sheetKey: "sheet:1",
+                    rowNumber: 4,
+                    columnNumber: 3,
+                    value: "5",
+                },
+            ],
+        });
+        assert.strictEqual(query('[data-cell-address="C4"]').textContent?.trim(), "5");
+    });
+
+    test("auto-fills down when double-clicking the fill handle", async () => {
+        await dispatchSessionInit({
+            selection: {
+                key: createCellKey(2, 3),
+                rowNumber: 2,
+                columnNumber: 3,
+                address: "C2",
+                value: "5",
+                formula: null,
+                isPresent: true,
+            },
+            activeSheet: {
+                rowCount: 4,
+                columnCount: 4,
+                cells: {
+                    [createCellKey(2, 3)]: {
+                        key: createCellKey(2, 3),
+                        rowNumber: 2,
+                        columnNumber: 3,
+                        address: "C2",
+                        displayValue: "5",
+                        formula: null,
+                        styleId: null,
+                    },
+                    [createCellKey(3, 3)]: {
+                        key: createCellKey(3, 3),
+                        rowNumber: 3,
+                        columnNumber: 3,
+                        address: "C3",
+                        displayValue: "",
+                        formula: null,
+                        styleId: null,
+                    },
+                    [createCellKey(4, 3)]: {
+                        key: createCellKey(4, 3),
+                        rowNumber: 4,
+                        columnNumber: 3,
+                        address: "C4",
+                        displayValue: "",
+                        formula: null,
+                        styleId: null,
+                    },
+                },
+            },
+        });
+
+        const viewport = query('[data-role="editor-grid-viewport"]');
+        Object.defineProperty(viewport, "clientHeight", {
+            configurable: true,
+            value: 240,
+        });
+        Object.defineProperty(viewport, "clientWidth", {
+            configurable: true,
+            value: 360,
+        });
+        viewport.dispatchEvent(
+            new windowLike.Event("scroll", {
+                bubbles: true,
+                cancelable: true,
+            })
+        );
+        await flush();
+
+        const fillHandle = query('[data-role="grid-fill-handle"]');
+
+        await pointerDown(fillHandle, {
+            pointerId: 29,
+            clientX: 96,
+            clientY: 56,
+            timeStamp: 100,
+        });
+        await pointerUp(windowLike, {
+            pointerId: 29,
+            buttons: 0,
+            clientX: 96,
+            clientY: 56,
+            timeStamp: 100,
+        });
+        await pointerDown(fillHandle, {
+            pointerId: 29,
+            clientX: 96,
+            clientY: 56,
+            timeStamp: 220,
+        });
+        await pointerUp(windowLike, {
+            pointerId: 29,
+            buttons: 0,
+            clientX: 96,
+            clientY: 56,
+            timeStamp: 220,
         });
 
         assert.deepStrictEqual(normalizeMessage(postedMessages.at(-1)), {
@@ -2844,10 +3155,78 @@ suite("Solid editor shell DOM", () => {
         assert.strictEqual(query('[data-role="undo-button"]').disabled, true);
         assert.strictEqual(query('[data-role="redo-button"]').disabled, true);
 
-        await click('[data-role="sheet-menu-toggle"]');
+        await contextMenu('[data-role="sheet-tab"][data-sheet-key="sheet:1"]', {
+            clientX: 32,
+            clientY: 32,
+        });
 
         assert.strictEqual(query('[data-role="sheet-context-add"]').disabled, true);
         assert.strictEqual(query('[data-role="sheet-context-rename"]').disabled, true);
         assert.strictEqual(query('[data-role="sheet-context-delete"]').disabled, true);
+    });
+
+    test("toggles the view lock from the toolbar", async () => {
+        await dispatchSessionInit();
+
+        await click('[data-role="view-lock-button"]');
+
+        assert.deepStrictEqual(normalizeMessage(postedMessages.at(-1)), {
+            type: "toggleViewLock",
+            rowCount: 1,
+            columnCount: 2,
+        });
+    });
+
+    test("renders debug render stats with extended hover details", async () => {
+        await mountEditorDom({ debugMode: true });
+        await dispatchSessionInit({
+            activeSheet: {
+                freezePane: {
+                    rowCount: 1,
+                    columnCount: 2,
+                    topLeftCell: "C2",
+                    activePane: "bottomRight",
+                },
+            },
+        });
+
+        const viewport = query('[data-role="editor-grid-viewport"]');
+        Object.defineProperty(viewport, "clientHeight", {
+            configurable: true,
+            value: 240,
+        });
+        Object.defineProperty(viewport, "clientWidth", {
+            configurable: true,
+            value: 360,
+        });
+        viewport.scrollTop = 48;
+        viewport.scrollLeft = 72;
+        viewport.dispatchEvent(
+            new windowLike.Event("scroll", {
+                bubbles: true,
+                cancelable: true,
+            })
+        );
+        await flush();
+
+        const badge = query('[data-role="debug-render-stats"]');
+        const badgeText = badge.textContent?.trim() ?? "";
+        assert.strictEqual(documentLike.querySelector('[data-role="debug-render-popover"]'), null);
+
+        badge.focus();
+        await flush();
+
+        const hoverPopover = query('[data-role="debug-render-popover"]');
+        const hoverText = hoverPopover.textContent ?? "";
+
+        assert.match(badgeText, /^\d+ rows \d+ cols$/);
+        assert.match(hoverText, /Rendered \d+ rows and \d+ columns\./);
+        assert.ok(hoverText.includes("sheet: sheet:1 (20x8)"));
+        assert.ok(hoverText.includes("render rows: frozen 1 + scroll"));
+        assert.ok(hoverText.includes("render cols: frozen 2 + scroll"));
+        assert.ok(hoverText.includes("viewport: 360x240"));
+        assert.ok(hoverText.includes("scroll: top 48, left 72"));
+        assert.ok(hoverText.includes("selection: C2"));
+        assert.ok(hoverText.includes("pending edits: drafts 0, workbook no"));
     });
 });
